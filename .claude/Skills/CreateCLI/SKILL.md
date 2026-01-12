@@ -1,10 +1,9 @@
 ---
-name: system-createcli
-description: Generate production-quality TypeScript CLIs with full documentation, error handling, and best practices. Creates deterministic, type-safe command-line tools following PAI's CLI-First Architecture. USE WHEN user says "create a CLI", "build a command-line tool", "make a CLI for X", or requests CLI generation. (user)
-location: user
+name: CreateCLI
+description: Generate production-quality TypeScript CLIs with full documentation, error handling, and best practices. Creates deterministic, type-safe command-line tools following PAI's CLI-First Architecture. USE WHEN user says "create a CLI", "build a command-line tool", "make a CLI for X", or requests CLI generation.
 ---
 
-# system-createcli
+# CreateCLI
 
 **Automated CLI Generation System**
 
@@ -12,7 +11,7 @@ Generate production-ready TypeScript CLIs with comprehensive documentation, type
 
 ---
 
-## 🎯 WORKFLOW ROUTING (SYSTEM PROMPT)
+## Workflow Routing
 
 **When user requests CLI creation, follow this routing:**
 
@@ -198,9 +197,9 @@ Every generated CLI follows:
 
 ---
 
-## 📖 EXAMPLES
+## Examples
 
-### Example 1: API Client CLI (Tier 1)
+**Example 1: API Client CLI (Tier 1)**
 
 **User Request:**
 "Create a CLI for the GitHub API that can list repos, create issues, and search code"
@@ -226,7 +225,7 @@ ghcli --help
 
 ---
 
-### Example 2: File Processor (Tier 1)
+**Example 2: File Processor (Tier 1)**
 
 **User Request:**
 "Build a CLI to convert markdown files to HTML with frontmatter extraction"
@@ -249,7 +248,7 @@ md2html extract-frontmatter post.md
 
 ---
 
-### Example 3: Data Pipeline (Tier 2)
+**Example 3: Data Pipeline (Tier 2)**
 
 **User Request:**
 "Create a CLI for data transformation with multiple formats, validation, and analysis commands"

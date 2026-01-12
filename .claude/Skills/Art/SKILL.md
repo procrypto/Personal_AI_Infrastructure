@@ -1,31 +1,6 @@
 ---
-name: art
-description: |
-  Complete visual content system for PAI.
-  Tron-meets-Excalidraw aesthetic - dark backgrounds, neon accents, hand-drawn sketch style.
-
-# Skill Triggers
-triggers:
-  - USE WHEN user wants to create visual content, illustrations, or diagrams
-  - USE WHEN user mentions art, header images, visualizations, or any visual request
-  - USE WHEN user references mermaid, flowchart, technical diagram, or infographic
-
-# Workflow Routing
-workflows:
-  - USE WHEN user wants blog header or editorial illustration: workflows/workflow.md
-  - USE WHEN user wants visualization or is unsure which format: workflows/visualize.md
-  - USE WHEN user wants mermaid flowchart or sequence diagram: workflows/mermaid.md
-  - USE WHEN user wants technical or architecture diagram: workflows/technical-diagrams.md
-  - USE WHEN user wants taxonomy or classification grid: workflows/taxonomies.md
-  - USE WHEN user wants timeline or chronological progression: workflows/timelines.md
-  - USE WHEN user wants framework or 2x2 matrix: workflows/frameworks.md
-  - USE WHEN user wants comparison or X vs Y: workflows/comparisons.md
-  - USE WHEN user wants annotated screenshot: workflows/annotated-screenshots.md
-  - USE WHEN user wants recipe card or step-by-step: workflows/recipe-cards.md
-  - USE WHEN user wants aphorism or quote card: workflows/aphorisms.md
-  - USE WHEN user wants conceptual map or territory: workflows/maps.md
-  - USE WHEN user wants stat card or big number visual: workflows/stats.md
-  - USE WHEN user wants comic or sequential panels: workflows/comics.md
+name: Art
+description: Complete visual content system for PAI. Tron-meets-Excalidraw aesthetic - dark backgrounds, neon accents, hand-drawn sketch style. USE WHEN user wants to create visual content, illustrations, diagrams, header images, visualizations, mermaid flowcharts, technical diagrams, OR any visual request.
 ---
 
 # Art Skill
@@ -116,6 +91,35 @@ What does user need?
 ├─ Idea territories as map? → Conceptual Map
 ├─ Single striking number? → Stat Card
 └─ Multi-panel story? → Comic
+```
+
+---
+
+## Examples
+
+**Example 1: Blog Header Image**
+```
+User: "Create a header image for my article about AI agents"
+→ Invokes Editorial workflow (workflows/workflow.md)
+→ Applies Tron-meets-Excalidraw aesthetic
+→ Generates image with dark background, neon accents
+→ Returns header image ready for blog
+```
+
+**Example 2: Technical Architecture Diagram**
+```
+User: "Create an architecture diagram for my microservices system"
+→ Invokes Technical Diagrams workflow (workflows/technical-diagrams.md)
+→ Uses hand-drawn sketch style with labeled components
+→ Returns diagram with system components and connections
+```
+
+**Example 3: Mermaid Flowchart**
+```
+User: "Create a flowchart showing the user authentication flow"
+→ Invokes Mermaid workflow (workflows/mermaid.md)
+→ Generates mermaid code for the flow
+→ Returns both code and rendered visualization
 ```
 
 ---

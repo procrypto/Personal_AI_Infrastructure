@@ -1,9 +1,43 @@
 ---
-name: prompting
-description: Prompt engineering standards and context engineering principles for AI agents based on Anthropic best practices. Covers clarity, structure, progressive discovery, and optimization for signal-to-noise ratio.
+name: Prompting
+description: Prompt engineering standards and context engineering principles for AI agents based on Anthropic best practices. Covers clarity, structure, progressive discovery, and optimization for signal-to-noise ratio. USE WHEN user asks about prompt engineering, context engineering, AI agent design, prompt structure, OR best practices for LLM prompts.
 ---
 
 # Prompting Skill
+
+## Workflow Routing
+
+| Workflow | Trigger | Description |
+|----------|---------|-------------|
+| **Review** | "review my prompt", "improve this prompt" | Analyze and improve existing prompts |
+| **Create** | "create a prompt for", "write a system prompt" | Generate new prompts following best practices |
+| **Optimize** | "optimize context", "reduce token usage" | Optimize prompts for signal-to-noise ratio |
+
+## Examples
+
+**Example 1: Prompt Review**
+```
+User: "Review my prompt for a code review agent"
+→ Analyzes prompt structure against best practices
+→ Identifies redundancy, vague instructions, missing constraints
+→ Returns improved version with explanations
+```
+
+**Example 2: System Prompt Creation**
+```
+User: "Create a system prompt for a customer support agent"
+→ Applies context engineering principles
+→ Structures with background, instructions, examples, constraints
+→ Returns production-ready system prompt
+```
+
+**Example 3: Context Optimization**
+```
+User: "This prompt is too long, help me optimize it"
+→ Identifies low-signal tokens
+→ Applies progressive discovery patterns
+→ Returns compressed version maintaining effectiveness
+```
 
 ## When to Activate This Skill
 - Prompt engineering questions

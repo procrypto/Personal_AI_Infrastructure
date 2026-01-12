@@ -1,5 +1,5 @@
 ---
-name: research
+name: Research
 description: Comprehensive research, analysis, and content extraction system. Multi-source parallel research using available researcher agents. Deep content analysis with extended thinking. Intelligent retrieval for difficult sites. Fabric pattern selection for 242+ specialized prompts. USE WHEN user says 'do research', 'extract wisdom', 'analyze content', 'find information about', or requests web/content research.
 ---
 
@@ -81,6 +81,37 @@ Examples: "enhance this content", "improve this draft"
 Examples: "extract knowledge from X", "get insights from this"
 → **READ:** `${PAI_DIR}/Skills/research/workflows/extract-knowledge.md`
 → **EXECUTE:** Knowledge extraction and synthesis
+
+---
+
+## Examples
+
+**Example 1: General research request**
+```
+User: "Do research on the latest developments in quantum computing"
+→ Invokes Conduct workflow (workflows/conduct.md)
+→ Launches parallel researcher agents (Claude, Perplexity, Gemini)
+→ Synthesizes findings from multiple sources
+→ Returns comprehensive research report with citations
+```
+
+**Example 2: Quick Claude-based research (free)**
+```
+User: "Use Claude to quickly research battery technology trends"
+→ Invokes Claude Research workflow (workflows/claude-research.md)
+→ Decomposes query into multiple search angles
+→ Uses WebSearch to gather information
+→ Returns synthesized findings with source links
+```
+
+**Example 3: Content extraction from difficult site**
+```
+User: "I can't access this article, it's behind a paywall"
+→ Invokes Retrieve workflow (workflows/retrieve.md)
+→ Tries WebFetch first (Layer 1)
+→ If blocked, escalates to BrightData (Layer 2)
+→ Returns extracted content
+```
 
 ---
 
@@ -213,6 +244,37 @@ ${PAI_DIR}/History/research/YYYY-MM/YYYY-MM-DD_[topic]/
 2. **Hard timeouts** - Don't wait indefinitely, proceed with partial results
 3. **Simplest first** - Always try free tools before paid services
 4. **Auto-routing** - Skill analyzes intent and activates appropriate workflow
+
+---
+
+## Quality Gate (Judge Integration)
+
+**Before delivering research outputs, apply judge gate evaluation.**
+
+### When Gate Applies
+- Research synthesis complete
+- Multi-source research consolidated
+- Any substantive research output
+
+### Gate Protocol
+1. Read `${PAI_DIR}/Skills/CORE/workflows/JudgeGate.md`
+2. Output type: `research`
+3. Priority failure modes: FM2 (Assertion without demonstration), FM7 (Confidence games), FM4 (Calibration)
+4. Run evaluation protocol
+
+### Critical Checks for Research
+- **FM2:** Every pattern claim must have evidence - "Show me the sources that demonstrate this"
+- **FM7:** No confident assertions without primary source verification
+- **FM4:** Uncertainty must be calibrated - don't state uncertain things with false confidence
+
+### Verdict Handling
+- **PASS** → Deliver research to user with confidence level
+- **REVISE** → Incorporate feedback, strengthen evidence, re-evaluate
+- **REJECT** → Reformulate approach, gather additional sources
+- Maximum 2 iterations before delivering with caveats
+
+### Gate Bypass
+User can say "skip judge", "just give me the output", or "no gate" to bypass evaluation
 
 ---
 

@@ -1,9 +1,44 @@
 ---
-name: alex-hormozi-pitch
-description: Create irresistible offers and pitches using Alex Hormozi's methodology from $100M Offers. Guides through value equation, guarantee frameworks, pricing psychology, and creating offers "too good not to take" for any product or service.
+name: AlexHormoziPitch
+description: Create irresistible offers and pitches using Alex Hormozi's methodology from $100M Offers. Guides through value equation, guarantee frameworks, pricing psychology, and creating offers "too good not to take" for any product or service. USE WHEN user wants to create compelling offers, design value propositions, structure pricing, build Grand Slam Offers, OR apply Hormozi frameworks.
 ---
 
 # Alex Hormozi Pitch Skill
+
+## Workflow Routing
+
+| Workflow | Trigger | Description |
+|----------|---------|-------------|
+| **Create** | "create an offer", "build a pitch" | Full guided process through Hormozi frameworks |
+| **Optimize** | "improve my offer", "make this irresistible" | Analyze and enhance existing offers |
+| **Guarantee** | "design guarantee", "reduce risk" | Focus on guarantee framework selection |
+
+## Examples
+
+**Example 1: Create New Offer**
+```
+User: "Create an irresistible offer for my coaching program"
+→ Guides through Value Equation optimization
+→ Applies MAGIC naming formula
+→ Structures guarantee and value stack
+→ Returns complete Grand Slam Offer
+```
+
+**Example 2: Optimize Existing Offer**
+```
+User: "My course isn't selling, help me fix the offer"
+→ Analyzes against Value Equation components
+→ Identifies weak points (time delay? effort? likelihood?)
+→ Returns enhanced offer with specific improvements
+```
+
+**Example 3: Guarantee Design**
+```
+User: "What guarantee should I use for my SaaS product?"
+→ Evaluates four guarantee types for fit
+→ Considers risk reversal psychology
+→ Returns recommended guarantee with implementation
+```
 
 ## When to Activate This Skill
 - Create compelling offer or pitch

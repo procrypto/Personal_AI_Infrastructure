@@ -1,9 +1,43 @@
 ---
-name: fabric
+name: Fabric
 description: Native Fabric pattern execution for Claude Code. USE WHEN processing content with Fabric patterns (extract_wisdom, summarize, analyze_claims, threat modeling, etc.). Patterns run natively in Claude's context - no CLI spawning needed. Only use fabric CLI for YouTube transcripts (-y) or pattern updates (-U).
 ---
 
 # Fabric Skill - Native Pattern Execution
+
+## Workflow Routing
+
+| Workflow | Trigger | Description |
+|----------|---------|-------------|
+| **Native** | "use fabric pattern", "extract wisdom" | Apply pattern natively in Claude context |
+| **YouTube** | "fabric -y", YouTube URL | Extract transcript via CLI |
+| **Update** | "update patterns", "fabric -U" | Sync latest patterns from upstream |
+
+## Examples
+
+**Example 1: Extract Wisdom from Article**
+```
+User: "Extract wisdom from this article about productivity"
+→ Reads tools/patterns/extract_wisdom/system.md
+→ Applies pattern natively to content
+→ Returns structured output (IDEAS, INSIGHTS, QUOTES, etc.)
+```
+
+**Example 2: Create Threat Model**
+```
+User: "Create a threat model for this API design"
+→ Reads tools/patterns/create_threat_model/system.md
+→ Applies STRIDE methodology to API description
+→ Returns comprehensive threat model
+```
+
+**Example 3: YouTube Transcript Processing**
+```
+User: "Summarize this YouTube video: [URL]"
+→ Runs fabric -y "[URL]" to extract transcript
+→ Reads tools/patterns/summarize/system.md
+→ Applies pattern and returns summary
+```
 
 ## The Key Insight
 

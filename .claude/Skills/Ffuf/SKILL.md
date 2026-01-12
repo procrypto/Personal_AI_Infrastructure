@@ -1,12 +1,47 @@
 ---
-name: ffuf-web-fuzzing
-description: Expert guidance for ffuf web fuzzing during penetration testing, including authenticated fuzzing with raw requests, auto-calibration, and result analysis
-contributor: Joseph Thacker (@rez0)
+name: Ffuf
+description: Expert guidance for ffuf web fuzzing during penetration testing, including authenticated fuzzing with raw requests, auto-calibration, and result analysis. USE WHEN user needs help with ffuf, web fuzzing, directory discovery, parameter fuzzing, subdomain enumeration, OR authenticated endpoint testing.
 ---
 
 # FFUF (Fuzz Faster U Fool) Skill
 
 > **Contributed by:** [Joseph Thacker (@rez0)](https://twitter.com/rez0__)
+
+## Workflow Routing
+
+| Workflow | Trigger | Description |
+|----------|---------|-------------|
+| **Discovery** | "fuzz directories", "find hidden files" | Directory and file discovery |
+| **Subdomains** | "find subdomains", "vhost discovery" | Subdomain enumeration |
+| **Parameters** | "fuzz parameters", "find params" | Parameter fuzzing |
+| **Authenticated** | "authenticated fuzzing", "with auth" | Authenticated endpoint testing |
+| **Analysis** | "analyze ffuf results" | Result analysis and triage |
+
+## Examples
+
+**Example 1: Directory Discovery**
+```
+User: "Fuzz this site for hidden directories"
+→ Constructs ffuf command with appropriate wordlist
+→ Includes -ac for auto-calibration
+→ Returns command and explains expected output
+```
+
+**Example 2: Authenticated API Fuzzing**
+```
+User: "I need to fuzz this API endpoint with my JWT token"
+→ Guides user to create req.txt with FUZZ keyword
+→ Constructs ffuf --request command
+→ Returns complete authenticated fuzzing setup
+```
+
+**Example 3: Result Analysis**
+```
+User: "Here are my ffuf results, what's interesting?"
+→ Analyzes JSON output for anomalies
+→ Identifies interesting status codes, sizes, timing
+→ Returns prioritized findings for investigation
+```
 
 ## Overview
 FFUF is a fast web fuzzer written in Go, designed for discovering hidden content, directories, files, subdomains, and testing for vulnerabilities during penetration testing. It's significantly faster than traditional tools like dirb or dirbuster.

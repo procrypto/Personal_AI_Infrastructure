@@ -1,11 +1,48 @@
 ---
-name: story-explanation
+name: StoryExplanation
 description: Create compelling story-format summaries using UltraThink to find the best narrative framing. Support multiple formats - 3-part narrative, n-length with inline links, abridged 5-line, or comprehensive via Foundry MCP. USE WHEN user says 'create story explanation', 'narrative summary', 'explain as a story', or wants content in Daniel's conversational first-person voice.
 ---
 
 # Story Explanation - Narrative Summary with Creative Analysis
 
-## 🎯 Load Full PAI Context
+## Workflow Routing
+
+| Workflow | Trigger | File |
+|----------|---------|------|
+| **Create** | "create story explanation", default | `workflows/Create.md` |
+| **WithLinks** | "story with links", "with citations" | `workflows/CreateWithLinks.md` |
+| **Abridged** | "abridged", "5-line summary" | `workflows/CreateAbridged.md` |
+| **CSE** | "run CSE", "comprehensive explanation" | `workflows/Cse.md` |
+| **CSE5** | "CSE5", "explain in 5 lines" | `workflows/Cse5.md` |
+
+## Examples
+
+**Example 1: Standard Story Explanation**
+```
+User: "Create a story explanation for this YouTube video"
+→ Invokes Create workflow (workflows/create.md)
+→ Extracts content via fabric -y
+→ Applies UltraThink narrative analysis
+→ Returns 3-part narrative (opening/body/closing)
+```
+
+**Example 2: Story with Source Links**
+```
+User: "Create a story explanation with inline links for this research"
+→ Invokes WithLinks workflow (workflows/create-with-links.md)
+→ Generates N sentences with inline source attribution
+→ Returns narrative with citations after each sentence
+```
+
+**Example 3: Quick 5-Line Summary**
+```
+User: "Give me a CSE5 of this article"
+→ Invokes CSE5 workflow (workflows/cse5.md)
+→ Uses Foundry MCP for processing
+→ Returns clean 5-line numbered summary
+```
+
+## Load Full PAI Context
 
 **Before starting any task with this skill, load complete PAI context:**
 
@@ -400,6 +437,37 @@ You've succeeded with this skill when:
 - Sticks to facts from the content without extrapolating
 - No cliches or journalistic language
 - User says "This makes me want to share it!" or "I get it now!"
+
+---
+
+## Quality Gate (Judge Integration)
+
+**Before delivering narrative outputs, apply judge gate evaluation.**
+
+### When Gate Applies
+- Narrative draft complete
+- Story explanation finalized
+- Any substantive narrative output
+
+### Gate Protocol
+1. Read `${PAI_DIR}/Skills/CORE/workflows/JudgeGate.md`
+2. Output type: `narrative`
+3. Priority failure modes: FM1 (Dressed-up universals), FM3 (False comprehensiveness), FM6 (Tiger-style mimicry)
+4. Run evaluation protocol
+
+### Critical Checks for Narratives
+- **FM1:** Would this insight surprise a thoughtful person? If not, it's a universal dressed as specific
+- **FM3:** 10-second rule - does value hit immediately? Count novel observations vs structural sections
+- **FM6:** Does this describe WHAT happens or WHY it happens? Mimicry vs mechanism
+
+### Verdict Handling
+- **PASS** → Deliver narrative to user
+- **REVISE** → Deepen specificity, add mechanism, re-evaluate
+- **REJECT** → Re-engage UltraThink, find genuinely compelling framing
+- Maximum 2 iterations before delivering with self-critique
+
+### Gate Bypass
+User can say "skip judge", "just give me the output", or "no gate" to bypass evaluation
 
 ## Quick Reference
 
