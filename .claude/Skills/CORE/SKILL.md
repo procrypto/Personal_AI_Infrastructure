@@ -29,6 +29,49 @@ This ensures workflows appear in the observability dashboard AND the user sees t
 | **Git** | "push changes", "commit to repo" | Run git workflow |
 | **Delegation** | "use parallel interns", "parallelize" | Deploy parallel agents |
 | **Merge** | "merge conflict", "complex decision" | Use /plan mode |
+| **Judge Gate** | After substantive output | Apply quality evaluation before delivery |
+
+### Judge Gate (Quality Enforcement)
+
+**Applies automatically to skills with gates enabled (Research, StoryExplanation).**
+
+When generating substantive outputs:
+1. Generate output as normal
+2. Apply judge gate evaluation (`${PAI_DIR}/Skills/CORE/workflows/JudgeGate.md`)
+3. If PASS → Deliver output
+4. If REVISE → Iterate with feedback
+5. If REJECT → Reformulate approach
+
+**Manual invocation:** "judge this", "evaluate output", "quick review"
+**Bypass:** "skip judge", "no gate", "just give me the output"
+
+See `${PAI_DIR}/Skills/CORE/judge.md` for full evaluation framework.
+
+### GSD Integration (Project-Based Work)
+
+**When working in a directory with `.planning/`, GSD context is active.**
+
+**Auto-detect at session start:**
+```bash
+# Check for GSD project
+[ -f .planning/STATE.md ] && echo "GSD project detected"
+```
+
+**If GSD project detected:**
+1. Read `.planning/STATE.md` for project position and context
+2. Apply GSD deviation rules during execution
+3. Apply PAI judge gate at plan completion
+4. Update both STATE.md (GSD) and History (PAI) on significant work
+
+**Unified Quality Model:**
+- GSD deviation rules handle scope (auto-fix, auto-add, ask architectural)
+- PAI judge handles output quality (FM2, FM4, FM7)
+- Combined: `${PAI_DIR}/Skills/CORE/workflows/GSDQualityGate.md`
+
+**Key Commands:**
+- `/gsd:progress` - Check where you are, what's next
+- `/gsd:resume-work` - Full context restoration
+- `/gsd:execute-plan [path]` - Execute with unified quality
 
 ## Examples
 
@@ -77,10 +120,34 @@ STORY EXPLANATION:
 6. [Sixth key point]
 7. [Seventh key point]
 8. [Eighth key point - conclusion]
+JUDGE: [Self-evaluation - see below]
 COMPLETED: [12 words max - drives voice output - REQUIRED]
 ```
 
 **CRITICAL: STORY EXPLANATION MUST BE A NUMBERED LIST (1-8)**
+
+### JUDGE SECTION (Self-Evaluation)
+
+**For every substantive response, evaluate your own output:**
+
+```
+JUDGE: [PASS|REVISE|N/A] - [One-line rationale]
+  FM2: [Claims verified against evidence? Y/N]
+  FM4: [Confidence calibrated to uncertainty? Y/N]
+  FM7: [Primary sources checked? Y/N]
+```
+
+**When to use each verdict:**
+- **PASS** - Claims verified, confidence calibrated, sources checked
+- **REVISE** - Found issues during self-check, noted what needs fixing
+- **N/A** - Response is conversational/simple, no substantive claims to verify
+
+**Quick check questions:**
+1. Did I make claims I didn't verify against actual code/data?
+2. Did I state uncertain things with false confidence?
+3. Would a spot-check of my assertions embarrass me?
+
+**If REVISE:** Fix issues before delivering, or note caveats explicitly.
 
 ### WHY THIS MATTERS:
 
@@ -89,6 +156,7 @@ COMPLETED: [12 words max - drives voice output - REQUIRED]
 3. Consistency: Every response follows same pattern
 4. Accessibility: Format makes responses scannable and structured
 5. Constitutional Compliance: This is a core PAI principle
+6. Quality Enforcement: JUDGE section catches errors before delivery
 
 ---
 
@@ -118,6 +186,7 @@ COMPLETED: [12 words max - drives voice output - REQUIRED]
 - Date Awareness: Always use today's actual date from system (not training cutoff)
 - Constitutional Principles: See ${PAI_DIR}/Skills/CORE/CONSTITUTION.md
 - Command Line First, Deterministic Code First, Prompts Wrap Code
+- **cd = Action:** When user says `cd [path]`, IMMEDIATELY execute it. No acknowledgment, no "let me check", no fluff. Just do it. If it fails, say why. Note: Claude Code resets shell cwd after each command - use absolute paths for subsequent commands in the target directory.
 
 ---
 
@@ -291,4 +360,4 @@ ls -lt ${PAI_DIR}/History/sessions/2025-11/ | head -20
 
 ---
 
-**This completes the CORE skill quick reference. All additional context is available in the documentation files listed above.**
+**This completes the CORE skill quick reference. All additional context is available in the documentation files li  sted above.**

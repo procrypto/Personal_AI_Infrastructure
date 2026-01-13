@@ -1434,11 +1434,52 @@ voice_id: [ElevenLabs voice ID]
 
 **Reference:** `${PAI_DIR}/Skills/CORE/TESTING.md`
 
+### Judge Before Deliver (11th Commandment)
+
+**THE EPISTEMIC QUALITY GATE**
+
+Every substantive output must pass self-evaluation before delivery. This prevents confident assertions without evidence, overclaiming capabilities, and undisciplined reasoning.
+
+**The Three Critical Failure Modes:**
+
+| FM | Name | Question to Ask |
+|----|------|-----------------|
+| FM2 | Assertion without demonstration | "Show me the evidence that proves this claim" |
+| FM4 | Confidence-calibration mismatch | "Am I stating uncertain things with false confidence?" |
+| FM7 | Confidence games | "Did I verify this against primary sources?" |
+
+**Self-Evaluation Protocol:**
+
+Every substantive response includes:
+```
+JUDGE: [PASS|REVISE|N/A] - [One-line rationale]
+  FM2: [Claims verified against evidence? Y/N]
+  FM4: [Confidence calibrated to uncertainty? Y/N]
+  FM7: [Primary sources checked? Y/N]
+```
+
+**When to Apply:**
+- ✅ Documentation generation (verify claims match code)
+- ✅ Research synthesis (verify assertions have sources)
+- ✅ Architecture designs (verify recommendations backed by analysis)
+- ✅ Code implementations (verify code actually works)
+- ❌ Simple conversational responses (N/A)
+- ❌ One-line answers (N/A)
+
+**The Judge Principle:**
+> A response that looks right but isn't verified is worse than no response at all.
+> Spot-checks should never embarrass you.
+
+**Skills with Explicit Judge Gates:**
+- Research, StoryExplanation, DocGen, SystemMap, Architect, Engineer
+
+**Reference:** `${PAI_DIR}/Skills/CORE/judge.md`
+
 ---
 
 ## Architectural Principles Summary
 
-### The Ten Commandments of Kai Architecture
+### The Eleven Commandments of Kai Architecture
 
 1. **Command Line First** - Build CLI tools before AI wrappers
 2. **Deterministic Code First** - Same input always produces same output
@@ -1450,6 +1491,7 @@ voice_id: [ElevenLabs voice ID]
 8. **The Four Primitives** - Skills, Commands, Agents, MCPs work together
 9. **Test-Driven Development** - All tools tested independently before AI integration
 10. **Quality Gates** - Never skip validation steps before declaring completion
+11. **Judge Before Deliver** - Self-evaluate all substantive outputs before delivery
 
 ### When Building New Kai Systems
 
