@@ -1,0 +1,519 @@
+/**
+ * Token Market Data Endpoints
+ *
+ * Fetches comprehensive market data for tokens.
+ * This is a complex endpoint with 100+ columns and time-based overrides.
+ *
+ * ⚠️  This fetches PRODUCTION data. Strict limits are enforced.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, buildInList, escapeString, isSolanaPubkey, clamp } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const MAX_BATCH_SIZE = 100;
+const TABLE_NAME = "materializer_token_market_data_latest";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type TokenMarketDataBatchRequest = {
+    mint: string;
+};
+
+type TokenMarketDataRow = {
+    mint: string;
+    decimals: number;
+    exchange: string;
+    most_performant_pool: string;
+    pools: string[];
+    created: string;
+    name: string;
+    symbol: string;
+    description: string;
+    image: string;
+    website: string;
+    telegram: string;
+    twitter: string;
+    discord: string;
+    twitter_royalties: string;
+    mint_authority_disabled: boolean;
+    freeze_authority_disabled: boolean;
+    is_bundled_launch: boolean;
+    is_token_2022: boolean;
+    holders: string;
+    top_10_holders_pct: string;
+    insider_supply_pct: string | null;
+    bundler_supply_pct: string | null;
+    dev_address: string;
+    dev_supply_pct: string;
+    dev_portfolio_sol: string;
+    dev_portfolio_usd: string;
+    dev_pools_graduated: string;
+    dev_pools_launched: string;
+    top_10_holders_portfolio_sol: string;
+    top_10_holders_portfolio_usd: string;
+    market_cap_sol: string;
+    market_cap_usd: string;
+    volume_24h_sol: string;
+    volume_24h_usd: string;
+    liquidity_sol: string;
+    liquidity_usd: string;
+    liquidity_locked_sol: string;
+    liquidity_locked_usd: string;
+    initial_liquidity_sol: string;
+    initial_liquidity_usd: string;
+    lp_burned_pct: string;
+    price_sol: string;
+    price_usd: string;
+    total_supply: string;
+    circulating_supply: string;
+    is_dex_paid: boolean;
+    dex_banner_url: string | null;
+    dex_website: string | null;
+    dex_twitter: string | null;
+    dex_discord: string | null;
+    dex_docs: string | null;
+    dex_telegram: string | null;
+    dex_tiktok: string | null;
+    dex_links: string | null;
+    dex_paid_at: string | null;
+    dex_cto_at: string | null;
+    stream_thumbnail: string | null;
+    dev_funding: unknown[] | null;
+    trading_bot_holders: string;
+    trading_bot_holders_pct: string;
+    launchpad: string | null;
+    partner: string | null;
+    bonding_curve_pct: string | null;
+    about_to_graduate: boolean | null;
+    about_to_graduate_timestamp: string | null;
+    has_graduated: boolean | null;
+    has_graduated_timestamp: string | null;
+    has_migrated: boolean | null;
+    has_migrated_timestamp: string | null;
+    is_mayhem_mode: boolean | null;
+    fee_percentage: string | null;
+    // 5m stats
+    earliest_price_sol_5m: string;
+    earliest_price_usd_5m: string;
+    buys_5m: number;
+    sells_5m: number;
+    buy_volume_sol_5m: string;
+    buy_volume_usd_5m: string;
+    sell_volume_sol_5m: string;
+    sell_volume_usd_5m: string;
+    buyers_5m: number;
+    sellers_5m: number;
+    traders_5m: number;
+    // 1h stats
+    earliest_price_sol_1h: string;
+    earliest_price_usd_1h: string;
+    buys_1h: number;
+    sells_1h: number;
+    buy_volume_sol_1h: string;
+    buy_volume_usd_1h: string;
+    sell_volume_sol_1h: string;
+    sell_volume_usd_1h: string;
+    buyers_1h: number;
+    sellers_1h: number;
+    traders_1h: number;
+    // 6h stats
+    earliest_price_sol_6h: string;
+    earliest_price_usd_6h: string;
+    buys_6h: number;
+    sells_6h: number;
+    buy_volume_sol_6h: string;
+    buy_volume_usd_6h: string;
+    sell_volume_sol_6h: string;
+    sell_volume_usd_6h: string;
+    buyers_6h: number;
+    sellers_6h: number;
+    traders_6h: number;
+    // 24h stats
+    earliest_price_sol_24h: string;
+    earliest_price_usd_24h: string;
+    buys_24h: number;
+    sells_24h: number;
+    buy_volume_sol_24h: string;
+    buy_volume_usd_24h: string;
+    sell_volume_sol_24h: string;
+    sell_volume_usd_24h: string;
+    buyers_24h: number;
+    sellers_24h: number;
+    traders_24h: number;
+    // Trading bot stats
+    trading_bot_buy_volume_sol_1h: string;
+    trading_bot_buy_volume_usd_1h: string;
+    trading_bot_sell_volume_sol_1h: string;
+    trading_bot_sell_volume_usd_1h: string;
+    trading_bot_volume_pct_1h: string;
+    trading_bot_buy_volume_sol_24h: string;
+    trading_bot_buy_volume_usd_24h: string;
+    trading_bot_sell_volume_sol_24h: string;
+    trading_bot_sell_volume_usd_24h: string;
+    trading_bot_volume_pct_24h: string;
+    signature: string;
+    timestamp: string;
+    slot: string;
+};
+
+type TokenMarketDataResponse =
+    | { ok: true; token: TokenMarketDataRow | null }
+    | { ok: false; error: string };
+
+type TokenMarketDataBatchResponse =
+    | { ok: true; tokens: TokenMarketDataRow[]; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// SQL Query Builder
+// =============================================================================
+
+const buildMarketDataSelectClause = (): string => `
+    mint,
+    decimals,
+    exchange,
+    most_performant_pool,
+    pools,
+    created,
+    name,
+    symbol,
+    description,
+    image,
+    website,
+    telegram,
+    twitter,
+    discord,
+    twitter_royalties,
+    mint_authority_disabled,
+    freeze_authority_disabled,
+    is_bundled_launch,
+    is_token_2022,
+    holders,
+    top_10_holders_pct,
+    insider_supply_pct,
+    bundler_supply_pct,
+    dev_address,
+    dev_supply_pct,
+    dev_portfolio_sol,
+    dev_portfolio_usd,
+    dev_pools_graduated,
+    dev_pools_launched,
+    top_10_holders_portfolio_sol,
+    top_10_holders_portfolio_usd,
+    market_cap_sol,
+    market_cap_usd,
+    volume_24h_sol,
+    volume_24h_usd,
+    liquidity_sol,
+    liquidity_usd,
+    liquidity_locked_sol,
+    liquidity_locked_usd,
+    initial_liquidity_sol,
+    initial_liquidity_usd,
+    lp_burned_pct,
+    price_sol,
+    price_usd,
+    total_supply,
+    circulating_supply,
+    is_dex_paid,
+    dex_banner_url,
+    dex_website,
+    dex_twitter,
+    dex_discord,
+    dex_docs,
+    dex_telegram,
+    dex_tiktok,
+    dex_links,
+    dex_paid_at,
+    dex_cto_at,
+    stream_thumbnail,
+    dev_funding,
+    trading_bot_holders,
+    trading_bot_holders_pct,
+    launchpad,
+    partner,
+    bonding_curve_pct,
+    about_to_graduate,
+    about_to_graduate_timestamp,
+    has_graduated,
+    has_graduated_timestamp,
+    has_migrated,
+    has_migrated_timestamp,
+    is_mayhem_mode,
+    fee_percentage,
+    /* 5m overrides */
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN price_sol ELSE earliest_price_sol_5m END AS earliest_price_sol_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN price_usd ELSE earliest_price_usd_5m END AS earliest_price_usd_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN 0 ELSE buys_5m END AS buys_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN 0 ELSE sells_5m END AS sells_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_sol_5m END AS buy_volume_sol_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_usd_5m END AS buy_volume_usd_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_sol_5m END AS sell_volume_sol_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_usd_5m END AS sell_volume_usd_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN 0 ELSE buyers_5m END AS buyers_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN 0 ELSE sellers_5m END AS sellers_5m,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 5 MINUTE)
+        THEN 0 ELSE traders_5m END AS traders_5m,
+    /* 1h overrides */
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN price_sol ELSE earliest_price_sol_1h END AS earliest_price_sol_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN price_usd ELSE earliest_price_usd_1h END AS earliest_price_usd_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN 0 ELSE buys_1h END AS buys_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN 0 ELSE sells_1h END AS sells_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_sol_1h END AS buy_volume_sol_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_usd_1h END AS buy_volume_usd_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_sol_1h END AS sell_volume_sol_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_usd_1h END AS sell_volume_usd_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN 0 ELSE buyers_1h END AS buyers_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN 0 ELSE sellers_1h END AS sellers_1h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 1 HOUR)
+        THEN 0 ELSE traders_1h END AS traders_1h,
+    /* 6h overrides */
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN price_sol ELSE earliest_price_sol_6h END AS earliest_price_sol_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN price_usd ELSE earliest_price_usd_6h END AS earliest_price_usd_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN 0 ELSE buys_6h END AS buys_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN 0 ELSE sells_6h END AS sells_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_sol_6h END AS buy_volume_sol_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_usd_6h END AS buy_volume_usd_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_sol_6h END AS sell_volume_sol_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_usd_6h END AS sell_volume_usd_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN 0 ELSE buyers_6h END AS buyers_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN 0 ELSE sellers_6h END AS sellers_6h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 6 HOUR)
+        THEN 0 ELSE traders_6h END AS traders_6h,
+    /* 24h overrides */
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN price_sol ELSE earliest_price_sol_24h END AS earliest_price_sol_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN price_usd ELSE earliest_price_usd_24h END AS earliest_price_usd_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN 0 ELSE buys_24h END AS buys_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN 0 ELSE sells_24h END AS sells_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_sol_24h END AS buy_volume_sol_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE buy_volume_usd_24h END AS buy_volume_usd_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_sol_24h END AS sell_volume_sol_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN CAST(0 AS Decimal(38, 9)) ELSE sell_volume_usd_24h END AS sell_volume_usd_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN 0 ELSE buyers_24h END AS buyers_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN 0 ELSE sellers_24h END AS sellers_24h,
+    CASE WHEN toDateTime(intDiv(timestamp, 1e9)) < (now() - INTERVAL 24 HOUR)
+        THEN 0 ELSE traders_24h END AS traders_24h,
+    trading_bot_buy_volume_sol_1h,
+    trading_bot_buy_volume_usd_1h,
+    trading_bot_sell_volume_sol_1h,
+    trading_bot_sell_volume_usd_1h,
+    trading_bot_volume_pct_1h,
+    trading_bot_buy_volume_sol_24h,
+    trading_bot_buy_volume_usd_24h,
+    trading_bot_sell_volume_sol_24h,
+    trading_bot_sell_volume_usd_24h,
+    trading_bot_volume_pct_24h,
+    signature,
+    timestamp,
+    slot
+`;
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerTokenMarketDataRoutes = (app: Elysia) => {
+    // -------------------------------------------------------------------------
+    // GET /local-api/market_data/:mint — Single token
+    // -------------------------------------------------------------------------
+    app.get("/market-data/:mint", async ({ params }) => {
+        const mint = params.mint;
+
+        const validation = validateTokenMarketDataRequest(mint);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildTokenMarketDataSql(validation.mint);
+
+        console.log(`[market_data] Querying token market data for mint=${mint}`);
+
+        const result = await clickhouseQuery<TokenMarketDataRow>(sql);
+
+        return formatTokenMarketDataResponse(result, mint);
+    });
+
+    // -------------------------------------------------------------------------
+    // GET /local-api/market_data_batch — Batch lookup (up to 100)
+    // -------------------------------------------------------------------------
+    app.get("/local-api/market_data_batch", async ({ query }) => {
+        const validation = validateTokenMarketDataBatchRequest(query as TokenMarketDataBatchRequest);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildTokenMarketDataBatchSql(validation.mints);
+
+        console.log(`[market_data_batch] Querying ${validation.mints.length} tokens`);
+
+        const result = await clickhouseQuery<TokenMarketDataRow>(sql);
+
+        return formatTokenMarketDataBatchResponse(result);
+    });
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+export const validateTokenMarketDataRequest = (
+    mint: string
+): { ok: true; mint: string } | { ok: false; error: string } => {
+    if (!isSolanaPubkey(mint)) {
+        return {
+            ok: false,
+            error: "Invalid mint address",
+        };
+    }
+    return { ok: true, mint };
+};
+
+export const buildTokenMarketDataSql = (mint: string): string => {
+    return `
+        SELECT ${buildMarketDataSelectClause()}
+        FROM ${TABLE_NAME}
+        WHERE mint = '${escapeString(mint)}'
+        ORDER BY timestamp DESC
+        LIMIT 1
+    `;
+};
+
+export const formatTokenMarketDataResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<TokenMarketDataRow>>>,
+    mint: string
+): TokenMarketDataResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    const token = result.data.length > 0 ? result.data[0] : null;
+
+    if (token) {
+        console.log(`[market_data] Found token: ${token.symbol} (${token.name})`);
+    }
+    else {
+        console.log(`[market_data] Token not found for mint=${mint}`);
+    }
+
+    return {
+        ok: true,
+        token,
+    };
+};
+
+export const validateTokenMarketDataBatchRequest = (
+    req: TokenMarketDataBatchRequest
+):
+    | { ok: true; mints: string[] }
+    | { ok: false; error: string } => {
+    if (!req.mint) {
+        return {
+            ok: false,
+            error: "Missing 'mint' parameter (comma-separated list)",
+        };
+    }
+
+    const mints = req.mint.split(",").filter(isSolanaPubkey);
+
+    if (mints.length === 0) {
+        return {
+            ok: false,
+            error: "No valid mint addresses provided",
+        };
+    }
+
+    if (mints.length > MAX_BATCH_SIZE) {
+        return {
+            ok: false,
+            error: `Too many mints provided. Maximum is ${MAX_BATCH_SIZE}`,
+        };
+    }
+
+    return { ok: true, mints };
+};
+
+export const buildTokenMarketDataBatchSql = (mints: string[]): string => {
+    const mintList = buildInList(mints);
+
+    return `
+        SELECT ${buildMarketDataSelectClause()}
+        FROM ${TABLE_NAME}
+        WHERE (mint, timestamp) IN (
+            SELECT mint, max(timestamp)
+            FROM ${TABLE_NAME}
+            WHERE mint IN (${mintList})
+            GROUP BY mint
+        )
+        ORDER BY timestamp DESC
+    `;
+};
+
+export const formatTokenMarketDataBatchResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<TokenMarketDataRow>>>
+): TokenMarketDataBatchResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    console.log(`[market_data_batch] Returned ${result.data.length} tokens`);
+
+    return {
+        ok: true,
+        tokens: result.data,
+        count: result.data.length,
+    };
+};
+
+

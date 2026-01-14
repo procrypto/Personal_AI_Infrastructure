@@ -1,0 +1,129 @@
+     1→# bonkbot - Synthesized Context
+     2→
+     3→## Discovery Summary
+     4→- **First discovered**: 2025-01-10
+     5→- **Last updated**: 2025-01-10
+     6→- **Discovery depth**: Standard
+     7→- **Documentation quality**: Good
+     8→
+     9→---
+    10→
+    11→## System Identity
+    12→
+    13→**What it is**: TypeScript/Node.js monorepo - the "Web API" for BONKbot platform.
+    14→
+    15→**What it does**:
+    16→- Powers both Telegram bot and Web Terminal frontend
+    17→- Handles user authentication (wallet signatures, email, JWT)
+    18→- Executes swaps via Jupiter/Raydium with Jito MEV protection
+    19→- Manages limit orders, auto-strategies (DCA)
+    20→- Runs referral program with tiered payouts
+    21→
+    22→**Key insight**: This is NOT a separate "web-api" repo - bonkbot IS the API that Web Terminal frontend consumes.
+    23→
+    24→---
+    25→
+    26→## Architecture Highlights
+    27→
+    28→### Monorepo Structure
+    29→```
+    30→packages/     → Shared libraries (db, nats, commons, signer)
+    31→servers/      → Deployable services
+    32→  └── bonkbot → Main service (Express + Inversify DI)
+    33→```
+    34→
+    35→### Core Patterns
+    36→- **Inversify DI**: All services wired in `inversify.config.ts` (2000+ lines)
+    37→- **Domain-Driven**: `domain/swap/`, `domain/user/`, `domain/referral/`
+    38→- **TSOA**: OpenAPI generation from TypeScript decorators
+    39→- **Kysely**: Type-safe SQL with auto-generated types
+    40→
+    41→### Data Layer
+    42→- **PostgreSQL**: User data, orders, transactions (155+ migrations)
+    43→- **Redis**: Sessions, rate limiting, caching
+    44→- **ClickHouse**: Analytics, swap history
+    45→- **NATS**: Async messaging (swap events, notifications)
+    46→
+    47→---
+    48→
+    49→## Key Capabilities
+    50→
+    51→### For Product/Growth
+    52→| Capability | What It Enables |
+    53→|------------|-----------------|
+    54→| Swap execution | Core trading feature |
+    55→| Limit orders | Advanced trading |
+    56→| Auto-strategies | DCA, rebalancing |
+    57→| Referral system | Growth loops, DAO payouts |
+    58→| Portfolio tracking | User engagement |
+    59→| Multi-interface | Telegram + Web reach |
+    60→
+    61→### Data Available
+    62→- User trading history
+    63→- Swap success/failure rates
+    64→- Referral attribution
+    65→- Portfolio positions
+    66→- Fee collection metrics
+    67→
+    68→---
+    69→
+    70→## Integration Points
+    71→
+    72→### Web Terminal Frontend
+    73→- REST API on port 8800
+    74→- JWT authentication
+    75→- Endpoints: `/auth`, `/user`, `/swap`, `/orders`, `/referral`
+    76→
+    77→### web-terminal (Rust)
+    78→- Provides market data that frontend also consumes
+    79→- bonkbot handles user operations; web-terminal handles data
+    80→
+    81→### Signer Service
+    82→- Separate service for transaction signing
+    83→- Communicates via NATS
+    84→- Passkey support
+    85→
+    86→---
+    87→
+    88→## Working Here
+    89→
+    90→### Quick Start
+    91→```bash
+    92→docker-compose up -d          # Postgres, Redis
+    93→pnpm install
+    94→pnpm --filter @bonkbot/db kysely migrate:latest
+    95→pnpm --filter @bonkbot/bonkbot dev
+    96→```
+    97→
+    98→### Common Locations
+    99→| Task | Path |
+   100→|------|------|
+   101→| Add endpoint | `servers/bonkbot/src/api/controllers/` |
+   102→| Business logic | `servers/bonkbot/src/domain/{domain}/` |
+   103→| External API | `servers/bonkbot/src/infrastructure/` |
+   104→| DB migration | `packages/db/migrations/` |
+   105→| DI bindings | `servers/bonkbot/src/inversify.config.ts` |
+   106→
+   107→---
+   108→
+   109→## Deployment
+   110→
+   111→- **GCP-based**: MIGs, Cloud SQL, Memorystore
+   112→- **Environments**: beta, prod (multiple bot instances)
+   113→- **Pipeline**: dev → PR → release tag → GH Actions → GCP
+   114→
+   115→---
+   116→
+   117→## Session Notes
+   118→
+   119→*Accumulated learnings:*
+   120→
+   121→- bonkbot = "web-api" (same thing, confusing naming)
+   122→- The DI container is massive - understand it before making changes
+   123→- TSOA generates OpenAPI spec automatically from controllers
+   124→- Cron jobs handle background processing (fees, referrals, orders)
+   125→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

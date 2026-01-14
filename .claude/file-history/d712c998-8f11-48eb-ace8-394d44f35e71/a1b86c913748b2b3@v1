@@ -1,0 +1,217 @@
+---
+phase: 20-controls-accuracy
+plan: 01
+type: execute
+---
+
+<objective>
+Fix position close controls - Close All and per-position close buttons.
+
+Purpose: The Close All button exists but doesn't work. The backend has no handler for the close_all command. Per-position close buttons don't exist yet.
+Output: Working close controls that actually close paper trading positions.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/20-controls-accuracy/20-CONTEXT.md
+
+# Key source files (frontend)
+@apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+
+# Key source files (backend - in sibling repo)
+# token-analysis-autopilot/src/websocket-server.ts
+# token-analysis-autopilot/src/cli.ts
+# token-analysis-autopilot/src/trading/paper-tracker.ts
+
+**The Problem:**
+- Frontend sends `{ command: "close_all" }` when Close All button clicked
+- Backend `AutopilotCommand` union does NOT include `close_all` or `close_position`
+- Backend `cli.ts` command handler has no case for close commands
+- PositionCard component has no close button for individual positions
+
+**Established Patterns:**
+- Backend: `AutopilotCommand` union in websocket-server.ts defines all commands
+- Backend: `wsServer.onCommand()` handler in cli.ts processes commands
+- Backend: `paperTracker.closeTrade(tradeId, exitPriceSol, exitPriceUsd)` closes trades
+- Backend: `paperTracker.getOpenTrades()` returns all open trades
+- Frontend: `sendCommand()` sends JSON commands to backend WebSocket
+- Frontend: PositionCard renders position info with P&L
+
+**Decision from CONTEXT.md:**
+- Use `close_all_positions` (not `close_all`) for consistency with other commands
+- Use `close_position` with mint parameter for individual closes
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Backend - Add close commands to WebSocket protocol and handlers</name>
+  <files>
+    ../../../token-analysis-autopilot/src/websocket-server.ts
+    ../../../token-analysis-autopilot/src/cli.ts
+  </files>
+  <action>
+    1. In websocket-server.ts, add to AutopilotCommand union (after line 49):
+       | { command: 'close_all_positions' }
+       | { command: 'close_position'; mint: string }
+
+    2. In cli.ts, add command handlers in the switch statement (after toggle_strategy case):
+
+       case 'close_all_positions': {
+         const openTrades = paperTracker.getOpenTrades();
+         if (openTrades.length === 0) {
+           console.log('[WS] No open positions to close');
+           break;
+         }
+         console.log(`[WS] Closing all ${openTrades.length} positions...`);
+         for (const trade of openTrades) {
+           // Get current price from market data or use entry price as fallback
+           const marketData = wsServer.getMarketData(trade.mint);
+           const exitPriceSol = marketData?.price_sol ?? trade.entryPriceSol;
+           const exitPriceUsd = marketData?.price_usd ?? trade.entryPriceUsd;
+           paperTracker.closeTrade(trade.id, exitPriceSol, exitPriceUsd);
+           // Broadcast exit signal
+           wsServer.broadcastSignal({
+             timestamp: Date.now(),
+             mint: trade.mint,
+             symbol: trade.symbol,
+             signalType: 'magic_exit',
+             action: 'close',
+             reason: 'Manual close all',
+             pnlPercent: trade.pnlPercent,
+           });
+         }
+         await paperTracker.save();
+         // Broadcast updated positions (now empty)
+         wsServer.broadcastPositions([]);
+         wsServer.broadcastStats(paperTracker.getStats());
+         console.log('[WS] All positions closed');
+         break;
+       }
+
+       case 'close_position': {
+         const trade = paperTracker.getOpenTradeForMint(cmd.mint);
+         if (!trade) {
+           console.log(`[WS] No open position for mint ${cmd.mint}`);
+           break;
+         }
+         const marketData = wsServer.getMarketData(cmd.mint);
+         const exitPriceSol = marketData?.price_sol ?? trade.entryPriceSol;
+         const exitPriceUsd = marketData?.price_usd ?? trade.entryPriceUsd;
+         const closed = paperTracker.closeTrade(trade.id, exitPriceSol, exitPriceUsd);
+         if (closed) {
+           wsServer.broadcastSignal({
+             timestamp: Date.now(),
+             mint: trade.mint,
+             symbol: trade.symbol,
+             signalType: 'magic_exit',
+             action: 'close',
+             reason: 'Manual close',
+             pnlPercent: closed.pnlPercent,
+           });
+           await paperTracker.save();
+           // Broadcast updated positions
+           const positions = paperTracker.getOpenTrades().map(t => ({
+             mint: t.mint,
+             symbol: t.symbol,
+             action: t.action,
+             entryPriceSol: t.entryPriceSol,
+             positionSizeSol: t.positionSizeSol,
+             entryTime: t.timestamp,
+           }));
+           wsServer.broadcastPositions(positions);
+           wsServer.broadcastStats(paperTracker.getStats());
+           console.log(`[WS] Position closed: ${trade.symbol}`);
+         }
+         break;
+       }
+  </action>
+  <verify>
+    TypeScript compiles without errors in token-analysis-autopilot:
+    cd ../token-analysis-autopilot && npx tsc --noEmit
+  </verify>
+  <done>
+    - AutopilotCommand union includes close_all_positions and close_position
+    - Command handlers close trades using paperTracker
+    - Handlers broadcast updated positions and stats after closing
+    - TypeScript compiles
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Frontend - Wire up close commands and add per-position close button</name>
+  <files>
+    apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts
+    apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+  </files>
+  <action>
+    1. In AutopilotWebsocket.ts, update AutopilotCommand union (line 24):
+       Change: | { command: "close_all" }
+       To:     | { command: "close_all_positions" }
+               | { command: "close_position"; mint: string }
+
+    2. In autopilot-widget.tsx, update Close All button onClick (around line 1081):
+       Change: onCloseAll={() => sendCommand({ command: "close_all" })}
+       To:     onCloseAll={() => sendCommand({ command: "close_all_positions" })}
+
+    3. In autopilot-widget.tsx, update PositionCard component (around line 142):
+       - Add onClose prop: { position: AutopilotPositionWithPnL; onClose: (mint: string) => void }
+       - Add X button to the right side of the card (after the P&L display):
+         <button
+           onClick={() => onClose(position.mint)}
+           className="ml-2 p-1 rounded hover:bg-bg-error-primary text-text-secondary hover:text-text-error transition-colors"
+           title="Close position"
+         >
+           <X className="h-4 w-4" />
+         </button>
+
+    4. In autopilot-widget.tsx, update PositionCard usage (around line 1063):
+       <PositionCard
+         key={pos.mint}
+         position={pos}
+         onClose={(mint) => sendCommand({ command: "close_position", mint })}
+       />
+
+    5. Add X import at top of file if not already present:
+       import { X } from "lucide-react"; (check existing imports first)
+  </action>
+  <verify>
+    TypeScript compiles: pnpm --filter @topledger/web-terminal typecheck
+  </verify>
+  <done>
+    - AutopilotCommand type matches backend (close_all_positions, close_position)
+    - Close All button sends close_all_positions command
+    - Each PositionCard has X button that sends close_position with mint
+    - TypeScript compiles
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] Backend TypeScript compiles: `cd ../token-analysis-autopilot && npx tsc --noEmit`
+- [ ] Frontend TypeScript compiles: `pnpm --filter @topledger/web-terminal typecheck`
+- [ ] Manual test: Start both servers, open positions, click Close All - positions should clear
+- [ ] Manual test: Open a position, click X on PositionCard - that position should close
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Close All button actually closes all positions
+- Per-position X button closes individual positions
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/20-controls-accuracy/20-01-SUMMARY.md`
+</output>

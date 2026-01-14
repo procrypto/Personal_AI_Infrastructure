@@ -1,0 +1,56 @@
+# --- NVM Setup ---
+export NVM_DIR="$HOME/.nvm"
+[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
+
+# --- Disable Husky in Cursor Terminal (sandbox causes EPERM errors) ---
+if [[ "$TERM_PROGRAM" == "vscode" ]]; then
+  export HUSKY=0
+fi
+
+# --- API Auth (Set your credentials here or in a secure .env file) ---
+export key_id="XAX8QfbckNZ1LCcu5UCx"
+export key_secret="4b1dGAsEY1Cn5L21GPxj8eYgOxcbLdCGSWT89KD88O"
+
+# --- BONKbot Mint Query Helpers ---
+function query_mint_stats() {
+  local mint="$1"
+  curl -s \
+    -H "Content-Type: application/json" \
+    --user "$key_id:$key_secret" \
+    "https://console-api.clickhouse.cloud/.api/query-endpoints/fefc8f69-a12d-4f9e-a09d-e7f132099e40/run?format=JSONEachRow&param_param_mint=$mint" \
+    | jq .
+}
+
+function query_top_holders() {
+  local mint="$1"
+  curl -s \
+    -H "Content-Type: application/json" \
+    --user "$key_id:$key_secret" \
+    "https://console-api.clickhouse.cloud/.api/query-endpoints/b19b72dd-b188-4d2a-9809-67c91a06e961/run?format=JSONEachRow&param_param_mint=$mint" \
+    | jq .
+}
+
+# --- Zsh Behavior Enhancements (optional) ---
+autoload -Uz compinit && compinit
+setopt autocd
+setopt correct
+export HISTSIZE=10000
+export SAVEHIST=10000
+
+
+# bun completions
+[ -s "/Users/neilhart/.bun/_bun" ] && source "/Users/neilhart/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
+
+# PAI (Personal AI Infrastructure) Configuration
+# Added by pai-setup on 2025-12-24
+export PAI_DIR="/Users/neilhart/.claude"
+export DA="Phantom"
+export DA_COLOR="purple"
+export ENGINEER_NAME="Neil"
+# End PAI Configuration

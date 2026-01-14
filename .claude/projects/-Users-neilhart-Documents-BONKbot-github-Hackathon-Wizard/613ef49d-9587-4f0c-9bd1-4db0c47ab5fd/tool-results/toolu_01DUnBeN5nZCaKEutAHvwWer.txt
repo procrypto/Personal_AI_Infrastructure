@@ -1,0 +1,43 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/trading/magic-exits.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   429→    // SL not triggered
+   430→    return { shouldExit: false, reason: null, exitPrice: currentPrice, rotationLevels: levels };
+   431→  }
+   432→
+   433→  /**
+   434→   * Check all open trades for exit conditions.
+   435→   *
+   436→   * This is the batch version of checkExit() - iterates through all open
+   437→   * paper trades and returns those that should be closed.
+   438→   *
+   439→   * @param marketDataMap - Map of mint -> market data for all tokens
+   440→   * @param candleDataMap - Optional map of mint -> 1m OHLCV candles for TSL
+   441→   * @returns Array of trades that should exit with their exit details
+   442→   */
+   443→  checkAllTrades(
+   444→    marketDataMap: Map<string, TokenMarketData>,
+   445→    candleDataMap?: Map<string, OHLCV[]>
+   446→  ): Array<{
+   447→    trade: PaperTrade;
+   448→    exit: ExitCheck;
+   449→  }> {
+   450→    const exits: Array<{ trade: PaperTrade; exit: ExitCheck }> = [];
+   451→
+   452→    const openTrades = paperTracker.getOpenTrades();
+   453→
+   454→    for (const trade of openTrades) {
+   455→      const marketData = marketDataMap.get(trade.mint);
+   456→      if (!marketData) continue; // Skip if no market data available
+   457→
+   458→      const candles = candleDataMap?.get(trade.mint);
+   459→      const exit = this.checkExit(trade, marketData, candles);
+   460→      if (exit.shouldExit) {
+   461→        exits.push({ trade, exit });
+   462→      }
+   463→    }
+   464→
+   465→    return exits;
+   466→  }
+   467→
+   468→  /**
+   469→   * Execute magic exits for all triggered trades.
+   470→   *

@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# GCP Infrastructure Setup Script for TrenchBench API
+# Sets up Workload Identity Federation, Service Accounts, Artifact Registry, and Secret Manager
+#
+# Usage:
+#   ./scripts/gcp-setup.sh PROJECT_ID [--dry-run]
+#
+# Examples:
+#   ./scripts/gcp-setup.sh bonkbotbeta --dry-run    # Preview commands for beta
+#   ./scripts/gcp-setup.sh bonkbotbeta              # Execute for beta
+#   ./scripts/gcp-setup.sh data-backend-prod        # Execute for production
+
+set -euo pipefail
+
+# Configuration
+GITHUB_ORG="BONKbot"
+GITHUB_REPO="local-api"
+WIF_POOL_ID="github"
+WIF_PROVIDER_ID="github"
+SERVICE_ACCOUNT_NAME="github-actions"
+ARTIFACT_REPO="trenchbench-api"
+REGION="us-central1"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Parse arguments
+PROJECT_ID="${1:-}"
+DRY_RUN=false
+
+if [[ -z "$PROJECT_ID" ]]; then
+    echo -e "${RED}Error: PROJECT_ID is required${NC}"
+    echo "Usage: $0 PROJECT_ID [--dry-run]"
+    echo "  PROJECT_ID: bonkbotbeta or data-backend-prod"
+    exit 1
+fi
+
+if [[ "${2:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+    echo -e "${YELLOW}=== DRY RUN MODE - Commands will be printed but not executed ===${NC}"
+    echo ""
+fi
+
+# Helper function to run or print commands
+run_cmd() {
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${BLUE}[DRY-RUN]${NC} $*"
+    else
+        echo -e "${GREEN}[RUNNING]${NC} $*"
+        eval "$@"
+    fi
+}
+
+# Get project number (needed for WIF provider path)
+get_project_number() {
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "PROJECT_NUMBER"
+    else
+        gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)"
+    fi
+}
+
+echo ""
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN} GCP Setup for: $PROJECT_ID${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+# Set project
+echo -e "${YELLOW}--- Setting GCP Project ---${NC}"
+run_cmd gcloud config set project "$PROJECT_ID"
+echo ""
+
+# =============================================================================
+# 1. WORKLOAD IDENTITY FEDERATION
+# =============================================================================
+echo -e "${YELLOW}--- 1. Workload Identity Federation ---${NC}"
+echo "# Creates a trust relationship between GitHub Actions and GCP"
+echo ""
+
+# Create WIF pool
+echo "# Step 1.1: Create Workload Identity Pool"
+run_cmd gcloud iam workload-identity-pools create "$WIF_POOL_ID" \
+    --project="$PROJECT_ID" \
+    --location="global" \
+    --display-name="GitHub Actions Pool" \
+    --description="Pool for GitHub Actions OIDC authentication"
+echo ""
+
+# Create OIDC provider
+echo "# Step 1.2: Create OIDC Provider with GitHub attribute mapping"
+run_cmd gcloud iam workload-identity-pools providers create-oidc "$WIF_PROVIDER_ID" \
+    --project="$PROJECT_ID" \
+    --location="global" \
+    --workload-identity-pool="$WIF_POOL_ID" \
+    --display-name="GitHub" \
+    --issuer-uri="https://token.actions.githubusercontent.com" \
+    --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
+    --attribute-condition="assertion.repository_owner=='$GITHUB_ORG'"
+echo ""
+
+# =============================================================================
+# 2. SERVICE ACCOUNT
+# =============================================================================
+echo -e "${YELLOW}--- 2. Service Account ---${NC}"
+echo "# Creates a service account for GitHub Actions to impersonate"
+echo ""
+
+# Create service account
+echo "# Step 2.1: Create service account"
+run_cmd gcloud iam service-accounts create "$SERVICE_ACCOUNT_NAME" \
+    --project="$PROJECT_ID" \
+    --display-name="GitHub Actions" \
+    --description="Service account for GitHub Actions deployments"
+echo ""
+
+SERVICE_ACCOUNT_EMAIL="$SERVICE_ACCOUNT_NAME@$PROJECT_ID.iam.gserviceaccount.com"
+
+# Grant roles to service account
+echo "# Step 2.2: Grant Cloud Run Admin role"
+run_cmd gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+    --role="roles/run.admin"
+echo ""
+
+echo "# Step 2.3: Grant Artifact Registry Writer role"
+run_cmd gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+    --role="roles/artifactregistry.writer"
+echo ""
+
+echo "# Step 2.4: Grant Service Account User role (for Cloud Run to use default SA)"
+run_cmd gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+    --role="roles/iam.serviceAccountUser"
+echo ""
+
+# Bind WIF pool to service account (allow GitHub repo to impersonate)
+echo "# Step 2.5: Allow GitHub repo to impersonate service account via WIF"
+run_cmd gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+    --project="$PROJECT_ID" \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="principalSet://iam.googleapis.com/projects/$(get_project_number)/locations/global/workloadIdentityPools/$WIF_POOL_ID/attribute.repository/$GITHUB_ORG/$GITHUB_REPO"
+echo ""
+
+# =============================================================================
+# 3. ARTIFACT REGISTRY
+# =============================================================================
+echo -e "${YELLOW}--- 3. Artifact Registry ---${NC}"
+echo "# Creates a Docker repository for container images"
+echo ""
+
+run_cmd gcloud artifacts repositories create "$ARTIFACT_REPO" \
+    --project="$PROJECT_ID" \
+    --repository-format=docker \
+    --location="$REGION" \
+    --description="TrenchBench API container images"
+echo ""
+
+# =============================================================================
+# 4. SECRET MANAGER
+# =============================================================================
+echo -e "${YELLOW}--- 4. Secret Manager ---${NC}"
+echo "# Creates secrets for ClickHouse credentials (values must be set separately)"
+echo ""
+
+# Create secrets (empty - user must add values)
+for SECRET_NAME in CLICKHOUSE_KEY_ID CLICKHOUSE_KEY_SECRET CLICKHOUSE_SERVICE_ID; do
+    echo "# Creating secret: $SECRET_NAME"
+    run_cmd gcloud secrets create "$SECRET_NAME" \
+        --project="$PROJECT_ID" \
+        --replication-policy="automatic"
+    echo ""
+done
+
+# Get Cloud Run default service account (compute default)
+COMPUTE_SA="$(get_project_number)-compute@developer.gserviceaccount.com"
+
+echo "# Grant Cloud Run default service account access to secrets"
+for SECRET_NAME in CLICKHOUSE_KEY_ID CLICKHOUSE_KEY_SECRET CLICKHOUSE_SERVICE_ID; do
+    run_cmd gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+        --project="$PROJECT_ID" \
+        --member="serviceAccount:$COMPUTE_SA" \
+        --role="roles/secretmanager.secretAccessor"
+done
+echo ""
+
+# =============================================================================
+# OUTPUT: WIF Provider Path for workflow configuration
+# =============================================================================
+echo ""
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN} Setup Complete!${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+echo -e "${YELLOW}IMPORTANT: Copy these values to your GitHub workflow files:${NC}"
+echo ""
+PROJECT_NUMBER=$(get_project_number)
+echo "workload_identity_provider: projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$WIF_POOL_ID/providers/$WIF_PROVIDER_ID"
+echo "service_account: $SERVICE_ACCOUNT_EMAIL"
+echo ""
+echo -e "${YELLOW}NEXT STEPS:${NC}"
+echo "1. Set secret values in Secret Manager console:"
+echo "   - CLICKHOUSE_KEY_ID"
+echo "   - CLICKHOUSE_KEY_SECRET"
+echo "   - CLICKHOUSE_SERVICE_ID"
+echo ""
+echo "2. Update workflow files with the WIF provider path above"
+echo "3. Push to main branch to trigger deployment"
+echo ""

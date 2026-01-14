@@ -1,0 +1,112 @@
+---
+phase: 04-data-accuracy
+plan: 01
+type: execute
+---
+
+<objective>
+Centralize lamports/SOL detection and fix position removal accuracy in trenchBenchStore.
+
+Purpose: The store processes all trade data but lacks the lamports detection that widgets have, causing potential data corruption. Position removal uses SOL amounts which fluctuate with price.
+Output: Accurate SOL values in store, positions removed based on actual token holdings.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/03-cross-widget-sync/03-01-SUMMARY.md
+
+# Key source files:
+@apps/web-terminal/src/store/trenchBenchStore.ts
+
+# Reference for lamports detection pattern (already working in widgets):
+# anomalyzer-widget.tsx lines 2047-2052:
+# const rawSolStr = trade.sol_amount || "0";
+# const rawSol = parseFloat(rawSolStr);
+# const isLikelyLamports = rawSol >= 1_000_000 && !rawSolStr.includes(".");
+# const solAmount = isLikelyLamports ? rawSol / 1_000_000_000 : rawSol;
+
+**Prior decisions:**
+- [01-01] Token amount tracking for position exit detection (not SOL amounts)
+- [02-01] Badge holdingPercent uses SOL amounts (functional; token amounts enhancement for future)
+
+**Tech stack available:**
+- trenchBenchStore with Zustand + Immer
+- holdingsMatrix tracks trader -> token -> current token amount
+- costBasisMatrix tracks trader -> token -> {totalCostSol, totalTokens}
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add lamports/SOL smart detection to processTradeInternal</name>
+  <files>apps/web-terminal/src/store/trenchBenchStore.ts</files>
+  <action>
+At line ~571 where `solAmount` is parsed, replace the simple parseFloat with the lamports detection pattern:
+
+```typescript
+// sol_amount from backend might be in lamports or human-readable SOL
+// Detect format: if it's a large integer (>= 1 million, no decimal), it's lamports
+const rawSolStr = trade.sol_amount || "0";
+const rawSol = parseFloat(rawSolStr);
+const isLikelyLamports = rawSol >= 1_000_000 && !rawSolStr.includes(".");
+const solAmount = isLikelyLamports ? rawSol / 1_000_000_000 : rawSol;
+```
+
+This matches the pattern already used in anomalyzer-widget.tsx, vantage-widget.tsx, and exfil-widget.tsx. Do NOT change the variable name or any downstream usage - just the detection logic.
+  </action>
+  <verify>npx tsc --noEmit passes, grep for the pattern confirms it's added</verify>
+  <done>trenchBenchStore has lamports detection matching widget pattern</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Fix position removal to use token amounts from holdingsMatrix</name>
+  <files>apps/web-terminal/src/store/trenchBenchStore.ts</files>
+  <action>
+In `updateKolPositions` function (around line 901), the current check is:
+```typescript
+if (position.currentHoldingSol <= 0 && !isBuy) {
+```
+
+This should check the actual token holding from holdingsMatrix instead. Change to:
+```typescript
+// Check token balance from holdingsMatrix for accurate position removal
+// (SOL amounts fluctuate with price, token amounts are definitive)
+const currentTokenBalance = state.holdingsMatrix.get(makerLower)?.get(mintLower) || 0;
+if (currentTokenBalance <= 0 && !isBuy) {
+```
+
+The holdingsMatrix is already updated earlier in processTradeInternal (around line 685-689) with the actual token amounts, so this will accurately detect when a position is fully closed.
+
+Keep the `position.currentHoldingSol` updates as-is for display purposes - just change the removal check.
+  </action>
+  <verify>npx tsc --noEmit passes, the position removal logic uses holdingsMatrix</verify>
+  <done>Position removal uses token amounts from holdingsMatrix, not SOL amounts</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` passes without errors
+- [ ] Lamports detection pattern matches widget implementations
+- [ ] Position removal check uses holdingsMatrix token balance
+- [ ] No regressions in store functionality
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Store data normalization consistent with widget patterns
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/04-data-accuracy/04-01-SUMMARY.md`
+</output>

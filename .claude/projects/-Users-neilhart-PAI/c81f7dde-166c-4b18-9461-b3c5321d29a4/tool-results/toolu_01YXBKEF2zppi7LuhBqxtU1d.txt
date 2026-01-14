@@ -1,0 +1,128 @@
+     1→# web-terminal - Synthesized Context
+     2→
+     3→## Discovery Summary
+     4→- **First discovered**: 2025-01-10 (pre-existing documentation)
+     5→- **Last updated**: 2025-01-10
+     6→- **Discovery source**: Existing ai.md + BACKEND_API_AND_DATA.md
+     7→- **Documentation quality**: Excellent
+     8→
+     9→---
+    10→
+    11→## System Identity
+    12→
+    13→**What it is**: Rust-based real-time cryptocurrency/token market data backend for BONKbot.
+    14→
+    15→**What it does**:
+    16→- Processes Solana blockchain events from Geyser streams (GB/s scale)
+    17→- Materializes aggregated market data (OHLCV, holder stats, trading metrics)
+    18→- Serves data via REST APIs and WebSockets
+    19→- Stores in RocksDB (hot state) and ClickHouse (historical)
+    20→
+    21→**Critical constraints**: Low latency and high throughput are paramount.
+    22→
+    23→---
+    24→
+    25→## Key Capabilities
+    26→
+    27→### Data It Provides
+    28→| Capability | Interface | Notes |
+    29→|------------|-----------|-------|
+    30→| Real-time trades | WebSocket (`trades2.*`) | Enriched with flags (dev, sniper, bundler) |
+    31→| Market data | WebSocket (`market_data.*`) | Price, mcap, volume, holders |
+    32→| OHLCV candles | REST + WebSocket | Multiple resolutions (1s to 1w) |
+    33→| Holder statistics | REST + WebSocket | Top holders, PnL, positions |
+    34→| Token events | WebSocket | Lifecycle events, dev actions |
+    35→| X-Ray stages | WebSocket | New pair, graduating, graduated |
+    36→| Wallet tracking | REST + WebSocket | Trade monitoring for specific wallets |
+    37→| Discovery/trending | REST + WebSocket | Trending tokens, whale moves |
+    38→
+    39→### Data Sources It Consumes
+    40→| Source | Type | Notes |
+    41→|--------|------|-------|
+    42→| Geyser RPC | Stream | Raw Solana blockchain events |
+    43→| PUM3 | NATS | Processed on-chain events |
+    44→| Pyth | Oracle | SOL/USD price feed |
+    45→
+    46→---
+    47→
+    48→## Architecture Quick Reference
+    49→
+    50→### Services
+    51→| Service | Purpose |
+    52→|---------|---------|
+    53→| `wt-initializer` | Geyser event processing |
+    54→| `wt-materializer` | State aggregation, RocksDB |
+    55→| `wt-ch-writer` | ClickHouse persistence |
+    56→| `wt-web-server` | REST + WebSocket serving |
+    57→| `wt-nats` | Message hub |
+    58→
+    59→### Data Flow
+    60→```
+    61→Geyser → Initializer → NATS → Materializer → RocksDB (state)
+    62→                                    ↓
+    63→                              NATS topics → web-server → Frontend
+    64→                                    ↓
+    65→                              ch-writer → ClickHouse (history)
+    66→```
+    67→
+    68→---
+    69→
+    70→## Working Here
+    71→
+    72→### Entry Points for Common Tasks
+    73→| Task | Location |
+    74→|------|----------|
+    75→| Add REST endpoint | `bin/web-server/src/api/` |
+    76→| Add WebSocket topic | `crates/primitives/src/nats/topics.rs` |
+    77→| Add ClickHouse table | `crates/storage/src/clickhouse/` |
+    78→| Add Geyser processor | `bin/initializer/src/processors/` |
+    79→| Modify materialization | `bin/materializer/src/core/event_handler.rs` |
+    80→
+    81→### Patterns to Follow
+    82→- `Result<T, E>` for all fallible operations
+    83→- Use `?` operator, avoid unwrap except at top-level
+    84→- Structured logging with `tracing`
+    85→- Performance-first: minimize allocations in hot paths
+    86→
+    87→### Things to Avoid
+    88→- Hardcoding instance names in docs
+    89→- Duplicating content from code/scripts
+    90→- Pushing directly to main
+    91→- Skipping PR review process
+    92→
+    93→---
+    94→
+    95→## Cross-System Connections
+    96→
+    97→### Upstream (What It Consumes)
+    98→| System | What We Get | Interface |
+    99→|--------|-------------|-----------|
+   100→| Geyser | Raw blockchain events | gRPC stream |
+   101→| PUM3 | Processed events | NATS topics |
+   102→
+   103→### Downstream (What Consumes Us)
+   104→| System | What They Get | Interface |
+   105→|--------|---------------|-----------|
+   106→| Frontend | Real-time market data | WebSocket |
+   107→| web-api | Market data queries | REST (assumed) |
+   108→
+   109→---
+   110→
+   111→## Key Documentation
+   112→- `ai.md` - Agent entry point
+   113→- `docs/BACKEND_API_AND_DATA.md` - Complete API/data reference
+   114→- `docs/DEPLOYMENT_RUNBOOK.md` - Operations guide
+   115→- `CONTRIBUTING.md` - Development standards
+   116→
+   117→---
+   118→
+   119→## Session Notes
+   120→
+   121→*Accumulated learnings from working with this system:*
+   122→
+   123→(Add notes here as you work with the system)
+   124→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,165 @@
+---
+phase: 01-branch-foundation
+plan: 02
+type: execute
+---
+
+<objective>
+Resolve remaining conflicts (Vantage, Anomalyzer) and verify unified branch builds successfully.
+
+Purpose: Complete the merge foundation with all conflict files resolved and a clean build.
+Output: Fully merged feat/trenchbench-unified branch that builds without errors.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/phases/01-branch-foundation/01-01-SUMMARY.md
+@apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx
+@apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx
+
+**Prerequisite:** Plan 01-01 completed (intel-grid resolved, merge in progress)
+
+**Remaining Conflicts:**
+- vantage-widget.tsx (~3600 lines) - bubble visualization with cross-widget sync
+- anomalyzer-widget.tsx (~2600 lines) - deviation detection with deduplication
+
+**Merge Strategy (same as Plan 01):**
+- Keep ALL features from both branches
+- preload-data brings: trenchBenchStore integration, backfill hooks
+- dash-pauls brings: cross-widget sync, lamports detection, PNL fixes, deduplication
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Resolve vantage-widget.tsx conflicts</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx</files>
+  <action>
+Resolve conflicts by keeping ALL features from both branches:
+
+**From preload-data (current/HEAD/ours):**
+- trenchBenchStore subscription for trader/token data
+- useTrenchBenchBackfill hook
+- Unified data fetching patterns
+
+**From dash-pauls (incoming/theirs):**
+- Cross-widget sync: CustomEvent listeners for `intel-grid-token-select`, `anomalyzer-token-select`
+- Selection dispatch: `vantage-token-select`, `vantage-token-deselect`, `vantage-kol-select` events
+- Lamports vs SOL detection: smart detection logic for sol_amount format
+- User PNL fixes: use backend's pnl_total_usd
+- Connection removal: properly remove sold KOLs from display
+- Bubble vanishing fix: variable scope corrections
+
+**Conflict Resolution Strategy:**
+1. Read both versions of conflicting sections
+2. Keep trenchBenchStore data source from preload-data
+3. Add all cross-widget sync from dash-pauls
+4. Keep lamports detection and PNL calculation fixes
+5. Ensure proper event emission and subscription
+
+**AVOID:**
+- Discarding the trenchBenchStore integration
+- Removing cross-widget CustomEvent patterns (needed for Phase 3)
+- Breaking user PNL accuracy fixes
+  </action>
+  <verify>File has no conflict markers AND contains `useTrenchBenchStore` AND contains `vantage-token-select` CustomEvent AND contains lamports detection logic</verify>
+  <done>Vantage widget compiles with all features from both branches</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Resolve anomalyzer-widget.tsx conflicts</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx</files>
+  <action>
+Resolve conflicts by keeping ALL features from both branches:
+
+**From preload-data (current/HEAD/ours):**
+- trenchBenchStore integration
+- Baseline data from store
+- Render-time deduplication for unique keys
+
+**From dash-pauls (incoming/theirs):**
+- Cross-widget sync: CustomEvent listeners for `intel-grid-token-select`, `vantage-kol-select`
+- Selection dispatch: `anomalyzer-token-select` event
+- Entry deduplication: same trader+token within 5 minutes
+- Highlight clearing: proper cleanup when unhighlighting from other widgets
+
+**Conflict Resolution Strategy:**
+1. Read both versions of conflicting sections
+2. Keep trenchBenchStore baseline data from preload-data
+3. Add cross-widget sync from dash-pauls
+4. Keep 5-minute deduplication logic
+5. Merge both deduplication strategies (render-time + 5-min window)
+
+**AVOID:**
+- Discarding either deduplication approach
+- Breaking cross-widget highlight sync
+- Removing trenchBenchStore integration
+  </action>
+  <verify>File has no conflict markers AND contains trenchBenchStore AND contains 5-minute deduplication AND contains `anomalyzer-token-select` CustomEvent</verify>
+  <done>Anomalyzer widget compiles with all features from both branches</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Stage, commit merge, and verify build</name>
+  <files>N/A (git + build verification)</files>
+  <action>
+Stage all resolved files and complete the merge commit.
+
+```bash
+# Stage all resolved conflict files
+git add apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx
+git add apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx
+git add apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx
+
+# Complete the merge (auto-staged files already included)
+git commit -m "merge: combine dash-pauls UI features with preload-data architecture
+
+Resolved conflicts in:
+- intel-grid-widget.tsx: pause-on-hover, badges + trenchBenchStore
+- vantage-widget.tsx: cross-widget sync, PNL fixes + trenchBenchStore
+- anomalyzer-widget.tsx: deduplication, sync + trenchBenchStore
+
+Both data architectures now coexist:
+- trenchBenchStore for centralized state
+- CustomEvents for cross-widget sync (to be migrated Phase 6)"
+```
+
+Then verify the project builds:
+```bash
+cd apps/web-terminal && npm run build
+```
+
+Build MUST succeed with no TypeScript errors.
+  </action>
+  <verify>git log --oneline -1 shows merge commit AND npm run build exits 0 with no errors</verify>
+  <done>Merge committed and project builds successfully</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] All 3 conflict files resolved (no conflict markers)
+- [ ] Merge commit created
+- [ ] `npm run build` succeeds in apps/web-terminal
+- [ ] No TypeScript errors
+- [ ] git status shows clean working tree
+</verification>
+
+<success_criteria>
+- Vantage and Anomalyzer conflicts fully resolved
+- Merge commit created with descriptive message
+- Project builds without errors
+- Both stores coexist (trenchBenchStore + legacy patterns)
+- Phase 1 complete - foundation ready for feature phases
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-branch-foundation/01-02-SUMMARY.md`
+</output>

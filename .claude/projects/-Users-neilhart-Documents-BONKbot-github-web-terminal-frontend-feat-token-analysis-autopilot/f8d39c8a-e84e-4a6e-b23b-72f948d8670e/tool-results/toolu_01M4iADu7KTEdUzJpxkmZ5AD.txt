@@ -1,0 +1,57 @@
+The file /Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   755→  // Portal to document.body when dragged
+   756→  return position ? createPortal(panel, document.body) : panel;
+   757→};
+   758→
+   759→// Main Autopilot Widget Component
+   760→export const AutopilotWidget = () => {
+   761→  // Connect to autopilot backend and auto-subscribe to NATS market data
+   762→  useAutopilotSubscription({ isEnabled: true });
+   763→
+   764→  // Get all autopilot data from Zustand store
+   765→  const {
+   766→    positions,
+   767→    marketStatus,
+   768→    stats,
+   769→    scanTick,
+   770→    tokenList,
+   771→    config,
+   772→    strategies,
+   773→    isConnected,
+   774→    sendCommand,
+   775→    unrealizedPnlSol,
+   776→  } = useAutopilotData();
+   777→
+   778→  // Get signal strength map for screener token glow indicators
+   779→  const signalStrengthMap = useTokenSignalStrength();
+   780→
+   781→  // Get blacklist function for filtering trending/whales
+   782→  const isBlacklisted = usePersistentGlobalStore(
+   783→    useShallow(state => state.blacklist.isBlacklisted)
+   784→  );
+   785→
+   786→  // Filter out blacklisted tokens from trending and whales
+   787→  const visibleTrendingTokens = useMemo(
+   788→    () => tokenList.trending.filter(t => !isBlacklisted(t.mint)),
+   789→    [tokenList.trending, isBlacklisted]
+   790→  );
+   791→
+   792→  const visibleWhalesTokens = useMemo(
+   793→    () => tokenList.whales.filter(t => !isBlacklisted(t.mint)),
+   794→    [tokenList.whales, isBlacklisted]
+   795→  );
+   796→
+   797→  // Settings panel state
+   798→  const [settingsOpen, setSettingsOpen] = useState(false);
+   799→
+   800→  // DEBUG: Debug panel state (remove before production)
+   801→  const [debugOpen, setDebugOpen] = useState(false);
+   802→
+   803→  const totalTokens =
+   804→    tokenList.watchlist.length +
+   805→    visibleTrendingTokens.length +
+   806→    visibleWhalesTokens.length;
+   807→
+   808→  return (
+   809→    <div className="flex h-full flex-col gap-4 overflow-hidden">
+   810→      {/* Header - Market Status */}

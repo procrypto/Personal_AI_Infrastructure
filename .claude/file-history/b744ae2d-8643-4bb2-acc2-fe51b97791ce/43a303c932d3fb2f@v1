@@ -1,0 +1,150 @@
+---
+phase: 01-data-reception
+plan: 02
+type: execute
+---
+
+<objective>
+Create data validation and normalization layers for incoming market data.
+
+Purpose: Ensure data integrity before passing to rule engine - validate structure, normalize formats, handle edge cases.
+Output: Reusable validation and normalization modules that guarantee clean data for analysis.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@src/websocket-server.ts
+@src/api/types.ts
+
+**Prior plan context:**
+- 01-01 added DataFeedMessage types and storage
+- Data flows: market_data_feed, ohlcv_update, trade_feed
+
+**Key requirements:**
+- Sub-100ms signal evaluation latency (validation must be fast)
+- Clean interfaces for future Rust rewrite
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create data validation layer</name>
+  <files>src/data/validator.ts</files>
+  <action>
+1. Create new directory `src/data/` if not exists
+
+2. Create `src/data/validator.ts` with:
+
+```typescript
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+```
+
+3. Implement validation functions:
+
+- `validateTokenMarketData(data: unknown): ValidationResult`
+  - Required fields: mint (string, non-empty), symbol (string), price_sol (number >= 0), price_usd (number >= 0)
+  - Optional but validated if present: volume fields (numbers >= 0), buyer/seller counts (integers >= 0)
+  - Return { valid: true, errors: [] } or { valid: false, errors: ['field X: reason'] }
+
+- `validateOHLCV(data: unknown): ValidationResult`
+  - Required: timestamp (number > 0), open/high/low/close (numbers > 0), volume (number >= 0)
+  - Validate high >= low, high >= open, high >= close, low <= open, low <= close
+
+- `validateTrade(data: unknown): ValidationResult`
+  - Required: mint (string), direction ('buy' | 'sell'), sol_amount (number > 0), timestamp (number > 0)
+  - Optional validated: token_amount, maker, signature
+
+4. Keep validation fast - no async, no external calls. Use early returns.
+
+5. Export all functions and ValidationResult type.
+  </action>
+  <verify>
+TypeScript compiles: `npx tsc --noEmit`
+File exists: `ls src/data/validator.ts`
+  </verify>
+  <done>
+- ValidationResult type defined
+- validateTokenMarketData validates required/optional fields
+- validateOHLCV validates candle data with OHLC relationship checks
+- validateTrade validates trade structure
+- All functions exported
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create data normalization layer</name>
+  <files>src/data/normalizer.ts</files>
+  <action>
+1. Create `src/data/normalizer.ts` with normalization functions:
+
+- `normalizeTokenMarketData(data: Partial<TokenMarketData>): TokenMarketData`
+  - Fill missing optional fields with sensible defaults (0 for volumes, counts)
+  - Ensure mint is lowercase (for consistent keying)
+  - Calculate derived fields if missing:
+    - If earliest_price_sol_5m exists but no explicit change, could calculate
+  - Return complete TokenMarketData object
+
+- `normalizeOHLCV(data: Partial<OHLCV>[]): OHLCV[]`
+  - Sort by timestamp ascending
+  - Fill missing volume with 0
+  - Ensure all OHLC values present (reject incomplete candles)
+
+- `normalizeTrade(data: Partial<Trade>): Trade`
+  - Fill missing optional fields (is_dev: false, is_insider: false, etc.)
+  - Ensure mint is lowercase
+  - Default platform to 'unknown' if missing
+
+2. Create combined pipeline function:
+
+- `normalizeDataFeed(message: DataFeedMessage): DataFeedMessage`
+  - Route to appropriate normalizer based on message.type
+  - Return normalized message ready for storage
+
+3. Import types from '../api/types.js' and '../websocket-server.js'
+
+4. Keep normalization fast - pure functions, no async.
+  </action>
+  <verify>
+TypeScript compiles: `npx tsc --noEmit`
+File exists: `ls src/data/normalizer.ts`
+  </verify>
+  <done>
+- normalizeTokenMarketData fills defaults and lowercases mint
+- normalizeOHLCV sorts and fills missing volumes
+- normalizeTrade fills boolean flags and lowercases mint
+- normalizeDataFeed routes to appropriate normalizer
+- All functions exported
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` passes without errors
+- [ ] `src/data/validator.ts` exports ValidationResult and validation functions
+- [ ] `src/data/normalizer.ts` exports normalization functions
+- [ ] No circular dependencies introduced
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Validation functions return clear error messages
+- Normalization produces complete, consistent data structures
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-data-reception/01-02-SUMMARY.md`
+</output>

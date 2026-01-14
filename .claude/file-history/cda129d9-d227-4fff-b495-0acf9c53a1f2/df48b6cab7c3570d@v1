@@ -1,0 +1,78 @@
+# GitHub Actions workflow for deploying to GCP Cloud Run
+# Triggers on push to main branch for beta deployments
+
+name: Deploy to Beta
+
+on:
+  push:
+    branches: [main]
+
+env:
+  PROJECT_ID: bonkbotbeta
+  REGION: us-central1
+  SERVICE: trenchbench-api
+  REPOSITORY: trenchbench-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Authenticate to GCP using Workload Identity Federation
+      # No service account keys needed - more secure
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # TODO: Replace with your Workload Identity Provider
+          # Format: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID
+          workload_identity_provider: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github
+          # TODO: Replace with your service account email
+          # This service account must have: Cloud Run Admin, Artifact Registry Writer, Service Account User
+          service_account: github-actions@bonkbotbeta.iam.gserviceaccount.com
+
+      # Configure Docker to authenticate with Artifact Registry
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # Build container image
+      - name: Build container image
+        run: |
+          docker build \
+            --tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }} \
+            --tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:latest \
+            .
+
+      # Push container image to Artifact Registry
+      - name: Push container image
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:latest
+
+      # Deploy to Cloud Run
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}
+          # Environment variables for remote deployment
+          env_vars: |
+            APP_ENV=remote
+          # ClickHouse secrets from GCP Secret Manager
+          # TODO: Create these secrets in Secret Manager before first deploy
+          secrets: |
+            CLICKHOUSE_KEY_ID=CLICKHOUSE_KEY_ID:latest
+            CLICKHOUSE_KEY_SECRET=CLICKHOUSE_KEY_SECRET:latest
+            CLICKHOUSE_SERVICE_ID=CLICKHOUSE_SERVICE_ID:latest
+
+      # Output deployment URL
+      - name: Show deployment URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.url }}"

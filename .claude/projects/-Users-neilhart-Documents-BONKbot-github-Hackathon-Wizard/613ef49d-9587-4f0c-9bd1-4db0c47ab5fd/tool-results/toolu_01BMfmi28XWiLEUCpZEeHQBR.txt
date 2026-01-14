@@ -1,0 +1,979 @@
+     1→#!/usr/bin/env node
+     2→/**
+     3→ * CLI Interface
+     4→ *
+     5→ * Simple CLI for configuring and running the analysis autopilot.
+     6→ */
+     7→
+     8→import { configStore } from './config/index.js';
+     9→import type { TokenSource } from './config/types.js';
+    10→import { templates, listTemplates, getTemplate, getTemplateSummary, RuleEngine } from './rules/index.js';
+    11→import { localApi } from './api/index.js';
+    12→import { paperTracker, createTrigger, createAutoSourceManager, magicExits, magicBuy, marketFilter, MarketFilter } from './trading/index.js';
+    13→import { wsServer, type PositionData, type SignalData, type MarketStatusData, type StatsData, type WatchedToken, type TokenListData, type ConfigData, type AutopilotCommand } from './websocket-server.js';
+    14→
+    15→// Wrapped SOL mint for market filter
+    16→const SOL_MINT = 'So11111111111111111111111111111111111111112';
+    17→
+    18→const HELP = `
+    19→Token Analysis Autopilot CLI
+    20→
+    21→Commands:
+    22→  watch <mint> [symbol]  Add token to watchlist
+    23→  unwatch <mint>         Remove token from watchlist
+    24→  list                   List watchlist
+    25→
+    26→  sources                Show auto-source status (trending, whales)
+    27→  sources on|off         Enable/disable auto-sources
+    28→  sources trending on|off
+    29→  sources whales on|off
+    30→
+    31→  templates              List available rule templates
+    32→  use <template>         Add a template to active rules
+    33→  remove <rule-id>       Remove a rule set
+    34→  rules                  List active rules
+    35→
+    36→  config                 Show current config
+    37→  mode <paper|live>      Set trigger mode
+    38→  size <sol>             Set default position size
+    39→
+    40→  filter                 Show market filter status
+    41→  filter on|off          Enable/disable market filter
+    42→
+    43→  analyze <mint>         Analyze a single token (with trigger)
+    44→  run                    Start analysis loop
+    45→
+    46→  status                 Live portfolio overview with P&L
+    47→  trades                 List all paper trades
+    48→  stats                  Show trading stats
+    49→  close <mint>           Close open position for mint
+    50→  reset                  Clear all trading data
+    51→
+    52→  help                   Show this help
+    53→`;
+    54→
+    55→async function main() {
+    56→  const args = process.argv.slice(2);
+    57→  const command = args[0]?.toLowerCase();
+    58→
+    59→  await configStore.load();
+    60→  await paperTracker.load();
+    61→
+    62→  switch (command) {
+    63→    case 'watch': {
+    64→      const mint = args[1];
+    65→      const symbol = args[2];
+    66→      if (!mint) {
+    67→        console.error('Usage: watch <mint> [symbol]');
+    68→        process.exit(1);
+    69→      }
+    70→      configStore.addToWatchlist(mint, symbol);
+    71→      await configStore.save();
+    72→      console.log(`Added ${symbol || mint} to watchlist`);
+    73→      break;
+    74→    }
+    75→
+    76→    case 'unwatch': {
+    77→      const mint = args[1];
+    78→      if (!mint) {
+    79→        console.error('Usage: unwatch <mint>');
+    80→        process.exit(1);
+    81→      }
+    82→      if (configStore.removeFromWatchlist(mint)) {
+    83→        await configStore.save();
+    84→        console.log(`Removed ${mint} from watchlist`);
+    85→      } else {
+    86→        console.log('Token not found in watchlist');
+    87→      }
+    88→      break;
+    89→    }
+    90→
+    91→    case 'list': {
+    92→      const watchlist = configStore.getWatchlist();
+    93→      if (watchlist.length === 0) {
+    94→        console.log('Watchlist is empty');
+    95→      } else {
+    96→        console.log('\nWatchlist:');
+    97→        for (const token of watchlist) {
+    98→          console.log(`  ${token.symbol || 'Unknown'} - ${token.mint}`);
+    99→        }
+   100→      }
+   101→      break;
+   102→    }
+   103→
+   104→    case 'sources': {
+   105→      const subCmd = args[1]?.toLowerCase();
+   106→      const sourceConfig = configStore.getAutoSourceConfig();
+   107→
+   108→      if (!subCmd) {
+   109→        // Show status
+   110→        console.log('\nAuto-Sources:');
+   111→        console.log(`  Enabled: ${sourceConfig.enabled ? 'Yes' : 'No'}`);
+   112→        console.log(`  Trending: ${sourceConfig.trending ? 'On' : 'Off'} (limit: ${sourceConfig.trendingLimit})`);
+   113→        console.log(`  Whales: ${sourceConfig.whales ? 'On' : 'Off'} (limit: ${sourceConfig.whalesLimit})`);
+   114→        console.log(`  Refresh: every ${sourceConfig.refreshIntervalMs / 1000 / 60}m`);
+   115→        console.log('\nSource indicators: [W]=watchlist [T]=trending [$]=whales');
+   116→        break;
+   117→      }
+   118→
+   119→      if (subCmd === 'on') {
+   120→        configStore.setAutoSourceEnabled(true);
+   121→        await configStore.save();
+   122→        console.log('Auto-sources enabled');
+   123→        break;
+   124→      }
+   125→
+   126→      if (subCmd === 'off') {
+   127→        configStore.setAutoSourceEnabled(false);
+   128→        await configStore.save();
+   129→        console.log('Auto-sources disabled');
+   130→        break;
+   131→      }
+   132→
+   133→      // Handle "sources trending on|off" or "sources whales on|off"
+   134→      const sourceType = subCmd as 'trending' | 'whales';
+   135→      const toggle = args[2]?.toLowerCase();
+   136→
+   137→      if ((sourceType === 'trending' || sourceType === 'whales') && (toggle === 'on' || toggle === 'off')) {
+   138→        configStore.setSourceEnabled(sourceType, toggle === 'on');
+   139→        await configStore.save();
+   140→        console.log(`${sourceType} source ${toggle === 'on' ? 'enabled' : 'disabled'}`);
+   141→        break;
+   142→      }
+   143→
+   144→      console.error('Usage: sources [on|off] | sources <trending|whales> <on|off>');
+   145→      break;
+   146→    }
+   147→
+   148→    case 'templates': {
+   149→      console.log('');
+   150→      for (const id of listTemplates()) {
+   151→        const template = templates[id];
+   152→        console.log(`  ${id}:  ${getTemplateSummary(template)}`);
+   153→      }
+   154→      console.log('');
+   155→      break;
+   156→    }
+   157→
+   158→    case 'use': {
+   159→      const templateId = args[1];
+   160→      if (!templateId) {
+   161→        console.error('Usage: use <template>');
+   162→        console.error('Available:', listTemplates().join(', '));
+   163→        process.exit(1);
+   164→      }
+   165→      const template = getTemplate(templateId);
+   166→      if (!template) {
+   167→        console.error(`Template not found: ${templateId}`);
+   168→        console.error('Available:', listTemplates().join(', '));
+   169→        process.exit(1);
+   170→      }
+   171→      configStore.addRuleSet(template);
+   172→      await configStore.save();
+   173→      console.log(`Added template: ${template.name}`);
+   174→      break;
+   175→    }
+   176→
+   177→    case 'remove': {
+   178→      const ruleId = args[1];
+   179→      if (!ruleId) {
+   180→        console.error('Usage: remove <rule-id>');
+   181→        process.exit(1);
+   182→      }
+   183→      if (configStore.removeRuleSet(ruleId)) {
+   184→        await configStore.save();
+   185→        console.log(`Removed rule set: ${ruleId}`);
+   186→      } else {
+   187→        console.log('Rule set not found');
+   188→      }
+   189→      break;
+   190→    }
+   191→
+   192→    case 'rules': {
+   193→      const ruleSets = configStore.getRuleSets();
+   194→      if (ruleSets.length === 0) {
+   195→        console.log('No active rule sets. Use "use <template>" to add one.');
+   196→      } else {
+   197→        console.log('\nActive Rule Sets:');
+   198→        for (const ruleSet of ruleSets) {
+   199→          console.log(`\n  ${ruleSet.name} (${ruleSet.id})`);
+   200→          console.log(`    Mode: ${ruleSet.mode}`);
+   201→          console.log(`    Rules:`);
+   202→          for (const rule of ruleSet.rules) {
+   203→            const status = rule.enabled ? 'Y' : 'X';
+   204→            console.log(`      ${status} ${rule.name} (${rule.ruleType})`);
+   205→          }
+   206→        }
+   207→      }
+   208→      break;
+   209→    }
+   210→
+   211→    case 'config': {
+   212→      const config = configStore.get();
+   213→      console.log('\nCurrent Configuration:');
+   214→      console.log(`  Watchlist: ${config.watchlist.length} tokens`);
+   215→      console.log(`  Rule Sets: ${config.ruleSets.length} active`);
+   216→      console.log(`  Auto-Sources: ${config.autoSources.enabled ? 'On' : 'Off'} (T:${config.autoSources.trending ? 'Y' : 'N'} $:${config.autoSources.whales ? 'Y' : 'N'})`);
+   217→      console.log(`  Trigger Mode: ${config.trigger.mode}`);
+   218→      console.log(`  Trigger Enabled: ${config.trigger.enabled}`);
+   219→      console.log(`  Position Size: ${config.trigger.defaultPositionSizeSol} SOL`);
+   220→      console.log(`  Poll Interval: ${config.pollIntervalMs}ms`);
+   221→      break;
+   222→    }
+   223→
+   224→    case 'mode': {
+   225→      const mode = args[1] as 'paper' | 'live';
+   226→      if (!mode || !['paper', 'live'].includes(mode)) {
+   227→        console.error('Usage: mode <paper|live>');
+   228→        process.exit(1);
+   229→      }
+   230→      configStore.setTriggerMode(mode);
+   231→      await configStore.save();
+   232→      console.log(`Set trigger mode to: ${mode}`);
+   233→      break;
+   234→    }
+   235→
+   236→    case 'size': {
+   237→      const size = parseFloat(args[1]);
+   238→      if (isNaN(size) || size <= 0) {
+   239→        console.error('Usage: size <sol_amount>');
+   240→        process.exit(1);
+   241→      }
+   242→      configStore.setPositionSize(size);
+   243→      await configStore.save();
+   244→      console.log(`Set default position size to: ${size} SOL`);
+   245→      break;
+   246→    }
+   247→
+   248→    case 'filter': {
+   249→      const subCmd = args[1]?.toLowerCase();
+   250→      const filterConfig = configStore.getMarketFilterConfig();
+   251→
+   252→      if (!subCmd) {
+   253→        // Show status
+   254→        console.log('\nMarket Filter (SOL Dump Protection):');
+   255→        console.log(`  Enabled: ${filterConfig.enabled ? 'Yes' : 'No'}`);
+   256→        console.log(`  Timeframe: ${filterConfig.timeframeMinutes}m`);
+   257→        console.log(`  Skip Entries: SOL < ${filterConfig.skipEntriesThreshold}%`);
+   258→        console.log(`  Exit All: SOL < ${filterConfig.exitAllThreshold}%`);
+   259→        console.log(`  Recovery: SOL >= ${filterConfig.recoveryThreshold}%`);
+   260→        console.log(`\nState Machine:`);
+   261→        console.log(`  NORMAL ──(${filterConfig.skipEntriesThreshold}%)──> CAUTION ──(${filterConfig.exitAllThreshold}%)──> DUMP`);
+   262→        console.log(`     ^                                                │`);
+   263→        console.log(`     └────────────────(>=${filterConfig.recoveryThreshold}%)────────────────────┘`);
+   264→        break;
+   265→      }
+   266→
+   267→      if (subCmd === 'on') {
+   268→        configStore.setMarketFilterEnabled(true);
+   269→        await configStore.save();
+   270→        console.log('Market filter enabled');
+   271→        break;
+   272→      }
+   273→
+   274→      if (subCmd === 'off') {
+   275→        configStore.setMarketFilterEnabled(false);
+   276→        await configStore.save();
+   277→        console.log('Market filter disabled');
+   278→        break;
+   279→      }
+   280→
+   281→      console.error('Usage: filter [on|off]');
+   282→      break;
+   283→    }
+   284→
+   285→    case 'analyze': {
+   286→      const mint = args[1];
+   287→      if (!mint) {
+   288→        console.error('Usage: analyze <mint>');
+   289→        process.exit(1);
+   290→      }
+   291→
+   292→      const ruleSets = configStore.getRuleSets();
+   293→      if (ruleSets.length === 0) {
+   294→        console.error('No active rule sets. Use "use <template>" to add one.');
+   295→        process.exit(1);
+   296→      }
+   297→
+   298→      console.log(`\nAnalyzing ${mint}...`);
+   299→
+   300→      const engine = new RuleEngine({ api: localApi });
+   301→      for (const ruleSet of ruleSets) {
+   302→        engine.addRulesFromConfig(ruleSet.rules);
+   303→      }
+   304→
+   305→      const signals = await engine.analyzeToken(mint);
+   306→      const result = engine.aggregateSignals(signals);
+   307→
+   308→      console.log(`\nResult: ${result.action.toUpperCase()} (confidence: ${(result.confidence * 100).toFixed(0)}%)`);
+   309→
+   310→      if (signals.length > 0) {
+   311→        console.log('\nSignals:');
+   312→        for (const signal of signals) {
+   313→          const emoji = signal.type === 'buy' ? '+' : signal.type === 'sell' ? '-' : '*';
+   314→          console.log(`  ${emoji} ${signal.ruleName}: ${signal.reason}`);
+   315→        }
+   316→      } else {
+   317→        console.log('\nNo signals triggered');
+   318→      }
+   319→
+   320→      // Trigger trade if action is not hold
+   321→      if (result.action !== 'hold') {
+   322→        const trigger = createTrigger(configStore.getTriggerConfig());
+   323→        const marketData = await localApi.getMarketData(mint);
+   324→
+   325→        const triggerResult = await trigger.trigger({
+   326→          mint,
+   327→          symbol: marketData.symbol,
+   328→          action: result.action,
+   329→          priceSol: marketData.price_sol,
+   330→          priceUsd: marketData.price_usd,
+   331→          ruleSetId: ruleSets[0].id,
+   332→          signals: result.signals,
+   333→          confidence: result.confidence,
+   334→        });
+   335→
+   336→        if (!triggerResult.triggered) {
+   337→          console.log(`\nTrade not triggered: ${triggerResult.reason}`);
+   338→        }
+   339→
+   340→        await paperTracker.save();
+   341→      }
+   342→      break;
+   343→    }
+   344→
+   345→    case 'run': {
+   346→      const watchlist = configStore.getWatchlist();
+   347→      const ruleSets = configStore.getRuleSets();
+   348→
+   349→      if (ruleSets.length === 0) {
+   350→        console.error('No active rule sets. Use "use <template>" to add one.');
+   351→        process.exit(1);
+   352→      }
+   353→
+   354→      const config = configStore.get();
+   355→      const trigger = createTrigger(config.trigger);
+   356→      const autoSources = createAutoSourceManager(localApi, config.autoSources);
+   357→
+   358→      // Set up market filter with config
+   359→      marketFilter.updateConfig(config.marketFilter);
+   360→      marketFilter.setApi(localApi);
+   361→
+   362→      // Initial refresh of auto-sources
+   363→      if (config.autoSources.enabled) {
+   364→        console.log('Fetching auto-sources (trending, whales)...');
+   365→        await autoSources.refresh();
+   366→      }
+   367→
+   368→      // Helper to get source label for output
+   369→      const sourceLabel = (source: TokenSource): string => {
+   370→        switch (source) {
+   371→          case 'watchlist': return 'W';
+   372→          case 'trending': return 'T';
+   373→          case 'whales': return '$';
+   374→          default: return '?';
+   375→        }
+   376→      };
+   377→
+   378→      // Combine all token sources: watchlist + auto-sources + open positions
+   379→      const getAllTokens = () => {
+   380→        const tokens = new Map<string, { mint: string; symbol?: string; source: TokenSource }>();
+   381→
+   382→        // Manual watchlist (highest priority)
+   383→        for (const t of watchlist) {
+   384→          tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: 'watchlist' });
+   385→        }
+   386→
+   387→        // Auto-sources (if enabled)
+   388→        if (config.autoSources.enabled) {
+   389→          for (const t of autoSources.getSourcedTokens()) {
+   390→            if (!tokens.has(t.mint)) {
+   391→              tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: t.source });
+   392→            }
+   393→          }
+   394→        }
+   395→
+   396→        // Open positions (always include)
+   397→        for (const trade of paperTracker.getOpenTrades()) {
+   398→          if (!tokens.has(trade.mint)) {
+   399→            // Determine source from auto-sources if available
+   400→            const autoSource = autoSources.getSourceForMint(trade.mint);
+   401→            tokens.set(trade.mint, {
+   402→              mint: trade.mint,
+   403→              symbol: trade.symbol,
+   404→              source: autoSource || 'watchlist',
+   405→            });
+   406→          }
+   407→        }
+   408→
+   409→        return Array.from(tokens.values());
+   410→      };
+   411→
+   412→      const allTokens = getAllTokens();
+   413→      const autoSourceCounts = autoSources.getCounts();
+   414→
+   415→      if (allTokens.length === 0) {
+   416→        console.error('Nothing to watch. Add tokens with "watch <mint>", enable auto-sources, or have open trades.');
+   417→        process.exit(1);
+   418→      }
+   419→
+   420→      const openCount = paperTracker.getOpenTrades().length;
+   421→      const mfStatus = config.marketFilter.enabled ? 'On' : 'Off';
+   422→
+   423→      // Start WebSocket server for frontend
+   424→      wsServer.start(8765);
+   425→
+   426→      // Helper to get current config for broadcasting
+   427→      const getCurrentConfig = (): ConfigData => ({
+   428→        autoSourcesEnabled: configStore.getAutoSourceConfig().enabled,
+   429→        trendingEnabled: configStore.getAutoSourceConfig().trending,
+   430→        whalesEnabled: configStore.getAutoSourceConfig().whales,
+   431→        marketFilterEnabled: configStore.getMarketFilterConfig().enabled,
+   432→        mode: configStore.getTriggerConfig().mode,
+   433→        positionSizeSol: configStore.getTriggerConfig().defaultPositionSizeSol,
+   434→        pollIntervalMs: configStore.get().pollIntervalMs,
+   435→      });
+   436→
+   437→      // Handle commands from frontend
+   438→      wsServer.onCommand(async (cmd: AutopilotCommand) => {
+   439→        switch (cmd.command) {
+   440→          case 'toggle_sources':
+   441→            configStore.setAutoSourceEnabled(cmd.enabled);
+   442→            await configStore.save();
+   443→            console.log(`[WS] Auto-sources ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   444→            break;
+   445→          case 'toggle_trending':
+   446→            configStore.setSourceEnabled('trending', cmd.enabled);
+   447→            await configStore.save();
+   448→            console.log(`[WS] Trending source ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   449→            break;
+   450→          case 'toggle_whales':
+   451→            configStore.setSourceEnabled('whales', cmd.enabled);
+   452→            await configStore.save();
+   453→            console.log(`[WS] Whales source ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   454→            break;
+   455→          case 'toggle_filter':
+   456→            configStore.setMarketFilterEnabled(cmd.enabled);
+   457→            await configStore.save();
+   458→            console.log(`[WS] Market filter ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   459→            marketFilter.updateConfig(configStore.getMarketFilterConfig());
+   460→            break;
+   461→          case 'set_mode':
+   462→            configStore.setTriggerMode(cmd.mode);
+   463→            await configStore.save();
+   464→            console.log(`[WS] Mode set to ${cmd.mode}`);
+   465→            break;
+   466→          case 'set_position_size':
+   467→            configStore.setPositionSize(cmd.sizeSol);
+   468→            await configStore.save();
+   469→            console.log(`[WS] Position size set to ${cmd.sizeSol} SOL`);
+   470→            break;
+   471→          case 'refresh_sources':
+   472→            console.log('[WS] Refreshing auto-sources...');
+   473→            await autoSources.refresh();
+   474→            break;
+   475→          case 'get_config':
+   476→            // Just broadcast current config
+   477→            break;
+   478→        }
+   479→        // Always broadcast updated config after any command
+   480→        wsServer.broadcastConfig(getCurrentConfig());
+   481→      });
+   482→
+   483→      // Broadcast initial config
+   484→      wsServer.broadcastConfig(getCurrentConfig());
+   485→
+   486→      console.log('Starting analysis loop... (Ctrl+C to stop)');
+   487→      console.log(`  Watchlist: ${watchlist.length} | Trending: ${autoSourceCounts.trending} | Whales: ${autoSourceCounts.whales}`);
+   488→      console.log(`  Open trades: ${openCount} | Rules: ${ruleSets.length} sets | Mode: ${config.trigger.mode}`);
+   489→      console.log(`  Market Filter: ${mfStatus} (skip@${config.marketFilter.skipEntriesThreshold}% exit@${config.marketFilter.exitAllThreshold}%)`);
+   490→      console.log(`  Scan interval: ${config.pollIntervalMs}ms | Source refresh: ${config.autoSources.refreshIntervalMs / 1000}s`);
+   491→      console.log(`  WebSocket: ws://localhost:8765\n`);
+   492→
+   493→      const engine = new RuleEngine({ api: localApi });
+   494→      for (const ruleSet of ruleSets) {
+   495→        engine.addRulesFromConfig(ruleSet.rules);
+   496→      }
+   497→
+   498→      let scanCount = 0;
+   499→      const runLoop = async () => {
+   500→        scanCount++;
+   501→        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+   502→
+   503→        // Refresh auto-sources if needed (every 15m by default)
+   504→        await autoSources.refreshIfNeeded();
+   505→
+   506→        // Get fresh token list
+   507→        const tokens = getAllTokens();
+   508→        const openTrades = paperTracker.getOpenTrades();
+   509→        const openMints = new Set(openTrades.map(t => t.mint));
+   510→
+   511→        // Batch fetch all market data upfront (including SOL for market filter)
+   512→        const allMints = [...tokens.map(t => t.mint)];
+   513→        if (!allMints.includes(SOL_MINT)) {
+   514→          allMints.push(SOL_MINT);
+   515→        }
+   516→        const marketDataCache = await localApi.getMarketDataBatch(allMints);
+   517→
+   518→        // Check market filter (SOL dump protection)
+   519→        // Try direct SOL data first, fallback to deriving from token prices
+   520→        const solData = marketDataCache.get(SOL_MINT);
+   521→        const marketFilterResult = marketFilter.check(solData, undefined, marketDataCache);
+   522→
+   523→        // Fetch 1m candles for open positions (needed for Williams TSL)
+   524→        // Only fetch for positions we have open - this enables trailing stop
+   525→        const candleDataMap = new Map<string, import('./api/types.js').OHLCV[]>();
+   526→        for (const trade of openTrades) {
+   527→          try {
+   528→            // Fetch last 50 1m candles (enough for 3/3 fractal detection)
+   529→            const candles = await localApi.getOHLCV(trade.mint, '1m', { countback: 50 });
+   530→            if (candles.length > 0) {
+   531→              candleDataMap.set(trade.mint, candles);
+   532→            }
+   533→          } catch {
+   534→            // OHLCV not available for this token - TSL won't work but TP/SL will
+   535→          }
+   536→        }
+   537→
+   538→        // Check magic exits (TP at resistance, SL at support break, TSL at fractal)
+   539→        // Magic exits still run even in CAUTION mode (structure-based exits are always valid)
+   540→        const magicExitResults = await magicExits.executeExits(marketDataCache, true, candleDataMap);
+   541→
+   542→        // Handle market dump - exit all positions
+   543→        let marketDumpExits: typeof magicExitResults = [];
+   544→        if (marketFilterResult.exitAll) {
+   545→          marketDumpExits = await marketFilter.executeExitAll(marketDataCache, true);
+   546→        }
+   547→
+   548→        // Magic buy - auto-enter at support levels (only if market filter allows entries)
+   549→        // Uses same OHLCV data as TSL for SFP detection
+   550→        const magicBuyResults = !marketFilterResult.blockEntries
+   551→          ? await magicBuy.executeEntries(marketDataCache, candleDataMap, true)
+   552→          : { entries: [], skipped: [] };
+   553→
+   554→        const scanResults: string[] = [];
+   555→        const tradeResults: string[] = [];
+   556→        const magicResults: string[] = [];
+   557→        const magicEntryResults: string[] = [];
+   558→        const dumpExitResults: string[] = [];
+   559→
+   560→        // Record market dump exits
+   561→        for (const closed of marketDumpExits) {
+   562→          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+   563→          const color = (closed.pnlPercent ?? 0) >= 0 ? '\x1b[32m' : '\x1b[31m';
+   564→          const reset = '\x1b[0m';
+   565→          dumpExitResults.push(`${closed.symbol}:${color}${pnlSign}${closed.pnlPercent?.toFixed(1)}%${reset}`);
+   566→        }
+   567→
+   568→        // Record magic exits
+   569→        for (const closed of magicExitResults) {
+   570→          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+   571→          const color = (closed.pnlPercent ?? 0) >= 0 ? '\x1b[32m' : '\x1b[31m';
+   572→          const reset = '\x1b[0m';
+   573→          magicResults.push(`${closed.symbol}:${color}${pnlSign}${closed.pnlPercent?.toFixed(1)}%${reset}`);
+   574→        }
+   575→
+   576→        // Record magic buy entries
+   577→        for (const { trade, entry } of magicBuyResults.entries) {
+   578→          const entryLabel = entry.entryType?.toUpperCase() || 'BUY';
+   579→          const color = '\x1b[36m'; // Cyan for new entries
+   580→          const reset = '\x1b[0m';
+   581→          magicEntryResults.push(`${color}${trade.symbol}[${entryLabel}]${reset}`);
+   582→        }
+   583→
+   584→        // Process all tokens (fast path - no additional API calls)
+   585→        for (const token of tokens) {
+   586→          const isOpenTrade = openMints.has(token.mint);
+   587→
+   588→          // Get cached market data first
+   589→          const marketData = marketDataCache.get(token.mint);
+   590→          if (!marketData) continue; // Skip tokens without data
+   591→
+   592→          const sym = token.symbol || marketData.symbol || token.mint.slice(0, 6);
+   593→          const src = sourceLabel(token.source);
+   594→
+   595→          try {
+   596→            // Use fast path - analyze with pre-fetched market data (no API calls)
+   597→            const signals = engine.analyzeWithMarketData(marketData);
+   598→            const result = engine.aggregateSignals(signals);
+   599→
+   600→            // If this is an open trade, show P&L
+   601→            if (isOpenTrade) {
+   602→              const trade = openTrades.find(t => t.mint === token.mint)!;
+   603→              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   604→              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   605→              const size = trade.positionSizeSol.toFixed(2);
+   606→              const color = pnl.pnlPercent >= 0 ? '\x1b[32m' : '\x1b[31m';
+   607→              const reset = '\x1b[0m';
+   608→              tradeResults.push(`[${src}]${sym} (${size}) ${color}${sign}${pnl.pnlPercent.toFixed(1)}%${reset}`);
+   609→
+   610→              // Check for exit signals
+   611→              if (result.action !== 'hold') {
+   612→                const triggerResult = await trigger.trigger({
+   613→                  mint: token.mint,
+   614→                  symbol: trade.symbol,
+   615→                  action: result.action,
+   616→                  priceSol: marketData.price_sol,
+   617→                  priceUsd: marketData.price_usd,
+   618→                  ruleSetId: ruleSets[0].id,
+   619→                  signals: result.signals,
+   620→                  confidence: result.confidence,
+   621→                  quiet: true,
+   622→                });
+   623→                if (triggerResult.triggered) {
+   624→                  tradeResults[tradeResults.length - 1] += ' EXIT';
+   625→                }
+   626→                await paperTracker.save();
+   627→              }
+   628→            } else {
+   629→              // Scan result (not an open trade)
+   630→              if (result.action !== 'hold') {
+   631→                // Skip new entries if market filter is blocking
+   632→                if (marketFilterResult.blockEntries && result.action === 'buy') {
+   633→                  // Don't open new long positions during market stress
+   634→                  continue;
+   635→                }
+   636→
+   637→                const conf = (result.confidence * 100).toFixed(0);
+   638→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   639→                const reset = '\x1b[0m';
+   640→
+   641→                const triggerResult = await trigger.trigger({
+   642→                  mint: token.mint,
+   643→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   644→                  action: result.action,
+   645→                  priceSol: marketData.price_sol,
+   646→                  priceUsd: marketData.price_usd,
+   647→                  ruleSetId: ruleSets[0].id,
+   648→                  signals: result.signals,
+   649→                  confidence: result.confidence,
+   650→                  quiet: true,
+   651→                });
+   652→
+   653→                // Only show signals that actually triggered a trade
+   654→                if (triggerResult.triggered) {
+   655→                  scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   656→                }
+   657→                await paperTracker.save();
+   658→              }
+   659→            }
+   660→          } catch {
+   661→            if (isOpenTrade) {
+   662→              tradeResults.push(`[${src}]${sym}:ERR`);
+   663→            } else {
+   664→              scanResults.push(`[${src}]${sym}:ERR`);
+   665→            }
+   666→          }
+   667→        }
+   668→
+   669→        // Output - compact single line
+   670→        let line = `[${time}] #${scanCount}`;
+   671→
+   672→        // Market filter status (always show if not NORMAL)
+   673→        if (marketFilterResult.state !== 'NORMAL') {
+   674→          const mfColor = marketFilterResult.state === 'DUMP' ? '\x1b[31m' : '\x1b[33m';
+   675→          const reset = '\x1b[0m';
+   676→          const changeStr = marketFilterResult.priceChangePercent.toFixed(1);
+   677→          line += `  |  ${mfColor}SOL ${changeStr}% [${marketFilterResult.state}]${reset}`;
+   678→        }
+   679→
+   680→        // Market dump exits
+   681→        if (dumpExitResults.length > 0) {
+   682→          line += `  |  DumpExit: ${dumpExitResults.join(' ')}`;
+   683→        }
+   684→
+   685→        // Magic exits
+   686→        if (magicResults.length > 0) {
+   687→          line += `  |  MagicExit: ${magicResults.join(' ')}`;
+   688→        }
+   689→
+   690→        // Magic buy entries
+   691→        if (magicEntryResults.length > 0) {
+   692→          line += `  |  MagicBuy: ${magicEntryResults.join(' ')}`;
+   693→        }
+   694→
+   695→        // New trades (from rule signals)
+   696→        if (scanResults.length > 0) {
+   697→          line += `  |  Signal: ${scanResults.join(' ')}`;
+   698→        }
+   699→
+   700→        // Open positions
+   701→        if (tradeResults.length > 0) {
+   702→          line += `  |  Open: ${tradeResults.join(' ')}`;
+   703→        }
+   704→
+   705→        // No activity indicator
+   706→        if (scanResults.length === 0 && tradeResults.length === 0 && magicResults.length === 0 && magicEntryResults.length === 0 && dumpExitResults.length === 0) {
+   707→          if (marketFilterResult.state === 'NORMAL') {
+   708→            line += `  |  (${tokens.length} tokens)  |  No signals`;
+   709→          }
+   710→        }
+   711→
+   712→        console.log(line);
+   713→
+   714→        // === WebSocket Broadcasts ===
+   715→
+   716→        // Broadcast scan tick
+   717→        wsServer.broadcastScanTick({
+   718→          timestamp: Date.now(),
+   719→          scanNumber: scanCount,
+   720→          tokenCount: tokens.length,
+   721→          openPositions: openTrades.length,
+   722→        });
+   723→
+   724→        // Broadcast token list grouped by source
+   725→        const tokenListData: TokenListData = {
+   726→          watchlist: [],
+   727→          trending: [],
+   728→          whales: [],
+   729→        };
+   730→        for (const token of tokens) {
+   731→          const marketData = marketDataCache.get(token.mint);
+   732→          const watchedToken: WatchedToken = {
+   733→            mint: token.mint,
+   734→            symbol: token.symbol || marketData?.symbol || token.mint.slice(0, 6),
+   735→            source: token.source,
+   736→            priceSol: marketData?.price_sol,
+   737→            priceUsd: marketData?.price_usd,
+   738→            change1h: marketData?.price_change_1h,
+   739→            change24h: marketData?.price_change_24h,
+   740→            volume24h: marketData?.volume_24h,
+   741→            mcap: marketData?.mcap,
+   742→            hasPosition: openMints.has(token.mint),
+   743→          };
+   744→          if (token.source === 'watchlist') {
+   745→            tokenListData.watchlist.push(watchedToken);
+   746→          } else if (token.source === 'trending') {
+   747→            tokenListData.trending.push(watchedToken);
+   748→          } else if (token.source === 'whales') {
+   749→            tokenListData.whales.push(watchedToken);
+   750→          }
+   751→        }
+   752→        wsServer.broadcastTokenList(tokenListData);
+   753→
+   754→        // Broadcast market status
+   755→        wsServer.broadcastMarketStatus({
+   756→          state: marketFilterResult.state as 'NORMAL' | 'CAUTION' | 'DUMP',
+   757→          solPriceChangePercent: marketFilterResult.priceChangePercent,
+   758→          blockEntries: marketFilterResult.blockEntries,
+   759→          exitAll: marketFilterResult.exitAll,
+   760→        });
+   761→
+   762→        // Broadcast positions with live P&L
+   763→        const positionData: PositionData[] = [];
+   764→        for (const trade of openTrades) {
+   765→          const marketData = marketDataCache.get(trade.mint);
+   766→          if (marketData) {
+   767→            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   768→            positionData.push({
+   769→              mint: trade.mint,
+   770→              symbol: trade.symbol,
+   771→              action: trade.action,
+   772→              entryPriceSol: trade.entryPriceSol,
+   773→              currentPriceSol: marketData.price_sol,
+   774→              positionSizeSol: trade.positionSizeSol,
+   775→              pnlPercent: pnl.pnlPercent,
+   776→              pnlSol: pnl.pnlSol,
+   777→              entryTime: trade.timestamp,
+   778→            });
+   779→          }
+   780→        }
+   781→        wsServer.broadcastPositions(positionData);
+   782→
+   783→        // Broadcast signals for magic exits
+   784→        for (const closed of magicExitResults) {
+   785→          wsServer.broadcastSignal({
+   786→            timestamp: Date.now(),
+   787→            mint: closed.mint,
+   788→            symbol: closed.symbol,
+   789→            signalType: 'magic_exit',
+   790→            action: 'close',
+   791→            reason: closed.reason || 'Magic exit triggered',
+   792→            pnlPercent: closed.pnlPercent,
+   793→          });
+   794→        }
+   795→
+   796→        // Broadcast signals for dump exits
+   797→        for (const closed of marketDumpExits) {
+   798→          wsServer.broadcastSignal({
+   799→            timestamp: Date.now(),
+   800→            mint: closed.mint,
+   801→            symbol: closed.symbol,
+   802→            signalType: 'dump_exit',
+   803→            action: 'close',
+   804→            reason: 'Market dump protection',
+   805→            pnlPercent: closed.pnlPercent,
+   806→          });
+   807→        }
+   808→
+   809→        // Broadcast signals for magic buy entries
+   810→        for (const { trade, entry } of magicBuyResults.entries) {
+   811→          wsServer.broadcastSignal({
+   812→            timestamp: Date.now(),
+   813→            mint: trade.mint,
+   814→            symbol: trade.symbol,
+   815→            signalType: 'magic_buy',
+   816→            action: 'buy',
+   817→            reason: entry.reason,
+   818→            entryType: entry.entryType || undefined,
+   819→          });
+   820→        }
+   821→
+   822→        // Broadcast updated stats
+   823→        const stats = paperTracker.getStats();
+   824→        wsServer.broadcastStats({
+   825→          totalTrades: stats.totalTrades,
+   826→          openTrades: stats.openTrades,
+   827→          closedTrades: stats.closedTrades,
+   828→          wins: stats.wins,
+   829→          losses: stats.losses,
+   830→          winRate: stats.winRate,
+   831→          totalPnlSol: stats.totalPnlSol,
+   832→          totalPnlUsd: stats.totalPnlUsd,
+   833→          avgPnlPercent: stats.avgPnlPercent,
+   834→        });
+   835→      };
+   836→
+   837→      // Run immediately, then on interval
+   838→      await runLoop();
+   839→      setInterval(runLoop, config.pollIntervalMs);
+   840→      break;
+   841→    }
+   842→
+   843→    case 'status': {
+   844→      const openTrades = paperTracker.getOpenTrades();
+   845→      const stats = paperTracker.getStats();
+   846→      const ruleSets = configStore.getRuleSets();
+   847→      const watchlist = configStore.getWatchlist();
+   848→
+   849→      console.log('\n=== PORTFOLIO STATUS ===\n');
+   850→
+   851→      // Open positions with live P&L
+   852→      if (openTrades.length === 0) {
+   853→        console.log('Open Positions: none\n');
+   854→      } else {
+   855→        console.log('Open Positions:');
+   856→        let totalUnrealizedSol = 0;
+   857→        let totalUnrealizedUsd = 0;
+   858→        let totalExposure = 0;
+   859→
+   860→        for (const trade of openTrades) {
+   861→          try {
+   862→            const marketData = await localApi.getMarketData(trade.mint);
+   863→            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   864→            const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   865→            totalUnrealizedSol += pnl.pnlSol;
+   866→            totalUnrealizedUsd += pnl.pnlUsd;
+   867→            totalExposure += trade.positionSizeSol;
+   868→
+   869→            console.log(`  ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${pnl.pnlPercent.toFixed(2)}%  (${sign}${pnl.pnlSol.toFixed(4)} SOL)`);
+   870→            console.log(`    Entry: ${trade.entryPriceSol} -> Now: ${marketData.price_sol} SOL`);
+   871→          } catch {
+   872→            console.log(`  ${trade.action.toUpperCase()} ${trade.symbol}  (price fetch failed)`);
+   873→          }
+   874→        }
+   875→
+   876→        const unrealizedSign = totalUnrealizedSol >= 0 ? '+' : '';
+   877→        console.log(`\n  Exposure: ${totalExposure.toFixed(4)} SOL`);
+   878→        console.log(`  Unrealized: ${unrealizedSign}${totalUnrealizedSol.toFixed(4)} SOL ($${totalUnrealizedUsd.toFixed(2)})\n`);
+   879→      }
+   880→
+   881→      // Realized P&L
+   882→      console.log('Realized P&L:');
+   883→      const realizedSign = stats.totalPnlSol >= 0 ? '+' : '';
+   884→      console.log(`  ${stats.closedTrades} trades | ${stats.wins}W/${stats.losses}L | ${(stats.winRate * 100).toFixed(0)}% win`);
+   885→      console.log(`  Total: ${realizedSign}${stats.totalPnlSol.toFixed(4)} SOL ($${stats.totalPnlUsd.toFixed(2)})\n`);
+   886→
+   887→      // Active config
+   888→      console.log('Config:');
+   889→      console.log(`  Watching: ${watchlist.length} tokens | Rules: ${ruleSets.length} sets`);
+   890→      console.log(`  Mode: ${configStore.getTriggerConfig().mode}\n`);
+   891→
+   892→      break;
+   893→    }
+   894→
+   895→    case 'trades': {
+   896→      const trades = paperTracker.getAllTrades();
+   897→      if (trades.length === 0) {
+   898→        console.log('No trades recorded');
+   899→      } else {
+   900→        console.log('\nPaper Trades:');
+   901→        for (const trade of trades) {
+   902→          if (trade.status === 'open') {
+   903→            try {
+   904→              const marketData = await localApi.getMarketData(trade.mint);
+   905→              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   906→              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   907→              console.log(`  [OPEN] ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${pnl.pnlPercent.toFixed(2)}%`);
+   908→              console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+   909→            } catch {
+   910→              console.log(`  [OPEN] ${trade.action.toUpperCase()} ${trade.symbol}`);
+   911→              console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+   912→            }
+   913→          } else {
+   914→            const sign = (trade.pnlPercent ?? 0) >= 0 ? '+' : '';
+   915→            console.log(`  [CLOSED] ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${trade.pnlPercent?.toFixed(2)}%`);
+   916→            console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+   917→          }
+   918→        }
+   919→      }
+   920→      break;
+   921→    }
+   922→
+   923→    case 'stats': {
+   924→      const stats = paperTracker.getStats();
+   925→      console.log('\nTrading Statistics:');
+   926→      console.log(`  Total Trades: ${stats.totalTrades}`);
+   927→      console.log(`  Open: ${stats.openTrades} | Closed: ${stats.closedTrades}`);
+   928→      console.log(`  Wins: ${stats.wins} | Losses: ${stats.losses}`);
+   929→      console.log(`  Win Rate: ${(stats.winRate * 100).toFixed(1)}%`);
+   930→      console.log(`  Total P&L: ${stats.totalPnlSol.toFixed(4)} SOL ($${stats.totalPnlUsd.toFixed(2)})`);
+   931→      console.log(`  Avg P&L: ${stats.avgPnlPercent.toFixed(2)}%`);
+   932→      if (stats.bestTrade) {
+   933→        console.log(`  Best: ${stats.bestTrade.symbol} +${stats.bestTrade.pnlPercent?.toFixed(2)}%`);
+   934→      }
+   935→      if (stats.worstTrade) {
+   936→        console.log(`  Worst: ${stats.worstTrade.symbol} ${stats.worstTrade.pnlPercent?.toFixed(2)}%`);
+   937→      }
+   938→      break;
+   939→    }
+   940→
+   941→    case 'close': {
+   942→      const mint = args[1];
+   943→      if (!mint) {
+   944→        console.error('Usage: close <mint>');
+   945→        process.exit(1);
+   946→      }
+   947→
+   948→      const openTrade = paperTracker.getOpenTradeForMint(mint);
+   949→      if (!openTrade) {
+   950→        console.log('No open position for this mint');
+   951→        break;
+   952→      }
+   953→
+   954→      const marketData = await localApi.getMarketData(mint);
+   955→      const trigger = createTrigger(configStore.getTriggerConfig());
+   956→      await trigger.closePosition(mint, marketData.price_sol, marketData.price_usd);
+   957→      await paperTracker.save();
+   958→      break;
+   959→    }
+   960→
+   961→    case 'reset': {
+   962→      paperTracker.clearAll();
+   963→      await paperTracker.save();
+   964→      console.log('All trading data cleared');
+   965→      break;
+   966→    }
+   967→
+   968→    case 'help':
+   969→    default:
+   970→      console.log(HELP);
+   971→  }
+   972→}
+   973→
+   974→main().catch(console.error);
+   975→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

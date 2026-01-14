@@ -1,0 +1,122 @@
+# pum3 - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2025-01-10
+- **Last updated**: 2025-01-10
+- **Discovery depth**: Standard
+- **Documentation quality**: Good (has README with architecture)
+
+---
+
+## System Identity
+
+**What it is**: Rust-based real-time Solana state cache and swap orchestration system.
+
+**What it does**:
+- Ingests Geyser account updates (Yellowstone gRPC)
+- Maintains DEX pool state for 17 protocols
+- Publishes prices via NATS `pum3.pricing`
+- Routes and constructs swap transactions
+- Executes limit orders (LOIS system)
+
+**Key insight**: This is the BRIDGE between raw blockchain data and web-terminal. Without PUM3, there are no prices.
+
+---
+
+## Architecture Highlights
+
+### Workspace (26 crates)
+```
+nami/       → Core binary (API/Publisher/Writer)
+lois/       → Limit Order Intent System
+engine/     → State management
+dexes/      → 17 DEX implementations
+swap/       → Routing & construction
+common/     → Shared types
+```
+
+### Run Modes
+| Mode | Purpose | Region |
+|------|---------|--------|
+| api | Full HTTP API | EU |
+| publish | Price publishing | US, AP |
+| writer | Redis cache | EU |
+| dispatcher | Order matching | EU |
+| evaluator | Order execution | EU |
+
+### Storage Pattern
+```rust
+pools_by_address: HashMap<Pubkey, Pool>
+pools_by_token_pair: HashMap<TokenPair, HashSet<Pool>>
+account_to_pools: HashMap<Pubkey, HashSet<Pool>>  // Geyser routing
+```
+
+---
+
+## Key Capabilities
+
+### For Product/Growth
+| Capability | User Impact |
+|------------|-------------|
+| Real-time prices | Live market data display |
+| Swap routing | Best execution for trades |
+| 17 DEXes | Broad liquidity access |
+| Limit orders | Advanced trading |
+| Low latency | Competitive trading |
+
+### NATS Topics
+| Topic | Content |
+|-------|---------|
+| `pum3.pricing` | Pool prices → web-terminal |
+| `lois.intent` | Limit order events |
+| `pum3.execution-request.*` | Swap execution |
+
+---
+
+## Integration Map
+
+### Upstream
+| Source | What We Get |
+|--------|-------------|
+| Geyser (Helius/Triton) | Account updates |
+| Solana RPC | Tx submission |
+| Jupiter | Routing fallback |
+
+### Downstream
+| Consumer | What They Get |
+|----------|---------------|
+| web-terminal | Prices via NATS |
+| bonkbot | Swap API |
+| Materializers | Pool state |
+
+---
+
+## Working Here
+
+### Quick Start
+```bash
+cargo build
+RUN_MODE=api cargo run --bin nami
+```
+
+### Common Locations
+| Task | Path |
+|------|------|
+| Add DEX | `dexes/src/` + `common/src/dexes.rs` |
+| Modify prices | `common/src/web_terminal_price_data.rs` |
+| API endpoints | `api/src/` |
+| Routing | `swap/src/` |
+| Limit orders | `lois/src/` |
+
+---
+
+## Session Notes
+
+*Accumulated learnings:*
+
+- PUM3 = Program Update Machine (3rd edition)
+- Regional deployment: EU is primary (full services), US/AP are publishers only
+- 17 DEXes supported - each has its own impl in `dexes/`
+- LOIS = Limit Order Intent System (dispatcher matches, evaluator executes)
+- Storage layer has 3 indexes for fast pool lookup
+- `pum3.pricing` is THE topic that feeds all downstream price displays

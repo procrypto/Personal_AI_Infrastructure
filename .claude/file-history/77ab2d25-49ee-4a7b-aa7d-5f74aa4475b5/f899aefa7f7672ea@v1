@@ -1,0 +1,223 @@
+---
+phase: 04-topic-mode-usability
+plan: 02
+type: execute
+---
+
+<objective>
+Add client-side filtering by user/group and sort options for search results.
+
+Purpose: Let users narrow down results after search and sort by different criteria.
+Output: Filter dropdowns and sort selector above results list.
+</objective>
+
+<context>
+@src/App.tsx
+@src/types.ts
+
+**Current results display:**
+- Results stored in `searchResults: SearchResultWithContext`
+- Each result has: match.chatName, match.message.from/displayName, match.score, match.message.date
+- Currently shows first 50 results sorted by relevance (score)
+
+**Filter approach:**
+- Extract unique users/groups from results
+- Apply filters client-side (no re-search needed)
+- Filters are additive (AND logic)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add filter and sort state</name>
+  <files>src/App.tsx</files>
+  <action>
+Add state for filtering and sorting:
+
+```typescript
+// Result filtering state
+const [filterUsers, setFilterUsers] = useState<string[]>([]);
+const [filterGroups, setFilterGroups] = useState<string[]>([]);
+const [sortBy, setSortBy] = useState<'relevance' | 'date-newest' | 'date-oldest' | 'group' | 'user'>('relevance');
+```
+
+Add helper to extract unique values from results:
+```typescript
+const getUniqueUsers = (results: ContextWindow[]): string[] => {
+    const users = new Set<string>();
+    for (const r of results) {
+        const name = r.match.message.displayName || r.match.message.from;
+        if (name) users.add(String(name));
+    }
+    return Array.from(users).sort();
+};
+
+const getUniqueGroups = (results: ContextWindow[]): string[] => {
+    const groups = new Set<string>();
+    for (const r of results) {
+        groups.add(r.match.chatName);
+    }
+    return Array.from(groups).sort();
+};
+```
+
+Clear filters when results change:
+- In the worker message handler that sets searchResults, also reset filters
+  </action>
+  <verify>TypeScript compiles without errors</verify>
+  <done>Filter and sort state added</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add filter and sort UI</name>
+  <files>src/App.tsx</files>
+  <action>
+Add filter controls above the results list (inside the searchResults && block):
+
+```tsx
+<div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <label style={{ color: '#9ca3af', fontSize: '0.875rem' }}>Filter by user:</label>
+        <select
+            multiple
+            value={filterUsers}
+            onChange={(e) => setFilterUsers(Array.from(e.target.selectedOptions, opt => opt.value))}
+            style={{ minWidth: '150px', maxHeight: '60px' }}
+        >
+            {getUniqueUsers(searchResults.results).map(user => (
+                <option key={user} value={user}>{user}</option>
+            ))}
+        </select>
+    </div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <label style={{ color: '#9ca3af', fontSize: '0.875rem' }}>Filter by group:</label>
+        <select
+            multiple
+            value={filterGroups}
+            onChange={(e) => setFilterGroups(Array.from(e.target.selectedOptions, opt => opt.value))}
+            style={{ minWidth: '150px', maxHeight: '60px' }}
+        >
+            {getUniqueGroups(searchResults.results).map(group => (
+                <option key={group} value={group}>{group}</option>
+            ))}
+        </select>
+    </div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <label style={{ color: '#9ca3af', fontSize: '0.875rem' }}>Sort by:</label>
+        <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+        >
+            <option value="relevance">Relevance</option>
+            <option value="date-newest">Date (newest)</option>
+            <option value="date-oldest">Date (oldest)</option>
+            <option value="group">Group name</option>
+            <option value="user">User name</option>
+        </select>
+    </div>
+    {(filterUsers.length > 0 || filterGroups.length > 0) && (
+        <button
+            onClick={() => { setFilterUsers([]); setFilterGroups([]); }}
+            style={{ fontSize: '0.875rem' }}
+        >
+            Clear filters
+        </button>
+    )}
+</div>
+```
+  </action>
+  <verify>
+- `npm run build` succeeds
+- Filter and sort controls appear when results exist
+  </verify>
+  <done>Filter and sort UI added</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Apply filters and sorting to results</name>
+  <files>src/App.tsx</files>
+  <action>
+Create a filtered/sorted results array using useMemo:
+
+```typescript
+const filteredResults = useMemo(() => {
+    if (!searchResults) return [];
+
+    let results = [...searchResults.results];
+
+    // Apply user filter
+    if (filterUsers.length > 0) {
+        results = results.filter(r => {
+            const name = String(r.match.message.displayName || r.match.message.from || '');
+            return filterUsers.includes(name);
+        });
+    }
+
+    // Apply group filter
+    if (filterGroups.length > 0) {
+        results = results.filter(r => filterGroups.includes(r.match.chatName));
+    }
+
+    // Apply sorting
+    switch (sortBy) {
+        case 'date-newest':
+            results.sort((a, b) => {
+                const dateA = a.match.message.date as string || '';
+                const dateB = b.match.message.date as string || '';
+                return dateB.localeCompare(dateA);
+            });
+            break;
+        case 'date-oldest':
+            results.sort((a, b) => {
+                const dateA = a.match.message.date as string || '';
+                const dateB = b.match.message.date as string || '';
+                return dateA.localeCompare(dateB);
+            });
+            break;
+        case 'group':
+            results.sort((a, b) => a.match.chatName.localeCompare(b.match.chatName));
+            break;
+        case 'user':
+            results.sort((a, b) => {
+                const nameA = String(a.match.message.displayName || a.match.message.from || '');
+                const nameB = String(b.match.message.displayName || b.match.message.from || '');
+                return nameA.localeCompare(nameB);
+            });
+            break;
+        // 'relevance' keeps original order (already sorted by score)
+    }
+
+    return results;
+}, [searchResults, filterUsers, filterGroups, sortBy]);
+```
+
+Update the results display to use `filteredResults` instead of `searchResults.results`:
+- Update the count display to show "Showing X of Y results"
+- Use `filteredResults.slice(0, 50)` for the map
+  </action>
+  <verify>
+- `npm run build` succeeds
+- Filtering by user shows only that user's results
+- Filtering by group shows only that group's results
+- Sort by date/group/user changes order
+- Clearing filters restores all results
+  </verify>
+  <done>Filtering and sorting applied to results display</done>
+</task>
+
+</tasks>
+
+<verification>
+- [ ] `npm run build` succeeds
+- [ ] Filter dropdowns populated from search results
+- [ ] Multi-select works for user and group filters
+- [ ] Sort dropdown changes result order
+- [ ] Count shows filtered vs total
+- [ ] Clear filters button works
+</verification>
+
+<success_criteria>
+- All tasks completed
+- No TypeScript errors
+- Filtering and sorting work as expected
+</success_criteria>

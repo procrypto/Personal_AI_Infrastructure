@@ -1,0 +1,1262 @@
+import type { ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import JSZip from 'jszip';
+import './App.css';
+import mappingSeed from './user_mapping.json';
+import type {
+    GroupInfo,
+    TopicIndex,
+    TopicWorkerEvent,
+    UserMapping,
+    WorkerEvent,
+    SearchResultWithContext,
+} from './types';
+import {
+    enrichMappingFromOutputs,
+    normalizeMapping,
+    parseChatOutput,
+} from './extractor';
+import type { ChatOutput } from './types';
+import { THEME_CATEGORIES, getThemeTerms } from './semanticSets';
+
+// User info returned from worker scan
+interface UserInfo {
+    userId: string;
+    displayName: string;
+    messageCount?: number; // Optional - not available in fast scan.
+}
+
+const readFileAsText = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ''));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(file);
+    });
+
+const sanitizeName = (input: string): string => input.replace(/[^a-z0-9-_]+/gi, '_').slice(0, 64);
+
+const normalizeUserId = (value: string): string => (value.startsWith('user') ? value.slice(4) : value);
+
+const parseWhitelistInput = (input: string): Set<string> => {
+    const ids = new Set<string>();
+    const lines = input.split('\n');
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) {
+            continue;
+        }
+        const normalized = normalizeUserId(trimmed);
+        if (normalized.length > 0) {
+            ids.add(normalized);
+        }
+    }
+    return ids;
+};
+
+const downloadBlob = (blob: Blob, filename: string): void => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+};
+
+const downloadJson = (payload: unknown, filename: string): void => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, filename);
+};
+
+type AppMode = 'user' | 'group' | 'topic';
+
+// Persist mode preference in localStorage.
+const getStoredMode = (): AppMode => {
+    try {
+        const stored = localStorage.getItem('tg-extractor-mode');
+        if (stored === 'user' || stored === 'group' || stored === 'topic') return stored;
+    } catch { /* localStorage may be unavailable */ }
+    return 'group'; // Default to group mode.
+};
+
+const storeMode = (mode: AppMode): void => {
+    try {
+        localStorage.setItem('tg-extractor-mode', mode);
+    } catch { /* localStorage may be unavailable */ }
+};
+
+// Topic Mode settings persistence
+interface TopicSettings {
+    useSemanticExpansion: boolean;
+    searchMode: 'and' | 'or';
+    sortBy: 'relevance' | 'date-newest' | 'date-oldest' | 'group' | 'user';
+    lastZipName?: string;
+}
+
+const getStoredTopicSettings = (): Partial<TopicSettings> => {
+    try {
+        const stored = localStorage.getItem('tg-extractor-topic-settings');
+        if (stored) return JSON.parse(stored) as Partial<TopicSettings>;
+    } catch { /* localStorage may be unavailable */ }
+    return {};
+};
+
+const storeTopicSettings = (settings: Partial<TopicSettings>): void => {
+    try {
+        const current = getStoredTopicSettings();
+        localStorage.setItem('tg-extractor-topic-settings', JSON.stringify({ ...current, ...settings }));
+    } catch { /* localStorage may be unavailable */ }
+};
+
+function App() {
+    const [mode, setMode] = useState<AppMode>(getStoredMode);
+    const [baseMapping] = useState<UserMapping>(() => normalizeMapping(mappingSeed as UserMapping));
+    const [mapping, setMapping] = useState<UserMapping>(() => normalizeMapping(mappingSeed as UserMapping));
+    const [availableUsers, setAvailableUsers] = useState<UserInfo[]>([]);
+    const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+    const [availableGroups, setAvailableGroups] = useState<GroupInfo[]>([]);
+    const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+    const [startDate, setStartDate] = useState<Date | null>(null);
+    const [endDate, setEndDate] = useState<Date | null>(null);
+    const [status, setStatus] = useState('Idle');
+    const [summary, setSummary] = useState('');
+    const [enrichmentSummary, setEnrichmentSummary] = useState('');
+    const [progress, setProgress] = useState<string>('');
+    const [fileRef, setFileRef] = useState<File | null>(null);
+    const [workerReady, setWorkerReady] = useState(false);
+    const [whitelistInput, setWhitelistInput] = useState<string>('');
+    const [whitelistExpanded, setWhitelistExpanded] = useState<boolean>(false);
+
+    // Topic Mode state
+    const [topicZipFile, setTopicZipFile] = useState<File | null>(null);
+    const [topicIndex, setTopicIndex] = useState<TopicIndex | null>(null);
+    const [topicStatus, setTopicStatus] = useState<string>('');
+    const [topicWorkerReady, setTopicWorkerReady] = useState(false);
+
+    // Topic Mode search state (with persistence)
+    const storedTopicSettings = getStoredTopicSettings();
+    const [searchQuery, setSearchQuery] = useState<string>('');
+    const [searchResults, setSearchResults] = useState<SearchResultWithContext | null>(null);
+    const [isSearching, setIsSearching] = useState(false);
+    const [useSemanticExpansion, setUseSemanticExpansion] = useState(storedTopicSettings.useSemanticExpansion ?? true);
+    const [searchMode, setSearchMode] = useState<'and' | 'or'>(storedTopicSettings.searchMode ?? 'or');
+    const [topicStartDate, setTopicStartDate] = useState<Date | null>(null);
+    const [topicEndDate, setTopicEndDate] = useState<Date | null>(null);
+    const [filterUsers, setFilterUsers] = useState<string[]>([]);
+    const [filterGroups, setFilterGroups] = useState<string[]>([]);
+    const [sortBy, setSortBy] = useState<'relevance' | 'date-newest' | 'date-oldest' | 'group' | 'user'>(storedTopicSettings.sortBy ?? 'relevance');
+    const [lastZipName] = useState<string | undefined>(storedTopicSettings.lastZipName);
+
+    const workerRef = useRef<Worker | null>(null);
+    const topicWorkerRef = useRef<Worker | null>(null);
+    const mappingRef = useRef<UserMapping>(mapping);
+    const lastRangeRef = useRef<{ startUnix?: number; endUnix?: number } | null>(null);
+    const whitelistInputRef = useRef<string>(whitelistInput);
+    const modeRef = useRef<AppMode>(mode);
+
+    useEffect(() => {
+        mappingRef.current = mapping;
+    }, [mapping]);
+
+    useEffect(() => {
+        whitelistInputRef.current = whitelistInput;
+    }, [whitelistInput]);
+
+    useEffect(() => {
+        modeRef.current = mode;
+    }, [mode]);
+
+    // Persist Topic Mode settings
+    useEffect(() => {
+        storeTopicSettings({ useSemanticExpansion });
+    }, [useSemanticExpansion]);
+
+    useEffect(() => {
+        storeTopicSettings({ searchMode });
+    }, [searchMode]);
+
+    useEffect(() => {
+        storeTopicSettings({ sortBy });
+    }, [sortBy]);
+
+    useEffect(() => {
+        if (topicZipFile) {
+            storeTopicSettings({ lastZipName: topicZipFile.name });
+        }
+    }, [topicZipFile]);
+
+    useEffect(() => {
+        const worker = new Worker(new URL('./streamWorker.ts', import.meta.url), { type: 'module' });
+        workerRef.current = worker;
+        
+        worker.onerror = (event: ErrorEvent) => {
+            setStatus(`Worker crashed: ${event.message}`);
+            setProgress('');
+        };
+        
+        worker.onmessage = (event: MessageEvent<WorkerEvent>) => {
+            const data = event.data;
+            
+            if (data && (data as { type?: string }).type === 'workerReady') {
+                setWorkerReady(true);
+                return;
+            }
+            
+            if ('phase' in data) {
+                // If totalBytes is 0, this is an error message.
+                if (data.totalBytes === 0 && data.message) {
+                    setStatus(data.message);
+                    setProgress('');
+                    return;
+                }
+                const pct = data.totalBytes > 0 ? (100 * data.loadedBytes) / data.totalBytes : 0;
+                setProgress(`${data.message ?? `${data.phase} ${pct.toFixed(1)}%`}`);
+                return;
+            }
+            
+            if (data.type === 'scanResult') {
+                const scanData = data as unknown as { users: UserInfo[]; totalMessages: number; filteredMessages: number; truncationContext?: string };
+                const normalizedUsers = scanData.users.map((user) => ({
+                    ...user,
+                    userId: normalizeUserId(user.userId),
+                }));
+                setAvailableUsers(normalizedUsers);
+                
+                // Apply whitelist: if active, only select users in both whitelist AND scan results.
+                const whitelistIds = parseWhitelistInput(whitelistInputRef.current);
+                const whitelistActive = whitelistIds.size > 0;
+                let selectedIds: string[];
+                let whitelistMatchCount = 0;
+                if (whitelistActive) {
+                    selectedIds = normalizedUsers
+                        .filter((u) => whitelistIds.has(u.userId))
+                        .map((u) => u.userId);
+                    whitelistMatchCount = selectedIds.length;
+                }
+                else {
+                    selectedIds = normalizedUsers.map((u) => u.userId);
+                }
+                setSelectedUserIds(selectedIds);
+                
+                let statusMsg = `Found ${scanData.users.length} users.`;
+                if (whitelistActive) {
+                    statusMsg += ` Whitelist matched ${whitelistMatchCount} of ${whitelistIds.size} IDs.`;
+                }
+                statusMsg += ' Message counts will appear during filtering.';
+                if (scanData.truncationContext) {
+                    statusMsg += ' ⚠️ File was truncated.';
+                    console.warn('Truncation details:\n', scanData.truncationContext);
+                }
+                setStatus(statusMsg);
+                if (scanData.truncationContext) {
+                    setSummary(scanData.truncationContext);
+                }
+                else {
+                    setProgress('');
+                }
+                return;
+            }
+            
+            if (data.type === 'scanGroupResult') {
+                const scanData = data as unknown as { groups: GroupInfo[]; totalMessages: number; filteredMessages: number; truncationContext?: string };
+                setAvailableGroups(scanData.groups);
+                setSelectedGroupIds(scanData.groups.map((g) => g.chatId));
+                
+                let statusMsg = `Found ${scanData.groups.length} groups with ${scanData.filteredMessages.toLocaleString()} messages (filtered from ${scanData.totalMessages.toLocaleString()} total).`;
+                if (scanData.truncationContext) {
+                    statusMsg += ' ⚠️ File was truncated.';
+                    console.warn('Truncation details:\n', scanData.truncationContext);
+                }
+                setStatus(statusMsg);
+                if (scanData.truncationContext) {
+                    setSummary(scanData.truncationContext);
+                }
+                else {
+                    setProgress('');
+                }
+                return;
+            }
+            
+            if (data.type === 'filterResult') {
+                setMapping(data.mapping);
+                setStatus(`Filtered ${data.outputs.length} chats (${data.totalMessages} messages).`);
+                setProgress('Creating ZIP file...');
+                
+                // Extract date range and selected users from worker response.
+                const filterData = data as unknown as { 
+                    outputs: ChatOutput[]; 
+                    dateRange?: { startUnix?: number; endUnix?: number };
+                    selectedUserIds?: string[];
+                };
+                
+                // Format date range for filename.
+                const formatDateForFilename = (unixSeconds: number): string => {
+                    const d = new Date(unixSeconds * 1000);
+                    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+                };
+                
+                const startStr = filterData.dateRange?.startUnix 
+                    ? formatDateForFilename(filterData.dateRange.startUnix) 
+                    : 'start';
+                const endStr = filterData.dateRange?.endUnix 
+                    ? formatDateForFilename(filterData.dateRange.endUnix) 
+                    : 'end';
+                const dateRangeStr = `${startStr}_to_${endStr}`;
+                
+                // Bundle all files into a single ZIP to avoid browser download throttling.
+                const zip = new JSZip();
+                let fileCount = 0;
+                data.outputs.forEach((chat: ChatOutput) => {
+                    const enrichedChat = {
+                        ...chat,
+                        dateRange: {
+                            start: filterData.dateRange?.startUnix ? new Date(filterData.dateRange.startUnix * 1000).toISOString() : null,
+                            end: filterData.dateRange?.endUnix ? new Date(filterData.dateRange.endUnix * 1000).toISOString() : null,
+                        },
+                        selectedUsers: filterData.selectedUserIds ?? [],
+                    };
+                    const safeName = sanitizeName(`${chat.chatName}_${chat.chatId}_${dateRangeStr}`);
+                    zip.file(`${safeName}.json`, JSON.stringify(enrichedChat, null, 2));
+                    fileCount++;
+                });
+                
+                // Generate and download the ZIP.
+                zip.generateAsync({ type: 'blob' })
+                    .then((zipBlob) => {
+                        const zipName = `telegram_export_${dateRangeStr}.zip`;
+                        downloadBlob(zipBlob, zipName);
+                        setProgress('');
+                        setSummary(`Downloaded ZIP with ${fileCount} chat files.`);
+                    })
+                    .catch((err) => {
+                        console.error('Failed to create ZIP:', err);
+                        setProgress('');
+                        setSummary(`ZIP creation failed: ${(err as Error).message}`);
+                    });
+            }
+        };
+        
+        return () => {
+            worker.terminate();
+            workerRef.current = null;
+        };
+    }, []);
+
+    // Topic Worker initialization
+    useEffect(() => {
+        const topicWorker = new Worker(new URL('./topicWorker.ts', import.meta.url), { type: 'module' });
+        topicWorkerRef.current = topicWorker;
+
+        topicWorker.onerror = (event: ErrorEvent) => {
+            setTopicStatus(`Worker crashed: ${event.message}`);
+        };
+
+        topicWorker.onmessage = (event: MessageEvent<TopicWorkerEvent>) => {
+            const data = event.data;
+
+            if (data.type === 'topicWorkerReady') {
+                setTopicWorkerReady(true);
+                return;
+            }
+
+            if (data.type === 'topicProgress') {
+                setTopicStatus(data.message ?? `${data.phase} ${data.current}/${data.total}`);
+                return;
+            }
+
+            if (data.type === 'topicIndexResult') {
+                setTopicIndex(data.index);
+                setTopicStatus(`Loaded ${data.index.chats.length} chats with ${data.index.totalMessages.toLocaleString()} messages`);
+            }
+
+            if (data.type === 'searchResultWithContext') {
+                setSearchResults(data);
+                setIsSearching(false);
+                setTopicStatus(`Found ${data.totalMatches} matches for "${data.query}"`);
+            }
+        };
+
+        return () => {
+            topicWorker.terminate();
+            topicWorkerRef.current = null;
+        };
+    }, []);
+
+    // Build label for each user: prefer mapping name, fallback to worker display name.
+    // Build label for each user: prefer mapping name, fallback to worker display name.
+    // Message counts are not available in fast scan - they appear during filtering.
+    const getUserLabel = (user: UserInfo): string => `${user.displayName} (${user.userId})`;
+
+    // Build label for each group.
+    const getGroupLabel = (group: GroupInfo): string => {
+        const typeStr = group.chatType ? ` [${group.chatType}]` : '';
+        return `${group.chatName}${typeStr}`;
+    };
+
+    const handleStartScan = (): void => {
+        if (!fileRef) {
+            setStatus('Please select a file first.');
+            return;
+        }
+        if (!workerReady) {
+            setStatus('Worker not ready, please wait...');
+            return;
+        }
+        
+        // Convert dates to Unix timestamps for worker (Date objects don't survive postMessage).
+        const range = {
+            startUnix: startDate ? Math.floor(startDate.getTime() / 1000) : undefined,
+            endUnix: endDate ? Math.floor(endDate.getTime() / 1000) : undefined,
+        };
+        lastRangeRef.current = { ...range };
+        
+        setStatus(`Scanning ${fileRef.name}...`);
+        setSummary('');
+        setProgress('Starting scan...');
+        
+        if (mode === 'user') {
+            setAvailableUsers([]);
+            setSelectedUserIds([]);
+            workerRef.current?.postMessage({ type: 'scan', file: fileRef, range });
+        }
+        else {
+            setAvailableGroups([]);
+            setSelectedGroupIds([]);
+            workerRef.current?.postMessage({ type: 'scanGroups', file: fileRef, range });
+        }
+    };
+
+    const handleFileSelect = (event: ChangeEvent<HTMLInputElement>): void => {
+        const file = event.target.files?.[0];
+        if (file) {
+            setFileRef(file);
+            setStatus(`Selected: ${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+            setAvailableUsers([]);
+            setSelectedUserIds([]);
+            setAvailableGroups([]);
+            setSelectedGroupIds([]);
+        }
+    };
+
+    const handleUserSelect = (event: ChangeEvent<HTMLSelectElement>): void => {
+        const next = Array.from(event.target.selectedOptions).map((opt) => normalizeUserId(opt.value));
+        setSelectedUserIds(next);
+    };
+
+    const handleFilter = (): void => {
+        if (!fileRef) {
+            setStatus('Please load an export JSON first.');
+            return;
+        }
+        if (selectedUserIds.length === 0) {
+            setStatus('Select at least one user ID.');
+            return;
+        }
+        if (!lastRangeRef.current) {
+            setStatus('Please scan the export before filtering.');
+            return;
+        }
+
+        const range = lastRangeRef.current;
+        
+        setStatus('Filtering (streaming)...');
+        setProgress('Starting filter...');
+        const normalizedSelectedIds = selectedUserIds.map((id) => normalizeUserId(id));
+        workerRef.current?.postMessage({
+            type: 'filter',
+            file: fileRef,
+            selectedUserIds: normalizedSelectedIds,
+            range,
+            mapping,
+        });
+    };
+
+    const handleGroupSelect = (event: ChangeEvent<HTMLSelectElement>): void => {
+        const next = Array.from(event.target.selectedOptions).map((opt) => opt.value);
+        setSelectedGroupIds(next);
+    };
+
+    const handleGroupFilter = (): void => {
+        if (!fileRef) {
+            setStatus('Please load an export JSON first.');
+            return;
+        }
+        if (selectedGroupIds.length === 0) {
+            setStatus('Select at least one group.');
+            return;
+        }
+        if (!lastRangeRef.current) {
+            setStatus('Please scan the export before filtering.');
+            return;
+        }
+
+        const range = lastRangeRef.current;
+        
+        setStatus('Extracting groups...');
+        setProgress('Starting extraction...');
+        workerRef.current?.postMessage({
+            type: 'filterGroups',
+            file: fileRef,
+            selectedGroupIds,
+            range,
+        });
+    };
+
+    const handleMappingReset = (): void => {
+        setMapping(normalizeMapping(baseMapping));
+        setStatus('Mapping reset to defaults.');
+    };
+
+    const handleMappingDownload = (): void => {
+        downloadJson(mapping, 'user_mapping_updated.json');
+    };
+
+    const handleEnrichUpload = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+        const files = event.target.files;
+        if (!files || files.length === 0) {
+            return;
+        }
+        try {
+            const texts = await Promise.all(Array.from(files).map((file) => readFileAsText(file)));
+            const outputs: ChatOutput[] = [];
+            texts.forEach((text) => outputs.push(...parseChatOutput(text)));
+            const result = enrichMappingFromOutputs(outputs, mapping);
+            setMapping(result.mapping);
+            setEnrichmentSummary(
+                `Inspected ${result.inspectedMessages} messages; added ${result.addedAliases} new aliases.`,
+            );
+        } catch (error) {
+            setEnrichmentSummary(`Enrichment failed: ${(error as Error).message}`);
+        }
+    };
+
+    // Topic Mode search handlers
+    const handleSearch = (query: string, useSemantic: boolean = useSemanticExpansion, mode: 'and' | 'or' = searchMode): void => {
+        if (!topicWorkerReady || !topicIndex) {
+            setTopicStatus('Please load a ZIP file first.');
+            return;
+        }
+        if (!query.trim()) {
+            setTopicStatus('Please enter a search query.');
+            return;
+        }
+
+        // Split by comma or newline to support multiple keywords
+        const keywords = query.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 0);
+
+        setIsSearching(true);
+        setSearchQuery(query);
+        const modeLabel = mode === 'and' ? 'AND' : 'OR';
+        setTopicStatus(`Searching for ${keywords.length} keyword${keywords.length > 1 ? 's' : ''} (${modeLabel})...`);
+        topicWorkerRef.current?.postMessage({
+            type: 'search',
+            query: keywords.join(','), // Pass as comma-separated
+            useSemanticExpansion: useSemantic,
+            searchMode: mode,
+            dateRange: {
+                start: topicStartDate?.toISOString() ?? null,
+                end: topicEndDate?.toISOString() ?? null,
+            },
+        });
+    };
+
+    const handleThemeClick = (categoryId: string): void => {
+        const terms = getThemeTerms(categoryId);
+        if (terms.length === 0) return;
+        // Use the first few terms as the query, semantic expansion will handle the rest
+        const query = terms.slice(0, 3).join(' ');
+        handleSearch(query, true);
+    };
+
+    const handleClearResults = (): void => {
+        setSearchResults(null);
+        setSearchQuery('');
+        setFilterUsers([]);
+        setFilterGroups([]);
+        setSortBy('relevance');
+        setTopicStatus(topicIndex
+            ? `Loaded ${topicIndex.chats.length} chats with ${topicIndex.totalMessages.toLocaleString()} messages`
+            : '');
+    };
+
+    const handleExportResults = async (): Promise<void> => {
+        if (!searchResults || filteredResults.length === 0) return;
+
+        const zip = new JSZip();
+        const exportMeta = {
+            exportedAt: new Date().toISOString(),
+            searchQuery: searchResults.query,
+            searchMode: searchMode,
+            dateRange: {
+                start: topicStartDate?.toISOString() ?? null,
+                end: topicEndDate?.toISOString() ?? null,
+            },
+            totalMatches: filteredResults.length,
+            filters: {
+                users: filterUsers.length > 0 ? filterUsers : null,
+                groups: filterGroups.length > 0 ? filterGroups : null,
+            },
+        };
+
+        // Group messages by chat
+        const chatGroups = new Map<string, { chatId: string; chatName: string; messages: unknown[] }>();
+        for (const result of filteredResults) {
+            const chatId = result.match.chatId;
+            if (!chatGroups.has(chatId)) {
+                chatGroups.set(chatId, {
+                    chatId,
+                    chatName: result.match.chatName,
+                    messages: [],
+                });
+            }
+            chatGroups.get(chatId)!.messages.push(result.match.message);
+        }
+
+        // Create individual chat files
+        for (const [chatId, data] of chatGroups) {
+            const chatExport = {
+                ...exportMeta,
+                chatId: data.chatId,
+                chatName: data.chatName,
+                messageCount: data.messages.length,
+                messages: data.messages,
+            };
+            const safeName = data.chatName.replace(/[^a-z0-9-_]/gi, '_').slice(0, 50);
+            zip.file(`${safeName}_${chatId}.json`, JSON.stringify(chatExport, null, 2));
+        }
+
+        // Create combined chronological file
+        const allMessages = filteredResults
+            .map(r => r.match.message)
+            .sort((a, b) => {
+                const dateA = (a.date as string) || '';
+                const dateB = (b.date as string) || '';
+                return dateA.localeCompare(dateB);
+            });
+
+        const combinedExport = {
+            ...exportMeta,
+            messages: allMessages,
+        };
+        zip.file('all_results.json', JSON.stringify(combinedExport, null, 2));
+
+        // Generate and download ZIP
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const timestamp = new Date().toISOString().slice(0, 10);
+        const querySlug = searchResults.query.slice(0, 20).replace(/[^a-z0-9]/gi, '_');
+        downloadBlob(blob, `topic_export_${querySlug}_${timestamp}.zip`);
+    };
+
+    // Helper functions for extracting unique values from results
+    const getUniqueUsers = (results: SearchResultWithContext['results']): string[] => {
+        const users = new Set<string>();
+        for (const r of results) {
+            const name = r.match.message.displayName || r.match.message.from;
+            if (name) users.add(String(name));
+        }
+        return Array.from(users).sort();
+    };
+
+    const getUniqueGroups = (results: SearchResultWithContext['results']): string[] => {
+        const groups = new Set<string>();
+        for (const r of results) {
+            groups.add(r.match.chatName);
+        }
+        return Array.from(groups).sort();
+    };
+
+    // Filtered and sorted results
+    const filteredResults = useMemo(() => {
+        if (!searchResults) return [];
+
+        let results = [...searchResults.results];
+
+        // Apply user filter
+        if (filterUsers.length > 0) {
+            results = results.filter(r => {
+                const name = String(r.match.message.displayName || r.match.message.from || '');
+                return filterUsers.includes(name);
+            });
+        }
+
+        // Apply group filter
+        if (filterGroups.length > 0) {
+            results = results.filter(r => filterGroups.includes(r.match.chatName));
+        }
+
+        // Apply sorting
+        switch (sortBy) {
+            case 'date-newest':
+                results.sort((a, b) => {
+                    const dateA = (a.match.message.date as string) || '';
+                    const dateB = (b.match.message.date as string) || '';
+                    return dateB.localeCompare(dateA);
+                });
+                break;
+            case 'date-oldest':
+                results.sort((a, b) => {
+                    const dateA = (a.match.message.date as string) || '';
+                    const dateB = (b.match.message.date as string) || '';
+                    return dateA.localeCompare(dateB);
+                });
+                break;
+            case 'group':
+                results.sort((a, b) => a.match.chatName.localeCompare(b.match.chatName));
+                break;
+            case 'user':
+                results.sort((a, b) => {
+                    const nameA = String(a.match.message.displayName || a.match.message.from || '');
+                    const nameB = String(b.match.message.displayName || b.match.message.from || '');
+                    return nameA.localeCompare(nameB);
+                });
+                break;
+            // 'relevance' keeps original order (already sorted by score)
+        }
+
+        return results;
+    }, [searchResults, filterUsers, filterGroups, sortBy]);
+
+    return (
+        <div className="app">
+            <header>
+                <h1>Telegram Chat Extractor</h1>
+                <p><b>Runs entirely in-browser. No files leave your machine.</b></p>
+                <p>Export a Telegram data download in JSON format to get started.</p>
+            </header>
+
+            <section>
+                <div className="mode-selector">
+                    <span className="mode-label">Export Mode</span>
+                    <label className="radio-option">
+                        <input
+                            type="radio"
+                            name="mode"
+                            value="group"
+                            checked={mode === 'group'}
+                            onChange={() => {
+                                setMode('group');
+                                storeMode('group');
+                                setAvailableUsers([]);
+                                setSelectedUserIds([]);
+                                setAvailableGroups([]);
+                                setSelectedGroupIds([]);
+                                setSummary('');
+                                setProgress('');
+                            }}
+                        />
+                        Group Mode <span className="mode-hint">(fast)</span>
+                    </label>
+                    <label className="radio-option">
+                        <input
+                            type="radio"
+                            name="mode"
+                            value="user"
+                            checked={mode === 'user'}
+                            onChange={() => {
+                                setMode('user');
+                                storeMode('user');
+                                setAvailableUsers([]);
+                                setSelectedUserIds([]);
+                                setAvailableGroups([]);
+                                setSelectedGroupIds([]);
+                                setSummary('');
+                                setProgress('');
+                            }}
+                        />
+                        User Mode
+                    </label>
+                    <label className="radio-option">
+                        <input
+                            type="radio"
+                            name="mode"
+                            value="topic"
+                            checked={mode === 'topic'}
+                            onChange={() => {
+                                setMode('topic');
+                                storeMode('topic');
+                                setAvailableUsers([]);
+                                setSelectedUserIds([]);
+                                setAvailableGroups([]);
+                                setSelectedGroupIds([]);
+                                setSummary('');
+                                setProgress('');
+                            }}
+                        />
+                        Topic Mode <span className="mode-hint">(analyze exports)</span>
+                    </label>
+                </div>
+
+                {mode === 'user' && (
+                <details open={whitelistExpanded} onToggle={(e) => setWhitelistExpanded((e.target as HTMLDetailsElement).open)}>
+                    <summary>
+                        User ID Whitelist (optional) 
+                        {parseWhitelistInput(whitelistInput).size > 0 && (
+                            <span className="whitelist-count"> — {parseWhitelistInput(whitelistInput).size} IDs loaded</span>
+                        )}
+                    </summary>
+                    <div className="whitelist-section">
+                        <p className="hint">Paste user IDs (one per line) to auto-select only these users after scanning.</p>
+                        <textarea
+                            value={whitelistInput}
+                            onChange={(e) => setWhitelistInput(e.target.value)}
+                            placeholder="123456789&#10;987654321&#10;user555555555"
+                            rows={6}
+                            className="whitelist-textarea"
+                        />
+                        <div className="whitelist-actions">
+                            <button 
+                                type="button" 
+                                onClick={() => setWhitelistInput('')}
+                                disabled={whitelistInput.length === 0}
+                            >
+                                Clear whitelist
+                            </button>
+                        </div>
+                    </div>
+                </details>
+                )}
+
+                {mode === 'topic' && (
+                <div className="topic-mode-section">
+                    <p className="hint">Load a ZIP file exported from Group/User mode to analyze chat content.</p>
+
+                    <div className="field">
+                        <label htmlFor="topic-zip-file">
+                            ZIP file from previous export
+                            {lastZipName && !topicZipFile && (
+                                <span style={{ color: '#9ca3af', fontWeight: 'normal', marginLeft: '0.5rem' }}>
+                                    (last: {lastZipName})
+                                </span>
+                            )}
+                        </label>
+                        <input
+                            id="topic-zip-file"
+                            type="file"
+                            accept=".zip"
+                            onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                    setTopicZipFile(file);
+                                    setTopicStatus(`Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+                                    setTopicIndex(null);
+                                    setSearchResults(null);
+                                }
+                            }}
+                        />
+                    </div>
+
+                    <button
+                        onClick={() => {
+                            if (!topicZipFile) {
+                                setTopicStatus('Please select a ZIP file first.');
+                                return;
+                            }
+                            if (!topicWorkerReady) {
+                                setTopicStatus('Worker not ready, please wait...');
+                                return;
+                            }
+                            setTopicIndex(null);
+                            setSearchResults(null);
+                            setTopicStatus('Loading ZIP...');
+                            topicWorkerRef.current?.postMessage({ type: 'loadZip', file: topicZipFile });
+                        }}
+                        disabled={!topicZipFile || !topicWorkerReady}
+                    >
+                        Load ZIP
+                    </button>
+
+                    <p className="status">{topicStatus}</p>
+
+                    {topicIndex && !searchResults && (
+                        <div className="topic-results">
+                            <div className="field">
+                                <label>Date Range (optional)</label>
+                                <div className="dates">
+                                    <DatePicker
+                                        selected={topicStartDate}
+                                        onChange={(date: Date | null) => setTopicStartDate(date)}
+                                        selectsStart
+                                        startDate={topicStartDate}
+                                        endDate={topicEndDate}
+                                        placeholderText="Start date"
+                                        isClearable
+                                        dateFormat="yyyy-MM-dd"
+                                    />
+                                    <DatePicker
+                                        selected={topicEndDate}
+                                        onChange={(date: Date | null) => setTopicEndDate(date)}
+                                        selectsEnd
+                                        startDate={topicStartDate}
+                                        endDate={topicEndDate}
+                                        minDate={topicStartDate ?? undefined}
+                                        placeholderText="End date"
+                                        isClearable
+                                        dateFormat="yyyy-MM-dd"
+                                    />
+                                </div>
+                            </div>
+
+                            <h3>Guided Themes</h3>
+                            <p className="hint">Click a theme to explore related messages</p>
+                            <div className="theme-grid">
+                                {THEME_CATEGORIES.map((category) => (
+                                    <button
+                                        key={category.id}
+                                        className="theme-card"
+                                        onClick={() => handleThemeClick(category.id)}
+                                        disabled={isSearching}
+                                    >
+                                        <span className="theme-icon">{category.icon}</span>
+                                        <span className="theme-label">{category.label}</span>
+                                        <span className="theme-description">{category.description}</span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            <h3>Ad-hoc Search</h3>
+                            <div className="search-section">
+                                <div className="search-input-row">
+                                    <input
+                                        type="text"
+                                        placeholder="Enter keywords (comma-separated)..."
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !isSearching) {
+                                                handleSearch(searchQuery);
+                                            }
+                                        }}
+                                        className="search-input"
+                                    />
+                                    <button
+                                        onClick={() => handleSearch(searchQuery)}
+                                        disabled={isSearching || !searchQuery.trim()}
+                                    >
+                                        {isSearching ? 'Searching...' : 'Search'}
+                                    </button>
+                                </div>
+                                <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <label className="checkbox-option">
+                                        <input
+                                            type="checkbox"
+                                            checked={useSemanticExpansion}
+                                            onChange={(e) => setUseSemanticExpansion(e.target.checked)}
+                                        />
+                                        Use semantic expansion
+                                    </label>
+                                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                                        <span style={{ color: '#9ca3af', fontSize: '0.875rem' }}>Match:</span>
+                                        <label className="radio-option" style={{ fontSize: '0.875rem' }}>
+                                            <input
+                                                type="radio"
+                                                name="searchMode"
+                                                checked={searchMode === 'or'}
+                                                onChange={() => setSearchMode('or')}
+                                            />
+                                            ANY keyword (OR)
+                                        </label>
+                                        <label className="radio-option" style={{ fontSize: '0.875rem' }}>
+                                            <input
+                                                type="radio"
+                                                name="searchMode"
+                                                checked={searchMode === 'and'}
+                                                onChange={() => setSearchMode('and')}
+                                            />
+                                            ALL keywords (AND)
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {searchResults && (
+                        <div className="search-results-section">
+                            <div className="results-header">
+                                <div className="results-info">
+                                    <h3>
+                                        {filteredResults.length === searchResults.totalMatches
+                                            ? `Found ${searchResults.totalMatches} matches`
+                                            : `Showing ${filteredResults.length} of ${searchResults.totalMatches} matches`
+                                        } for "{searchResults.query}"
+                                    </h3>
+                                    {searchResults.expandedTerms.length > 1 && (
+                                        <p className="expanded-terms">
+                                            Expanded terms: {searchResults.expandedTerms.slice(0, 15).join(', ')}
+                                            {searchResults.expandedTerms.length > 15 && ` (+${searchResults.expandedTerms.length - 15} more)`}
+                                        </p>
+                                    )}
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button
+                                        onClick={handleExportResults}
+                                        disabled={filteredResults.length === 0}
+                                        style={{ fontSize: '0.875rem' }}
+                                    >
+                                        Export Results
+                                    </button>
+                                    <button onClick={handleClearResults} className="clear-results-btn">
+                                        Clear results
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                    <label style={{ color: '#9ca3af', fontSize: '0.75rem' }}>Filter by User</label>
+                                    <select
+                                        multiple
+                                        value={filterUsers}
+                                        onChange={(e) => setFilterUsers(Array.from(e.target.selectedOptions, opt => opt.value))}
+                                        style={{ minWidth: '140px', maxHeight: '70px', fontSize: '0.875rem' }}
+                                    >
+                                        {getUniqueUsers(searchResults.results).map(user => (
+                                            <option key={user} value={user}>{user}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                    <label style={{ color: '#9ca3af', fontSize: '0.75rem' }}>Filter by Group</label>
+                                    <select
+                                        multiple
+                                        value={filterGroups}
+                                        onChange={(e) => setFilterGroups(Array.from(e.target.selectedOptions, opt => opt.value))}
+                                        style={{ minWidth: '140px', maxHeight: '70px', fontSize: '0.875rem' }}
+                                    >
+                                        {getUniqueGroups(searchResults.results).map(group => (
+                                            <option key={group} value={group}>{group}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                    <label style={{ color: '#9ca3af', fontSize: '0.75rem' }}>Sort by</label>
+                                    <select
+                                        value={sortBy}
+                                        onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                                        style={{ fontSize: '0.875rem' }}
+                                    >
+                                        <option value="relevance">Relevance</option>
+                                        <option value="date-newest">Date (newest)</option>
+                                        <option value="date-oldest">Date (oldest)</option>
+                                        <option value="group">Group name</option>
+                                        <option value="user">User name</option>
+                                    </select>
+                                </div>
+                                {(filterUsers.length > 0 || filterGroups.length > 0) && (
+                                    <button
+                                        onClick={() => { setFilterUsers([]); setFilterGroups([]); }}
+                                        style={{ fontSize: '0.875rem', alignSelf: 'flex-end' }}
+                                    >
+                                        Clear filters
+                                    </button>
+                                )}
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '600px', overflowY: 'auto' }}>
+                                {filteredResults.slice(0, 50).map((result, idx) => {
+                                    const matchMsg = result.match.message;
+                                    const matchText = typeof matchMsg.text === 'string'
+                                        ? matchMsg.text
+                                        : Array.isArray(matchMsg.text)
+                                            ? matchMsg.text.map((t: unknown) => typeof t === 'string' ? t : (t as {text?: string})?.text || '').join('')
+                                            : '[no text]';
+                                    const author = String(matchMsg.displayName || matchMsg.from || 'Unknown');
+
+                                    return (
+                                        <div key={`${result.match.chatId}-${idx}`} style={{
+                                            background: '#1e293b',
+                                            border: '1px solid #374151',
+                                            borderRadius: '8px',
+                                            padding: '12px',
+                                            marginBottom: '8px'
+                                        }}>
+                                            <div style={{ color: '#60a5fa', fontWeight: 'bold', marginBottom: '4px' }}>
+                                                {result.match.chatName} - {author}
+                                            </div>
+                                            <div style={{ color: '#e2e8f0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                                {matchText.slice(0, 300)}{matchText.length > 300 ? '...' : ''}
+                                            </div>
+                                            <div style={{ color: '#9ca3af', fontSize: '0.75rem', marginTop: '8px' }}>
+                                                Matched: {result.match.matchedTerms.join(', ')} | {result.contextType} context
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+
+                                {filteredResults.length > 50 && (
+                                    <p className="hint" style={{ textAlign: 'center', marginTop: '1rem' }}>
+                                        Showing first 50 of {filteredResults.length} filtered results
+                                    </p>
+                                )}
+
+                                {filteredResults.length === 0 && searchResults.totalMatches > 0 && (
+                                    <p className="hint" style={{ textAlign: 'center', marginTop: '1rem' }}>
+                                        No results match current filters. Try clearing filters.
+                                    </p>
+                                )}
+
+                                {searchResults.totalMatches === 0 && (
+                                    <p className="hint" style={{ textAlign: 'center', marginTop: '1rem' }}>
+                                        No matches found. Try a different query or enable semantic expansion.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+                )}
+
+                {mode !== 'topic' && (
+                <>
+                <div className="dates">
+                    <div className="field">
+                        <label>Start (UTC)</label>
+                        <DatePicker
+                            selected={startDate}
+                            onChange={(date: Date | null) => setStartDate(date)}
+                            showTimeSelect
+                            timeFormat="HH:mm"
+                            timeIntervals={15}
+                            dateFormat="yyyy-MM-dd HH:mm"
+                            placeholderText="Select start date/time"
+                            isClearable
+                        />
+                    </div>
+                    <div className="field">
+                        <label>End (UTC)</label>
+                        <DatePicker
+                            selected={endDate}
+                            onChange={(date: Date | null) => setEndDate(date)}
+                            showTimeSelect
+                            timeFormat="HH:mm"
+                            timeIntervals={15}
+                            dateFormat="yyyy-MM-dd HH:mm"
+                            placeholderText="Select end date/time"
+                            isClearable
+                            minDate={startDate ?? undefined}
+                        />
+                    </div>
+                </div>
+
+                <div className="field">
+                    <label htmlFor="export-file">Telegram export file</label>
+                    <input id="export-file" type="file" accept="application/json" onChange={handleFileSelect} />
+                </div>
+                
+                <button onClick={handleStartScan} disabled={!fileRef || !workerReady}>
+                    {mode === 'user' ? 'Scan for users in date range' : 'Scan for groups in date range'}
+                </button>
+                
+                <p className="status">{progress}</p>
+                
+                {mode === 'user' && availableUsers.length > 0 && (
+                    <>
+                        <div className="field">
+                            <label htmlFor="users">
+                                Users found ({availableUsers.length} users, sorted by message count)
+                            </label>
+                            <select
+                                id="users"
+                                multiple
+                                size={Math.min(15, Math.max(6, availableUsers.length))}
+                                value={selectedUserIds}
+                                onChange={handleUserSelect}
+                            >
+                                {availableUsers.map((user) => (
+                                    <option key={user.userId} value={user.userId}>
+                                        {getUserLabel(user)}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <button onClick={handleFilter}>Filter and download per chat</button>
+                    </>
+                )}
+
+                {mode === 'group' && availableGroups.length > 0 && (
+                    <>
+                        <div className="field">
+                            <label htmlFor="groups">
+                                Groups found ({availableGroups.length} groups, sorted alphabetically)
+                            </label>
+                            <select
+                                id="groups"
+                                multiple
+                                size={Math.min(15, Math.max(6, availableGroups.length))}
+                                value={selectedGroupIds}
+                                onChange={handleGroupSelect}
+                            >
+                                {availableGroups.map((group) => (
+                                    <option key={group.chatId} value={group.chatId}>
+                                        {getGroupLabel(group)}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="selection-summary">
+                                <span className="selection-chip">
+                                    {selectedGroupIds.length} of {availableGroups.length} selected
+                                </span>
+                                {selectedGroupIds.length > 0 && selectedGroupIds.length < availableGroups.length && (
+                                    <button type="button" className="link-button" onClick={() => setSelectedGroupIds(availableGroups.map(g => g.chatId))}>
+                                        Select all
+                                    </button>
+                                )}
+                                {selectedGroupIds.length > 0 && (
+                                    <button type="button" className="link-button" onClick={() => setSelectedGroupIds([])}>
+                                        Clear
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        <button onClick={handleGroupFilter} disabled={selectedGroupIds.length === 0}>
+                            Download {selectedGroupIds.length} selected group{selectedGroupIds.length !== 1 ? 's' : ''}
+                        </button>
+                    </>
+                )}
+                
+                <p className="status">{status}</p>
+                <p className="status">{summary}</p>
+                </>
+                )}
+            </section>
+
+            <section className="tools-section">
+                <h2>Tools</h2>
+                <p className="hint">Optional utilities for managing user mappings. Not required for basic export workflow.</p>
+
+                <details>
+                    <summary>Download / Reset Mapping</summary>
+                    <div className="tool-content">
+                        <p className="hint">Export the current user mapping or reset it to defaults.</p>
+                        <div className="actions">
+                            <button onClick={handleMappingDownload}>Download mapping JSON</button>
+                            <button onClick={handleMappingReset}>Reset mapping to defaults</button>
+                        </div>
+                    </div>
+                </details>
+
+                <details>
+                    <summary>Enrich Mapping from Prior Exports</summary>
+                    <div className="tool-content">
+                        <p className="hint">Upload previously exported chat JSON files to discover new user aliases.</p>
+                        <div className="field">
+                            <label htmlFor="enrich-files">Upload prior chat JSON files</label>
+                            <input
+                                id="enrich-files"
+                                type="file"
+                                accept="application/json"
+                                multiple
+                                onChange={handleEnrichUpload}
+                            />
+                        </div>
+                        <p className="status">{enrichmentSummary}</p>
+                    </div>
+                </details>
+            </section>
+        </div>
+    );
+}
+
+export default App;

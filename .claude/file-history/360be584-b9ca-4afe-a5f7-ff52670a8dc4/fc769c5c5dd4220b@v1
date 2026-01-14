@@ -1,0 +1,131 @@
+# Coding Conventions
+
+**Analysis Date:** 2026-01-13
+
+## Naming Patterns
+
+**Files:**
+- `snake_case.ts` for all modules (`discovery_trending.ts`, `wallet_tracker.ts`)
+- `_template.ts` underscore prefix for templates
+- No distinction between unit/integration in filenames (no tests exist)
+
+**Functions:**
+- camelCase for all functions (`clickhouseQuery`, `validateTradesRequest`)
+- `register*Routes` for endpoint registration functions
+- `validate*Request` for input validation
+- `build*Sql` for SQL query builders
+- `format*Response` for response formatters
+
+**Variables:**
+- camelCase for variables (`const limitParam`, `const result`)
+- UPPER_SNAKE_CASE for constants (`MAX_LIMIT`, `DEFAULT_LIMIT`, `HOUR_IN_NANO`)
+- No underscore prefix for private members
+
+**Types:**
+- PascalCase for all types (`TradesRequest`, `TradeRow`, `ExtensionDefinition`)
+- No `I` prefix for interfaces
+- Discriminated unions for responses (`{ ok: true, ... } | { ok: false, error }`)
+
+## Code Style
+
+**Formatting:**
+- 4-space indentation
+- Double quotes for strings (`"value"`)
+- Semicolons required
+- No Prettier/ESLint config files (conventions inferred from code)
+
+**Linting:**
+- No linting configuration
+- Type checking via `tsc --noEmit` (`bun run typecheck`)
+
+## Import Organization
+
+**Order:**
+1. Type imports (`import type { Elysia }`)
+2. External packages (`import { Elysia } from "elysia"`)
+3. Internal modules (`import { clickhouseQuery } from "../../clickhouse/client"`)
+
+**Grouping:**
+- Single blank line between groups
+- Type imports use `import type` syntax
+
+**Path Aliases:**
+- None configured (relative paths only)
+
+## Error Handling
+
+**Patterns:**
+- Return discriminated union responses: `{ ok: boolean, ... }`
+- ClickHouse client returns `{ success: true, data } | { success: false, error }`
+- No exceptions thrown from endpoints (return error objects)
+
+**Error Types:**
+- Validation errors: `{ ok: false, error: "Invalid mint address" }`
+- ClickHouse errors: `{ ok: false, error: "ClickHouse API error..." }`
+- Return errors rather than throw
+
+## Logging
+
+**Framework:**
+- `console.log()` for normal output
+- `console.error()` for errors
+- No structured logging library
+
+**Patterns:**
+- Log at endpoint entry/exit: `console.log(\`[endpoint] Fetching...\`)`
+- Include context: `console.log(\`[discovery/trending] Returned ${count} tokens\`)`
+
+## Comments
+
+**When to Comment:**
+- Section dividers for code organization
+- Complex SQL algorithms (but currently lacking in some files)
+- JSDoc for exported functions in `clickhouse/client.ts`
+
+**Section Dividers:**
+```typescript
+// =============================================================================
+// Section Name
+// =============================================================================
+```
+
+**Numbered Steps:**
+```typescript
+// 1. Validate inputs
+// 2. Build query
+// 3. Return response
+```
+
+**TODO Comments:**
+- None found in codebase
+
+## Function Design
+
+**Size:**
+- Endpoints range from 135-564 lines per file
+- SQL queries embedded as template literals
+
+**Parameters:**
+- Request objects typed explicitly
+- Query params destructured in handler signature
+
+**Return Values:**
+- Explicit discriminated union types
+- Always include `ok: boolean` field
+- Use `satisfies` for type-safe returns
+
+## Module Design
+
+**Exports:**
+- Named exports only (no default exports)
+- Each endpoint exports: `register*Routes` function
+- Helper exports: `validate*Request`, `build*Sql`, `format*Response`
+
+**Barrel Files:**
+- `src/extensions/catalog/index.ts` exports extension array
+- No barrel files for endpoints (registered directly in server.ts)
+
+---
+
+*Convention analysis: 2026-01-13*
+*Update when patterns change*

@@ -1,0 +1,114 @@
+---
+phase: 16-user-watchlist-integration
+plan: 01
+type: execute
+---
+
+<objective>
+Replace CLI-derived watchlist with user's actual watchlist for autopilot token screening.
+
+Purpose: Autopilot should analyze tokens from the user's watchlist (tokens they've starred in the app) rather than a separate CLI-managed watchlist.
+Output: Autopilot widget watchlist column shows user's watchlist tokens with live price data.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/15-discovery-api-integration/15-01-SUMMARY.md
+
+# Key files:
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts
+@apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+@apps/web-terminal/src/api/watchlist/useGetWatchlist.ts
+
+**Data sources:**
+- User watchlist API: `useGetWatchlist()` → `WatchlistToken[]` with `tokenMint`
+- Current backend watchlist: `state.autopilot.tokenList.watchlist` (to be replaced)
+
+**Target format:**
+```typescript
+interface AutopilotWatchedToken {
+  mint: string;
+  symbol: string;
+  source: "watchlist" | "trending" | "whales";
+}
+```
+
+**Integration point:**
+- `useAutopilotDiscoveryTokens` hook returns `{ watchlist, trending, whales }`
+- Currently watchlist comes from autopilot store, needs to come from user API
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Replace watchlist source in useAutopilotDiscoveryTokens</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts</files>
+  <action>
+Replace autopilot store watchlist with user's watchlist from API:
+
+1. Import `useGetWatchlist` from `@/api/watchlist/useGetWatchlist`
+2. Call `const { data: watchlistData } = useGetWatchlist()`
+3. Remove the autopilot store watchlist selector (no longer needed)
+4. Transform `watchlistData?.watchlistTokens` to `AutopilotWatchedToken[]`:
+   - Flatten all groups: `watchlistData.watchlistTokens.flatMap(g => g.watchlistTokens)`
+   - Map each `WatchlistToken` to `{ mint: t.tokenMint, symbol: '', source: 'watchlist' }`
+   - NOTE: User watchlist doesn't have symbol, only tokenMint. Symbol can be empty or derived later from NATS market data.
+5. Return transformed watchlist in the hook result
+
+AVOID: Don't try to fetch symbols from an API - the NATS market data will populate price info, and we can derive symbol from market_data if needed later.
+  </action>
+  <verify>TypeScript compiles without errors: `cd apps/web-terminal && pnpm exec tsc --noEmit`</verify>
+  <done>useAutopilotDiscoveryTokens returns watchlist from user API instead of autopilot store</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Update NATS subscriptions for user watchlist</name>
+  <files>apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts</files>
+  <action>
+Update NATS market_data subscriptions to use user watchlist:
+
+1. Import `useGetWatchlist` from `@/api/watchlist/useGetWatchlist`
+2. Call `const { data: watchlistData } = useGetWatchlist()`
+3. Replace the autopilot store watchlist selector with user watchlist extraction:
+   - Extract mints: `watchlistData?.watchlistTokens.flatMap(g => g.watchlistTokens.map(t => t.tokenMint)) ?? []`
+4. Update `tokenListMints` useMemo to use the new watchlist mints array instead of `watchlist.forEach(t => mints.add(t.mint))`
+5. Remove unused autopilot store watchlist selector
+
+AVOID: Don't change the NATS subscription logic itself - only change the source of watchlist mints.
+  </action>
+  <verify>
+1. TypeScript compiles: `cd apps/web-terminal && pnpm exec tsc --noEmit`
+2. Build succeeds: `cd apps/web-terminal && pnpm build`
+  </verify>
+  <done>NATS market_data subscriptions include user watchlist mints, build passes</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `pnpm exec tsc --noEmit` passes in apps/web-terminal
+- [ ] `pnpm build` succeeds in apps/web-terminal
+- [ ] No TypeScript errors or warnings
+</verification>
+
+<success_criteria>
+
+- User watchlist tokens appear in Screener → Watchlist column
+- Watchlist tokens receive NATS market_data subscriptions for live price updates
+- No regression in trending/whales data sources
+- Build passes without errors
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/16-user-watchlist-integration/16-01-SUMMARY.md`
+</output>

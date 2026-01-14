@@ -1,0 +1,193 @@
+/// <reference lib="webworker" />
+
+import JSZip from 'jszip';
+import type { EnrichedMessage, IndexedChat, TopicIndex } from './types';
+
+declare const self: DedicatedWorkerGlobalScope;
+
+interface LoadZipRequest {
+    type: 'loadZip';
+    file: File;
+}
+
+type Request = LoadZipRequest;
+
+interface ChatFileData {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    messages: EnrichedMessage[];
+    dateRange?: { start: string | null; end: string | null };
+    selectedUsers?: string[];
+}
+
+const isValidChatFile = (data: unknown): data is ChatFileData => {
+    if (typeof data !== 'object' || data === null) return false;
+    const obj = data as Record<string, unknown>;
+    return (
+        typeof obj.chatId === 'string' &&
+        typeof obj.chatName === 'string' &&
+        Array.isArray(obj.messages)
+    );
+};
+
+const extractParticipants = (messages: EnrichedMessage[]): string[] => {
+    const participants = new Set<string>();
+    for (const msg of messages) {
+        const fromId = msg.from_id ?? msg.actor_id ?? msg.userId;
+        if (typeof fromId === 'string' && fromId.length > 0) {
+            // Strip 'user' prefix if present
+            const normalized = fromId.startsWith('user') ? fromId.slice(4) : fromId;
+            if (normalized.length > 0) {
+                participants.add(normalized);
+            }
+        }
+    }
+    return Array.from(participants);
+};
+
+const extractDateRange = (messages: EnrichedMessage[]): { start: string | null; end: string | null } => {
+    let minDate: string | null = null;
+    let maxDate: string | null = null;
+
+    for (const msg of messages) {
+        const dateStr = msg.date as string | undefined;
+        if (dateStr) {
+            if (!minDate || dateStr < minDate) minDate = dateStr;
+            if (!maxDate || dateStr > maxDate) maxDate = dateStr;
+        }
+    }
+
+    return { start: minDate, end: maxDate };
+};
+
+const loadZipProcess = async (file: File): Promise<void> => {
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'extracting',
+        current: 0,
+        total: 1,
+        message: 'Opening ZIP file...',
+    });
+
+    const zip = new JSZip();
+    const contents = await zip.loadAsync(file);
+
+    // Find all JSON files in the ZIP
+    const jsonFiles: string[] = [];
+    contents.forEach((relativePath, zipEntry) => {
+        if (!zipEntry.dir && relativePath.endsWith('.json')) {
+            jsonFiles.push(relativePath);
+        }
+    });
+
+    if (jsonFiles.length === 0) {
+        self.postMessage({
+            type: 'topicProgress',
+            phase: 'ready',
+            current: 0,
+            total: 0,
+            message: 'No JSON files found in ZIP',
+        });
+        return;
+    }
+
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'extracting',
+        current: 0,
+        total: jsonFiles.length,
+        message: `Found ${jsonFiles.length} JSON files, extracting...`,
+    });
+
+    const indexedChats: IndexedChat[] = [];
+    let totalMessages = 0;
+
+    for (let i = 0; i < jsonFiles.length; i++) {
+        const fileName = jsonFiles[i];
+        self.postMessage({
+            type: 'topicProgress',
+            phase: 'indexing',
+            current: i + 1,
+            total: jsonFiles.length,
+            message: `Indexing ${i + 1}/${jsonFiles.length}: ${fileName}`,
+        });
+
+        try {
+            const zipEntry = contents.file(fileName);
+            if (!zipEntry) continue;
+
+            const content = await zipEntry.async('string');
+            const data = JSON.parse(content) as unknown;
+
+            if (!isValidChatFile(data)) {
+                console.warn(`Skipping invalid chat file: ${fileName}`);
+                continue;
+            }
+
+            const participants = extractParticipants(data.messages);
+            const dateRange = data.dateRange ?? extractDateRange(data.messages);
+
+            const indexed: IndexedChat = {
+                chatId: data.chatId,
+                chatName: data.chatName,
+                chatType: data.chatType,
+                messageCount: data.messages.length,
+                dateRange,
+                participants,
+                messages: data.messages,
+            };
+
+            indexedChats.push(indexed);
+            totalMessages += data.messages.length;
+        } catch (err) {
+            console.warn(`Failed to parse ${fileName}:`, err);
+        }
+    }
+
+    const index: TopicIndex = {
+        chats: indexedChats,
+        totalMessages,
+        loadedAt: new Date().toISOString(),
+    };
+
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'ready',
+        current: jsonFiles.length,
+        total: jsonFiles.length,
+        message: `Indexed ${indexedChats.length} chats with ${totalMessages.toLocaleString()} messages`,
+    });
+
+    self.postMessage({
+        type: 'topicIndexResult',
+        index,
+    });
+};
+
+self.onerror = (event: ErrorEvent) => {
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'ready',
+        current: 0,
+        total: 0,
+        message: `Worker error: ${event.message}`,
+    });
+};
+
+self.onmessage = (event: MessageEvent<Request>) => {
+    const payload = event.data;
+    if (payload.type === 'loadZip') {
+        loadZipProcess(payload.file).catch((error: Error) => {
+            self.postMessage({
+                type: 'topicProgress',
+                phase: 'ready',
+                current: 0,
+                total: 0,
+                message: `Error: ${error.message}`,
+            });
+        });
+    }
+};
+
+self.postMessage({ type: 'topicWorkerReady' });

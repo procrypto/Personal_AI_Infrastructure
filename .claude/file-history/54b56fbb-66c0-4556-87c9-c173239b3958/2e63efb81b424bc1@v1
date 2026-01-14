@@ -1,0 +1,109 @@
+# TrenchBench API
+
+**One-liner:** Production-ready ClickHouse-backed API service for Community Tracker and TrenchBench.
+
+## Vision
+
+Transform the existing local-api development tool into a production-grade service that can run locally for development, on beta for testing, and in production for Paul and Neil to be self-sufficient with custom TrenchBench queries and endpoints.
+
+## Context
+
+**Origin:** Built as a local development tool to mirror production ClickHouse endpoints. The team (Arthur, Karol) identified it could serve as a cloud service following the ferris-the-sentinel deployment pattern.
+
+**Stakeholders:**
+- Neil - Primary developer, endpoint creator
+- Paul - End user, Community Tracker work
+- Arthur - Infrastructure, GCP IAM setup
+- Karol - Beta/prod deployment pipeline
+
+**Target Repo Name:** `trenchbench-api` (rename from `local-api`)
+
+## Requirements
+
+### Validated
+
+- ✓ HTTP API server with Elysia/Bun — existing
+- ✓ ClickHouse Cloud API integration — existing
+- ✓ 15+ endpoint modules (trades, search, discovery, trending, etc.) — existing
+- ✓ Pluggable extension system — existing
+- ✓ Environment-based configuration — existing
+- ✓ Validation/Build/Format endpoint pattern — existing
+- ✓ SQL injection prevention (escapeString, buildInList) — existing
+- ✓ Environment-aware configuration (local/remote modes) — v1.0
+- ✓ Different ClickHouse endpoints per environment — v1.0
+- ✓ GCP Cloud Run deployment following ferris-the-sentinel pattern — v1.0
+- ✓ GitHub Actions CI/CD (beta on `main`, prod on `v*` tags) — v1.0
+- ✓ Multi-stage Dockerfile for Bun/TypeScript — v1.0
+- ✓ Secret management via GCP Secret Manager — v1.0
+- ✓ Workload Identity Federation authentication — v1.0
+- ✓ Clean TypeScript compilation (0 errors) — v1.1
+- ✓ CI hardening (HEALTHCHECK, Buildx caching, resource limits) — v1.1
+- ✓ Complete workflow secrets configuration — v1.1
+
+### Active
+
+- [ ] Repository renamed to `trenchbench-api` (pending Karol)
+- [ ] First successful deployment to beta
+- [ ] First successful deployment to prod
+
+### Out of Scope
+
+- Auth/rate limiting — handled by infra team separately
+- New endpoints — focus on deployment, not new features
+- Monitoring/observability infrastructure — defer to later milestone
+
+## Key Decisions
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Follow ferris-the-sentinel pattern | Team familiarity, proven GCP integration, minimal human setup | — Pending |
+| Different ClickHouse endpoints per env | Beta and prod have separate ClickHouse instances | — Pending |
+| Rename to trenchbench-api | Per Karol: "local api could mean anything" | — Pending |
+| Keep Bun/Elysia stack | Already working, Bun has native Dockerfile support | — Pending |
+
+## Constraints
+
+**Technical:**
+- Must maintain local development workflow (zero disruption)
+- Must use existing stack (Bun/Elysia) - no framework changes
+- GCP Cloud Run deployment (team standard)
+
+**Dependencies:**
+- Arthur: Add repo to GCP IAM list
+- Karol: Structured beta/prod deploy path (in progress)
+
+## Deployment Architecture
+
+**Target Pattern (from ferris-the-sentinel):**
+
+| Environment | Trigger | GCP Project | ClickHouse |
+|-------------|---------|-------------|------------|
+| Local | `bun dev` | N/A | Dev credentials |
+| Beta | Push to `main` | bonkbotbeta | Beta instance |
+| Production | Push `v*` tag | data-backend-prod | Prod instance |
+
+**Infrastructure:**
+- Container: GCP Artifact Registry
+- Runtime: GCP Cloud Run (4Gi RAM, 2 CPU, 1-3 instances)
+- Auth: Workload Identity Federation (no service account keys)
+- Secrets: GCP Secret Manager (ClickHouse credentials)
+- Network: VPC egress for internal services
+
+**Files to Create:**
+- `.github/workflows/deploy.yml` — Beta deployment
+- `.github/workflows/deploy-prod.yml` — Production deployment
+- `Dockerfile` — Multi-stage Bun build
+- `.dockerignore` — Build exclusions
+- `.env.example` — Environment template update
+
+## Success Criteria
+
+**v1 Complete When:**
+- [ ] Can switch between local/beta/prod with config only (no code changes)
+- [ ] Successfully deployed to GCP beta environment
+- [ ] Local development workflow unchanged
+- [ ] CI/CD pipelines working (main → beta, v* → prod)
+
+---
+
+*Last updated: 2026-01-13 after initialization*

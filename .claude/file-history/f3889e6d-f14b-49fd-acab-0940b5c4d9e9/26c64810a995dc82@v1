@@ -1,0 +1,53 @@
+import type { Elysia } from "elysia";
+import { extensions } from "./catalog";
+
+type LabsMeta = {
+    id: string;
+    method: "GET" | "POST";
+    path: string;
+    rationale: string;
+    limits?: Record<string, unknown>;
+};
+
+type RegistryWarning = {
+    extension_id: string;
+    ext_path: string;
+    warning: string;
+};
+
+const labs: LabsMeta[] = [
+    {
+        id: "LAB_WALLET_TRADES_SNAPSHOT",
+        method: "POST",
+        path: "/local-api/labs/wallet_trades_snapshot",
+        rationale: "Bounded historical trades for explicit wallet lists (local-only labs endpoint).",
+        limits: {
+            max_traders: 100,
+            max_lookback_days: 7,
+            max_limit_total: 5000,
+            max_limit_per_trader: 500,
+        },
+    },
+];
+
+export const registerExtensionRegistry = (app: Elysia) => {
+    app.get("/local-api/ext/registry", () => {
+        const metadata = extensions.map(ext => ext.metadata);
+
+        const warnings: RegistryWarning[] = metadata
+            .filter(meta => meta.cost_tier === "extra_query")
+            .map(meta => ({
+                extension_id: meta.extension_id,
+                ext_path: meta.ext_path,
+                warning: meta.cost_warning ?? "Marked as extra_query",
+            }));
+
+        return {
+            ok: true,
+            extensions: metadata,
+            labs,
+            warnings,
+        };
+    });
+};
+

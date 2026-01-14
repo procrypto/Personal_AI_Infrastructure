@@ -1,0 +1,162 @@
+/**
+ * Linear Integration Types
+ *
+ * TypeScript types for Linear webhook payloads and API responses.
+ * Uses union types (not enums) per project convention for JSON compatibility.
+ *
+ * Reference: https://linear.app/developers/webhooks
+ */
+
+// ============================================================================
+// Webhook Action & Resource Types (Union types per 01-01 decision)
+// ============================================================================
+
+/** Linear webhook action types */
+export type LinearWebhookAction = 'create' | 'update' | 'remove';
+
+/** Linear webhook resource types */
+export type LinearResourceType =
+  | 'Issue'
+  | 'Comment'
+  | 'Project'
+  | 'Cycle'
+  | 'IssueLabel'
+  | 'Reaction';
+
+// ============================================================================
+// Webhook Payload Interfaces
+// ============================================================================
+
+/**
+ * Actor information from webhook payload.
+ * Represents the user or application that triggered the event.
+ */
+export interface LinearWebhookActor {
+  /** Linear user/application ID */
+  id: string;
+  /** Actor type: user or application */
+  type: 'user' | 'application';
+  /** Display name */
+  name: string;
+  /** Email address (only for user type) */
+  email?: string;
+}
+
+/**
+ * Main Linear webhook payload structure.
+ * All webhook events follow this shape.
+ */
+export interface LinearWebhookPayload {
+  /** Action that triggered the webhook */
+  action: LinearWebhookAction;
+  /** Resource type that was affected */
+  type: LinearResourceType;
+  /** Unique webhook delivery ID */
+  webhookId: string;
+  /** Timestamp of webhook creation (Unix epoch ms) - used for signature verification */
+  webhookTimestamp: number;
+  /** ISO timestamp when the event occurred */
+  createdAt: string;
+  /** Linear organization ID */
+  organizationId: string;
+  /** URL to the resource in Linear (optional) */
+  url?: string;
+  /** Who/what triggered the event */
+  actor?: LinearWebhookActor;
+  /** The resource data - shape depends on 'type' field */
+  data: Record<string, unknown>;
+  /** Previous values for changed fields (only on 'update' action) */
+  updatedFrom?: Record<string, unknown>;
+}
+
+/**
+ * Issue data from webhook payload.
+ * Note: Contains IDs only (teamId, assigneeId), not full objects.
+ * Query Linear API if you need related data.
+ */
+export interface IssueWebhookData {
+  /** Issue unique ID */
+  id: string;
+  /** Issue number (human-readable) */
+  number: number;
+  /** Issue title */
+  title: string;
+  /** Priority level (0 = no priority, 1 = urgent, 2 = high, 3 = normal, 4 = low) */
+  priority: number;
+  /** Current state ID (reference to workflow state) */
+  stateId: string;
+  /** Assigned user ID (optional) */
+  assigneeId?: string;
+  /** Team ID */
+  teamId: string;
+  /** Array of label IDs */
+  labelIds: string[];
+  /** Issue description (optional) */
+  description?: string;
+  /** Issue identifier (e.g., "ENG-123") */
+  identifier?: string;
+  /** Project ID (optional) */
+  projectId?: string;
+  /** Cycle ID (optional) */
+  cycleId?: string;
+  /** Creator user ID */
+  creatorId?: string;
+  /** ISO timestamp of creation */
+  createdAt?: string;
+  /** ISO timestamp of last update */
+  updatedAt?: string;
+}
+
+// ============================================================================
+// Type Guards
+// ============================================================================
+
+/**
+ * Type guard to check if webhook payload is for an Issue
+ */
+export function isIssueWebhook(
+  payload: LinearWebhookPayload
+): payload is LinearWebhookPayload & { data: IssueWebhookData } {
+  return payload.type === 'Issue';
+}
+
+/**
+ * Type guard to check if an object is a LinearWebhookPayload
+ */
+export function isLinearWebhookPayload(obj: unknown): obj is LinearWebhookPayload {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'action' in obj &&
+    'type' in obj &&
+    'webhookId' in obj &&
+    'webhookTimestamp' in obj &&
+    'data' in obj
+  );
+}
+
+// ============================================================================
+// Priority Mapping Helpers
+// ============================================================================
+
+/**
+ * Map Linear priority number to our TicketPriority type.
+ * Linear uses 0-4 (0 = none, 1 = urgent, 4 = low)
+ * We use string unions: urgent, high, normal, low
+ */
+export function mapLinearPriority(
+  linearPriority: number
+): 'urgent' | 'high' | 'normal' | 'low' {
+  switch (linearPriority) {
+    case 1:
+      return 'urgent';
+    case 2:
+      return 'high';
+    case 3:
+      return 'normal';
+    case 4:
+    case 0:
+    default:
+      return 'low';
+  }
+}

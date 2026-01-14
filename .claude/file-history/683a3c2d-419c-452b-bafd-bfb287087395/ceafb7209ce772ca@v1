@@ -1,0 +1,175 @@
+---
+phase: 09-ci-hardening
+plan: 01
+type: execute
+---
+
+<objective>
+Improve CI/CD reliability with Dockerfile health checks, build caching, and Cloud Run resource configuration.
+
+Purpose: Ensure deployments are verified, builds are faster via caching, and Cloud Run has appropriate resource limits.
+Output: Updated Dockerfile with HEALTHCHECK and workflows with Buildx caching, resource flags, and health verification.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context (CI/CD setup):
+@.planning/phases/03-ci-cd-pipeline/03-01-SUMMARY.md
+@.planning/phases/03-ci-cd-pipeline/03-02-SUMMARY.md
+
+# Source files to modify:
+@Dockerfile
+@.github/workflows/deploy.yml
+@.github/workflows/deploy-prod.yml
+
+**Tech stack available:** github-actions, google-github-actions/auth@v2, google-github-actions/deploy-cloudrun@v2
+**Established patterns:** WIF auth, commit-sha-tagging, secret-manager-injection
+**Health endpoint:** `/health` already exists in src/server.ts (returns `{ ok: true }`)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add Dockerfile HEALTHCHECK instruction</name>
+  <files>Dockerfile</files>
+  <action>Add HEALTHCHECK instruction to runtime stage. Use curl to check /health endpoint. Configure:
+- --interval=30s (check every 30 seconds)
+- --timeout=5s (fail if no response in 5s)
+- --start-period=10s (wait 10s before first check for container startup)
+- --retries=3 (mark unhealthy after 3 consecutive failures)
+
+Note: oven/bun:1-slim doesn't include curl. Use bun's fetch instead with a script, or install curl. Prefer installing curl with apt-get for simplicity.
+
+Add before USER bun line:
+```dockerfile
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
+# Health check for container orchestrators
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+```
+</action>
+  <verify>docker build -t test-health . && docker run --rm -d --name test-health-container test-health && sleep 12 && docker inspect --format='{{.State.Health.Status}}' test-health-container && docker stop test-health-container</verify>
+  <done>Dockerfile builds successfully with HEALTHCHECK instruction. Container reports healthy status after start-period.</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Update workflows with Buildx caching, Cloud Run resources, and health verification</name>
+  <files>.github/workflows/deploy.yml, .github/workflows/deploy-prod.yml</files>
+  <action>Update both workflow files with identical improvements:
+
+1. **Add Docker Buildx setup** after checkout step:
+```yaml
+- name: Set up Docker Buildx
+  uses: docker/setup-buildx-action@v3
+```
+
+2. **Replace docker build/push with buildx** using GitHub Actions cache:
+```yaml
+- name: Build and push container image
+  uses: docker/build-push-action@v6
+  with:
+    context: .
+    push: true
+    tags: |
+      ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}
+      ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:latest
+    cache-from: type=gha
+    cache-to: type=gha,mode=max
+```
+
+Note: For deploy-prod.yml, include the version tag as well.
+
+3. **Add Cloud Run resource flags** to deploy-cloudrun action:
+```yaml
+flags: |
+  --memory=512Mi
+  --cpu=1
+  --min-instances=0
+  --max-instances=10
+```
+
+4. **Add health check verification step** after deployment:
+```yaml
+- name: Verify deployment health
+  run: |
+    echo "Waiting for deployment to stabilize..."
+    sleep 15
+    HEALTH_URL="${{ steps.deploy.outputs.url }}/health"
+    echo "Checking health at $HEALTH_URL"
+    curl -sf "$HEALTH_URL" | grep -q '"ok":true' && echo "Health check passed" || (echo "Health check failed" && exit 1)
+```
+
+Order of changes:
+- After checkout: Add setup-buildx
+- Replace "Build container image" + "Push container image" steps with single "Build and push container image" step using docker/build-push-action
+- In deploy-cloudrun: Add flags parameter
+- After "Show deployment URL/info": Add "Verify deployment health" step
+</action>
+  <verify>cd .github/workflows && cat deploy.yml deploy-prod.yml | grep -E "(setup-buildx|build-push-action|cache-from|flags:|Verify deployment health)" | wc -l</verify>
+  <done>Both workflows have: setup-buildx action, build-push-action with GHA cache, Cloud Run resource flags, health verification step. Grep finds 10+ matches (5 per workflow).</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `docker build .` succeeds with HEALTHCHECK in output
+- [ ] Both workflows have setup-buildx-action@v3
+- [ ] Both workflows use docker/build-push-action@v6 with cache-from/cache-to
+- [ ] Both workflows have Cloud Run resource flags (memory, cpu, instances)
+- [ ] Both workflows have post-deploy health verification step
+- [ ] No syntax errors in workflow files (yamllint or actionlint if available)
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- Dockerfile has HEALTHCHECK instruction
+- Workflows use Buildx with GHA caching (faster subsequent builds)
+- Cloud Run deployments have explicit resource limits
+- Post-deploy health check catches failed deployments
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/09-ci-hardening/09-01-SUMMARY.md`:
+
+# Phase 9 Plan 1: CI Hardening Summary
+
+**[Substantive one-liner about what was accomplished]**
+
+## Accomplishments
+
+- Added Dockerfile HEALTHCHECK instruction
+- Implemented Docker Buildx with GitHub Actions cache
+- Configured Cloud Run resource limits (512Mi memory, 1 CPU, 0-10 instances)
+- Added post-deploy health verification step
+
+## Files Created/Modified
+
+- `Dockerfile` - Added curl install and HEALTHCHECK instruction
+- `.github/workflows/deploy.yml` - Added Buildx, caching, resources, health check
+- `.github/workflows/deploy-prod.yml` - Same improvements as beta
+
+## Decisions Made
+
+[Key decisions and rationale, or "None"]
+
+## Issues Encountered
+
+[Problems and resolutions, or "None"]
+
+## Next Step
+
+Phase complete, ready for Phase 10: Workflow Secrets
+</output>

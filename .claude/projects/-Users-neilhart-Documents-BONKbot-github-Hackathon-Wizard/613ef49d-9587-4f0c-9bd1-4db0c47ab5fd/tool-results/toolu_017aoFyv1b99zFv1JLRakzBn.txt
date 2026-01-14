@@ -1,0 +1,219 @@
+     1→/**
+     2→ * Auto Source Manager
+     3→ *
+     4→ * Manages automatic token sources from discovery endpoints.
+     5→ * Refreshes trending and whale_moves lists on a configurable interval (default 15m).
+     6→ * Tokens from these sources are analyzed alongside the manual watchlist.
+     7→ */
+     8→
+     9→import type { AutoSourceConfig, SourcedToken, TokenSource } from '../config/types.js';
+    10→import type { ApiClient } from '../api/client.js';
+    11→
+    12→export interface AutoSourceToken {
+    13→  mint: string;
+    14→  symbol: string;
+    15→  source: TokenSource;
+    16→  metadata?: {
+    17→    // Trending metadata
+    18→    rank?: number;
+    19→    volumeUsd?: number;
+    20→    // Whale metadata
+    21→    whaleCount?: number;
+    22→    tradeCount?: number;
+    23→    marketCapUsd?: number;
+    24→  };
+    25→}
+    26→
+    27→export class AutoSourceManager {
+    28→  private trendingTokens: AutoSourceToken[] = [];
+    29→  private whaleTokens: AutoSourceToken[] = [];
+    30→  private lastRefresh: number = 0;
+    31→  private refreshPromise: Promise<void> | null = null;
+    32→
+    33→  constructor(
+    34→    private api: ApiClient,
+    35→    private config: AutoSourceConfig
+    36→  ) {}
+    37→
+    38→  updateConfig(config: AutoSourceConfig): void {
+    39→    this.config = config;
+    40→  }
+    41→
+    42→  /**
+    43→   * Check if refresh is needed and perform if so
+    44→   */
+    45→  async refreshIfNeeded(): Promise<void> {
+    46→    if (!this.config.enabled) return;
+    47→
+    48→    const now = Date.now();
+    49→    const elapsed = now - this.lastRefresh;
+    50→
+    51→    if (elapsed >= this.config.refreshIntervalMs || this.lastRefresh === 0) {
+    52→      await this.refresh();
+    53→    }
+    54→  }
+    55→
+    56→  /**
+    57→   * Force refresh of all enabled sources
+    58→   */
+    59→  async refresh(): Promise<void> {
+    60→    // Prevent concurrent refreshes
+    61→    if (this.refreshPromise) {
+    62→      return this.refreshPromise;
+    63→    }
+    64→
+    65→    this.refreshPromise = this._doRefresh();
+    66→    try {
+    67→      await this.refreshPromise;
+    68→    } finally {
+    69→      this.refreshPromise = null;
+    70→    }
+    71→  }
+    72→
+    73→  private async _doRefresh(): Promise<void> {
+    74→    const promises: Promise<void>[] = [];
+    75→
+    76→    if (this.config.trending) {
+    77→      promises.push(this.refreshTrending());
+    78→    }
+    79→
+    80→    if (this.config.whales) {
+    81→      promises.push(this.refreshWhales());
+    82→    }
+    83→
+    84→    await Promise.allSettled(promises);
+    85→    this.lastRefresh = Date.now();
+    86→  }
+    87→
+    88→  private async refreshTrending(): Promise<void> {
+    89→    try {
+    90→      const trending = await this.api.getTrending(this.config.trendingLimit);
+    91→
+    92→      this.trendingTokens = trending
+    93→        .filter(item => item.mint && item.market_data)
+    94→        .map((item, index) => ({
+    95→          mint: item.mint,
+    96→          symbol: item.market_data?.symbol || item.mint.slice(0, 6),
+    97→          source: 'trending' as TokenSource,
+    98→          metadata: {
+    99→            rank: index + 1,
+   100→            volumeUsd: item.trending_data.volume_usd_1h,
+   101→          },
+   102→        }));
+   103→
+   104→      // TODO: Add spam filtering here when expanding to broader sources
+   105→    } catch (error) {
+   106→      // Silently fail - trending might not be available on all API endpoints
+   107→      // Keep existing tokens on failure
+   108→    }
+   109→  }
+   110→
+   111→  private async refreshWhales(): Promise<void> {
+   112→    try {
+   113→      const whales = await this.api.getWhaleMoves();
+   114→
+   115→      this.whaleTokens = whales
+   116→        .slice(0, this.config.whalesLimit)
+   117→        .map(item => ({
+   118→          mint: item.mint,
+   119→          symbol: item.token_symbol || item.mint.slice(0, 6),
+   120→          source: 'whales' as TokenSource,
+   121→          metadata: {
+   122→            whaleCount: parseInt(item.whales_1h) || 0,
+   123→            tradeCount: parseInt(item.trades_1h) || 0,
+   124→            marketCapUsd: item.current_market_cap_usd,
+   125→          },
+   126→        }));
+   127→
+   128→      // TODO: Add spam filtering here when expanding to broader sources
+   129→    } catch (error) {
+   130→      // Silently fail - keep existing tokens on failure
+   131→    }
+   132→  }
+   133→
+   134→  /**
+   135→   * Get all tokens from auto-sources (deduplicated)
+   136→   */
+   137→  getTokens(): AutoSourceToken[] {
+   138→    if (!this.config.enabled) return [];
+   139→
+   140→    const seen = new Set<string>();
+   141→    const tokens: AutoSourceToken[] = [];
+   142→
+   143→    // Add trending first (higher priority)
+   144→    if (this.config.trending) {
+   145→      for (const token of this.trendingTokens) {
+   146→        if (!seen.has(token.mint)) {
+   147→          seen.add(token.mint);
+   148→          tokens.push(token);
+   149→        }
+   150→      }
+   151→    }
+   152→
+   153→    // Add whale tokens
+   154→    if (this.config.whales) {
+   155→      for (const token of this.whaleTokens) {
+   156→        if (!seen.has(token.mint)) {
+   157→          seen.add(token.mint);
+   158→          tokens.push(token);
+   159→        }
+   160→      }
+   161→    }
+   162→
+   163→    return tokens;
+   164→  }
+   165→
+   166→  /**
+   167→   * Get tokens as SourcedToken format (for merging with watchlist)
+   168→   */
+   169→  getSourcedTokens(): SourcedToken[] {
+   170→    return this.getTokens().map(t => ({
+   171→      mint: t.mint,
+   172→      symbol: t.symbol,
+   173→      source: t.source,
+   174→    }));
+   175→  }
+   176→
+   177→  /**
+   178→   * Get count of tokens per source
+   179→   */
+   180→  getCounts(): { trending: number; whales: number; total: number } {
+   181→    const tokens = this.getTokens();
+   182→    return {
+   183→      trending: this.config.trending ? this.trendingTokens.length : 0,
+   184→      whales: this.config.whales ? this.whaleTokens.length : 0,
+   185→      total: tokens.length,
+   186→    };
+   187→  }
+   188→
+   189→  /**
+   190→   * Get time since last refresh
+   191→   */
+   192→  getTimeSinceRefresh(): number {
+   193→    return Date.now() - this.lastRefresh;
+   194→  }
+   195→
+   196→  /**
+   197→   * Check if a mint is from auto-sources
+   198→   */
+   199→  getSourceForMint(mint: string): TokenSource | null {
+   200→    // Check trending first
+   201→    if (this.trendingTokens.some(t => t.mint === mint)) {
+   202→      return 'trending';
+   203→    }
+   204→    if (this.whaleTokens.some(t => t.mint === mint)) {
+   205→      return 'whales';
+   206→    }
+   207→    return null;
+   208→  }
+   209→}
+   210→
+   211→// Factory function
+   212→export function createAutoSourceManager(api: ApiClient, config: AutoSourceConfig): AutoSourceManager {
+   213→  return new AutoSourceManager(api, config);
+   214→}
+   215→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

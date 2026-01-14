@@ -256,7 +256,7 @@ CRITICAL REQUIREMENTS:
 - Professional deliverable quality (client-ready)
 - Recipe card proportions (vertical card layout)
 
-Sign "{{{assistantName}}}" small in bottom right corner in charcoal (#2D2D2D).
+Sign "Phantom" small in bottom right corner in charcoal (#2D2D2D).
 ```
 
 ---

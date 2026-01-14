@@ -1,0 +1,164 @@
+# Architecture
+
+**Analysis Date:** 2025-01-07
+
+## Pattern Overview
+
+**Overall:** Modular Multi-System Test Orchestrator
+
+**Key Characteristics:**
+- Centralized orchestration with hub-and-spoke pattern
+- Independent system modules with no inter-dependencies
+- Shared core layer for common functionality
+- File-based configuration with environment layering
+
+## Layers
+
+**Orchestration Layer:**
+- Purpose: Coordinate test execution across systems
+- Contains: Master orchestrator, system runners
+- Location: `src/run-all.ts`, `src/systems/*/run.ts`
+- Depends on: Core layer for utilities and reporting
+- Used by: CLI entry point, npm scripts
+
+**Test Execution Layer:**
+- Purpose: Individual test implementations
+- Contains: Test functions organized by feature area
+- Location: `src/systems/*/scripts/*.ts`
+- Depends on: Core utilities, configuration
+- Used by: System runners
+
+**Core Utilities Layer:**
+- Purpose: Shared infrastructure for all systems
+- Contains: Types, config loader, test utilities, reporter
+- Location: `src/core/*.ts`
+- Depends on: Node.js built-ins, dotenv
+- Used by: All system modules
+
+**Configuration Layer:**
+- Purpose: Environment and system-specific settings
+- Contains: .env files for different environments and systems
+- Location: `config/environments/`, `config/systems/`
+- Depends on: Nothing (static files)
+- Used by: Config loader in core layer
+
+## Data Flow
+
+**Test Execution Flow:**
+
+1. User runs `npm test` or system-specific script
+2. Orchestrator loads (`src/run-all.ts` or `src/systems/*/run.ts`)
+3. Config loader reads environment files (`src/core/config.ts`)
+4. System runner executes test suites sequentially
+5. Each test script runs via `runTest()` utility
+6. Tests make HTTP/WebSocket requests to target systems
+7. Results aggregated into `TestSuiteResult`
+8. All suites aggregated into `SmokeTestReport`
+9. Report formatted and output via reporter layer
+10. GitHub Actions output written if in CI
+11. Process exits with code 0 (pass) or 1 (fail)
+
+**Configuration Load Flow:**
+
+1. `loadWebApiConfig(env)` called
+2. `loadEnvFiles()` reads environment file (`config/environments/{env}.env`)
+3. System-specific file merged (`config/systems/web-api.env`)
+4. Local overrides applied (`config/.env.local`)
+5. Required fields validated
+6. Typed config object returned
+
+**State Management:**
+- Stateless - each test run is independent
+- No persistent state between runs
+- Results captured in memory, output at end
+
+## Key Abstractions
+
+**TestResult:**
+- Purpose: Single test execution outcome
+- Examples: Health check result, auth test result
+- Pattern: Immutable data object with status, duration, error
+- Location: `src/core/types.ts`
+
+**TestSuiteResult:**
+- Purpose: Aggregated results for a test suite
+- Examples: Health suite (4 tests), Auth suite (3 tests)
+- Pattern: Collection with computed statistics
+- Location: `src/core/types.ts`
+
+**SystemConfig:**
+- Purpose: Configuration for a specific system
+- Examples: `WebApiConfig`, `TelegramConfig`, `PUM3Config`
+- Pattern: Union type of all system configs
+- Location: `src/core/types.ts`
+
+**runTest():**
+- Purpose: Execute a single test with timing and error handling
+- Examples: `runTest('A-HEALTH-01', 'Health Endpoint', async () => { ... })`
+- Pattern: Higher-order function wrapping test execution
+- Location: `src/core/utils.ts`
+
+## Entry Points
+
+**CLI Entry:**
+- Location: `bin/qa-tools` → `dist/run-all.js` (via `package.json`)
+- Triggers: User runs `npx qa-tools` or `npm test`
+- Responsibilities: Initialize orchestrator, process args
+
+**Master Orchestrator:**
+- Location: `src/run-all.ts`
+- Triggers: npm test script, CLI invocation
+- Responsibilities: Load all systems, run sequentially, aggregate reports
+
+**System Runners:**
+- Location: `src/systems/*/run.ts`
+- Triggers: Master orchestrator or direct npm script
+- Responsibilities: Load system config, run system test suites
+
+**Individual Test Scripts:**
+- Location: `src/systems/*/scripts/*.ts`
+- Triggers: System runner imports and executes
+- Responsibilities: Execute specific test functions, return results
+
+## Error Handling
+
+**Strategy:** Throw exceptions, catch at test boundary, report in results
+
+**Patterns:**
+- Tests throw `Error` on assertion failure
+- `runTest()` catches all errors and converts to `TestResult`
+- Assertion functions throw with descriptive messages
+- Process exits with code 1 if any tests fail
+
+**Error Types:**
+- Assertion errors: "Expected X, got Y"
+- Configuration errors: "Required env var X not set"
+- Network errors: Timeout, connection refused
+- Parse errors: Invalid JSON response
+
+## Cross-Cutting Concerns
+
+**Logging:**
+- Console output with colored formatting
+- Multiple output formats: console, JSON, GitHub markdown
+- Location: `src/core/reporter.ts`
+
+**Validation:**
+- Config validation at load time (`src/core/config.ts`)
+- Response validation via assertion functions (`src/core/utils.ts`)
+- Type safety via TypeScript strict mode
+
+**Timeout Handling:**
+- HTTP timeout via AbortController (`src/core/utils.ts`)
+- WebSocket timeout via setTimeout (`src/systems/web-api/scripts/websocket-check.ts`)
+- Configurable per-system timeout values
+
+**Test ID Convention:**
+- Format: `{SYSTEM}-{SUITE}-{NUMBER}`
+- Examples: `A-HEALTH-01`, `A-AUTH-02`, `A-TG-HEALTH-01`
+- Enables filtering and tracking across systems
+
+---
+
+*Architecture analysis: 2025-01-07*
+*Update when major patterns change*

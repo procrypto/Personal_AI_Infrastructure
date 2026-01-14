@@ -1,0 +1,71 @@
+import { PVP_API_URL, SENTINEL_SOCKET_IO_URL, IS_LOCAL_ENV } from "@/config";
+import { getDataAccessToken } from "@/utils/auth-tokens";
+import {
+  SocketIOManager,
+  type SocketIOManagerOptions,
+} from "./SocketIOManager";
+import { SocketIOWorkerClient } from "./worker/SocketIOWorkerClient";
+import { isSharedWorkerSupported } from "./worker/SocketIOWorkerManager";
+
+// Use shared worker if supported, otherwise fall back to direct connection
+const isBrowser = typeof window !== "undefined";
+const useSharedWorker = isBrowser && isSharedWorkerSupported();
+
+/**
+ * Create a new Socket.IO manager instance
+ * @param options.url - WebSocket URL (required, unless local env)
+ * @param options.getToken - Token getter function, called at connect time for fresh token
+ * @returns SocketIOManager or SocketIOWorkerClient depending on browser support, or null if URL not configured
+ *
+ * @example
+ * const manager = createSocketIOManager({
+ *   url: SOCKET_IO_URL,
+ *   getToken: () => getDataAccessToken() ?? undefined,
+ * });
+ */
+export function createSocketIOManager(
+  options: SocketIOManagerOptions
+): SocketIOManager | SocketIOWorkerClient | null {
+  // Skip creation if URL is not configured (local dev without SocketIO)
+  if (!options.url) {
+    if (IS_LOCAL_ENV) {
+      console.warn("[SocketIO] URL not configured, skipping initialization");
+    }
+    return null;
+  }
+  if (useSharedWorker) {
+    return new SocketIOWorkerClient(options);
+  }
+  return new SocketIOManager(options);
+}
+
+// Default singleton instance
+// Uses getToken to fetch fresh token at connect time (supports token refresh)
+export const socketIOManager: SocketIOManager | SocketIOWorkerClient | null =
+  createSocketIOManager({
+    url: SENTINEL_SOCKET_IO_URL,
+    getToken: () => getDataAccessToken() ?? undefined,
+  });
+
+export const socketIOManagerPvp: SocketIOManager | SocketIOWorkerClient | null =
+  createSocketIOManager({
+    url: PVP_API_URL,
+    getToken: () => getDataAccessToken() ?? undefined,
+  });
+
+if (import.meta.env.DEV) {
+  console.log(
+    `[SocketIO] Using ${useSharedWorker ? "SharedWorker" : "direct connection"} mode`
+  );
+}
+
+// Used for debugging (browser only)
+if (isBrowser && socketIOManager) {
+  window.socketIOManager = socketIOManager;
+}
+
+declare global {
+  interface Window {
+    socketIOManager: SocketIOManager | SocketIOWorkerClient | null;
+  }
+}

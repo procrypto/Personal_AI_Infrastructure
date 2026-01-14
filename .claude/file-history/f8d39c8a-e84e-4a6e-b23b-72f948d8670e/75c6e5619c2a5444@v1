@@ -1,0 +1,101 @@
+---
+phase: 22-watchlist-style-screener-volume-trends
+plan: 02
+type: summary
+---
+
+# Summary: Watchlist-Style Table Layout
+
+## Objective
+
+Replace TokenRow/TokenListColumn with TanStack React Table layout - hybrid approach preserving current styling while adopting sorting and interaction patterns from Watchlist widget.
+
+## What Was Built
+
+### Core Components
+
+1. **ScreenerTable** (`screener-table.tsx`)
+   - TanStack React Table with independent sorting per column
+   - Columns: Action (32px), Signal (36px), Token (110px), MCap (80px), 1h% (70px)
+   - Hybrid row styling: alternating greys (no signal) + confluence colors (has signal)
+   - Flash animation (100ms bright) on new confluence
+   - Hover uses signal flash color for signal rows
+   - Discovery-style headers with icons
+   - Cell spacing via `border-separate border-spacing-y-1`
+
+2. **HideTokenButton** (`hide-token-button.tsx`)
+   - EyeOff icon button for trending/whales columns
+   - Integrates with blacklist store (7-day hide)
+   - Toast confirmation on toggle
+
+3. **SignalDebugPanel Simulation Mode**
+   - Toggle for random signal simulation
+   - Per-token confluence tracking in ref
+   - Gradual evolution: 98% retain, 2% decay per tick
+   - Signals gain confluence when random spawn hits existing token
+   - Fast tick interval (50-150ms) for exciting pace
+   - Signals persist for minutes (sticky behavior)
+
+### Visual Refinements
+
+- Action column moved to LEFT (star/hide icons)
+- Signal column shows confluence arrow + count (e.g., "▲3")
+- Default sort by confluence: green high → red → no signal
+- Reduced opacity tiers for subtler backgrounds
+- Row hover matches flash color for signal rows
+- Scaled proportionally to match watchlist widget
+- Added `clearSignals` action to autopilot store
+- Added `close_all` command type
+
+## Commits
+
+| Hash | Description |
+|------|-------------|
+| 4a5558bea | feat(22-02): create ScreenerTable component with sorting |
+| 8199c4a47 | feat(22-02): create HideTokenButton component |
+| 8b0f477b0 | feat(22-02): replace TokenListColumn with ScreenerTable |
+| 808048f0b | fix(22-02): restore confluence sorting and signal display |
+| 28564544d | fix(22-02): reduce signal background opacity one tier |
+| 196b655d7 | fix(22-02): use signal flash color for hover on signal rows |
+| ffd12588f | fix(22-02): update column headers to Discovery style |
+| d41755b16 | fix(22-02): scale table to match watchlist widget proportions |
+| df8b9a12a | fix(22-02): add cell spacing between rows |
+| 156a423d7 | fix(22-02): restore flash animation on new confluence |
+| b1faff981 | feat(22-02): add simulation mode to SignalDebugPanel |
+| f059c0993 | fix(22-02): improve simulation mode with gradual confluence evolution |
+| e6d0e6369 | fix(22-02): simulation retains 75% confluence, gains via random hits |
+| 12c5125d9 | fix(22-02): make simulation signals much stickier (2% decay) |
+
+## Files Changed
+
+- `src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx` (new)
+- `src/ui/dashboard/widgets/autopilot-widget/hide-token-button.tsx` (new)
+- `src/ui/dashboard/widgets/autopilot-widget.tsx` (major refactor)
+- `src/store/memoryStore/slices/autopilot-store/autopilot-store.ts` (clearSignals)
+- `src/store/memoryStore/slices/autopilot-store/types.ts` (clearSignals type)
+- `src/websocket/autopilot/AutopilotWebsocket.ts` (close_all command)
+
+## Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Separate ScreenerTableRow component | Required for per-row flash state management |
+| 2% decay rate for simulation | Signals need to persist for minutes to feel realistic |
+| Confluence grows via random hits | Natural accumulation when spawn picks existing token |
+| Signal column separate from action | Clearer visual hierarchy, action on left for consistency |
+
+## Verification
+
+- [x] TypeScript compiles
+- [x] All three screener columns display with sorting
+- [x] Independent sorting per column works
+- [x] Row coloring: alternating greys / confluence colors
+- [x] Flash animation on new confluence
+- [x] Hover highlight with signal colors
+- [x] Hide token functionality works
+- [x] Simulation mode creates realistic signal flow
+- [x] Human verified
+
+## Next
+
+Plan 22-03: Volume Trend Scoring - Add 15m vs 6h volume ratio and buy/sell momentum to screener.

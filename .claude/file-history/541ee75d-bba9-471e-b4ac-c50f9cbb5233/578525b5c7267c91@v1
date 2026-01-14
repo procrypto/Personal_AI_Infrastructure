@@ -1,0 +1,126 @@
+---
+phase: 08-typescript-fixes
+plan: 01
+type: execute
+---
+
+<objective>
+Fix pre-existing TypeScript errors blocking `bun tsc --noEmit`.
+
+Purpose: Enable type checking in CI and catch type errors before deployment.
+Output: Clean type check (0 errors), all existing functionality unchanged.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+**Source files with errors:**
+@src/endpoints/generic/multi_wallet_families.ts
+@src/extensions/catalog/search_token_details.ts
+@src/clickhouse/client.ts
+@src/endpoints/generic/search_token.ts
+
+**Current errors (6 total):**
+1. multi_wallet_families.ts:72 - clickhouseQuery expects 1 arg, got 2 (timeout option doesn't exist)
+2. search_token_details.ts:47 - Record<string, unknown>[] not assignable to TokenSearchResult[]
+3. search_token_details.ts:48,50,51,52 - Property 'token' doesn't exist on union type (not narrowed)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Fix clickhouseQuery timeout argument</name>
+  <files>src/endpoints/generic/multi_wallet_families.ts</files>
+  <action>
+Remove the second argument from clickhouseQuery call on line 72. The clickhouseQuery function signature only accepts `sql: string` - it does NOT support a timeout option.
+
+Change:
+```typescript
+const result = await clickhouseQuery<WalletFamilyRow>(sql, { timeoutMs: QUERY_TIMEOUT_MS });
+```
+
+To:
+```typescript
+const result = await clickhouseQuery<WalletFamilyRow>(sql);
+```
+
+Also remove the `QUERY_TIMEOUT_MS` constant on line 38 since it's no longer used.
+
+Note: Adding timeout support to clickhouseQuery is out of scope for this fix (would require fetch AbortController). The query relies on server-side timeouts.
+  </action>
+  <verify>bun tsc --noEmit 2>&1 | grep -c "multi_wallet_families" returns 0</verify>
+  <done>No TypeScript errors in multi_wallet_families.ts, unused constant removed</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Fix type narrowing in search_token_details.ts</name>
+  <files>src/extensions/catalog/search_token_details.ts</files>
+  <action>
+Fix two issues:
+
+1. Add type parameter to clickhouseQuery call (line 35):
+```typescript
+const result = await clickhouseQuery<TokenSearchResult>(sql);
+```
+
+This requires importing TokenSearchResult. Add to the imports from search_token.ts. The type is NOT exported, so either:
+- Export it from search_token.ts, OR
+- Import the response type and let TypeScript infer from formatSearchTokenResponse
+
+Simplest fix: Since formatSearchTokenResponse returns SearchTokenResponse (a union), narrow before accessing .token.
+
+2. Narrow the union type before accessing baseResponse.token (lines 48-52):
+```typescript
+const baseResponse = formatSearchTokenResponse(result.data, validated.input.mint);
+
+// Handle error case early
+if (!baseResponse.ok) {
+    return baseResponse;
+}
+
+// Now TypeScript knows ok=true, so token property exists
+const extPayload = baseResponse.token
+    ? {
+          has_description: Boolean(baseResponse.token.description),
+          has_image: Boolean(baseResponse.token.image),
+          symbol_length: baseResponse.token.symbol?.length ?? 0,
+      }
+    : {
+          has_description: false,
+          has_image: false,
+          symbol_length: 0,
+      };
+```
+
+The key insight: formatSearchTokenResponse ALWAYS returns ok=true (never ok=false), but TypeScript doesn't know that from the return type. By checking ok first, we satisfy the type checker.
+  </action>
+  <verify>bun tsc --noEmit 2>&1 | grep -c "search_token_details" returns 0</verify>
+  <done>No TypeScript errors in search_token_details.ts, type narrowing correct</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun tsc --noEmit` passes with 0 errors
+- [ ] `bun run dev` starts without errors
+- [ ] No runtime regressions (functionality unchanged)
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- 0 TypeScript errors (down from 6)
+- No behavior changes to either endpoint
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/08-typescript-fixes/08-01-SUMMARY.md`
+</output>

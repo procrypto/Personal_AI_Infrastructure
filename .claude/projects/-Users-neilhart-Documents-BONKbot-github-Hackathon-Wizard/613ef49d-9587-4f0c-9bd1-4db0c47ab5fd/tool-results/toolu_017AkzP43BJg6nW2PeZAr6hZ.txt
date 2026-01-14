@@ -1,0 +1,70 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   409→            const result = engine.aggregateSignals(signals);
+   410→            const sym = token.symbol || token.mint.slice(0, 6);
+   411→            const src = sourceLabel(token.source);
+   412→
+   413→            // Get cached market data
+   414→            const marketData = marketDataCache.get(token.mint);
+   415→            if (!marketData) {
+   416→              scanResults.push(`[${src}]${sym}:NO_DATA`);
+   417→              continue;
+   418→            }
+   419→
+   420→            // If this is an open trade, show P&L
+   421→            if (isOpenTrade) {
+   422→              const trade = openTrades.find(t => t.mint === token.mint)!;
+   423→              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   424→              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   425→              const size = trade.positionSizeSol.toFixed(2);
+   426→              const color = pnl.pnlPercent >= 0 ? '\x1b[32m' : '\x1b[31m';
+   427→              const reset = '\x1b[0m';
+   428→              tradeResults.push(`[${src}]${sym} (${size}) ${color}${sign}${pnl.pnlPercent.toFixed(1)}%${reset}`);
+   429→
+   430→              // Check for exit signals
+   431→              if (result.action !== 'hold') {
+   432→                const triggerResult = await trigger.trigger({
+   433→                  mint: token.mint,
+   434→                  symbol: trade.symbol,
+   435→                  action: result.action,
+   436→                  priceSol: marketData.price_sol,
+   437→                  priceUsd: marketData.price_usd,
+   438→                  ruleSetId: ruleSets[0].id,
+   439→                  signals: result.signals,
+   440→                  confidence: result.confidence,
+   441→                  quiet: true,
+   442→                });
+   443→                if (triggerResult.triggered) {
+   444→                  tradeResults[tradeResults.length - 1] += ' EXIT';
+   445→                }
+   446→                await paperTracker.save();
+   447→              }
+   448→            } else {
+   449→              // Scan result (not an open trade)
+   450→              if (result.action !== 'hold') {
+   451→                const conf = (result.confidence * 100).toFixed(0);
+   452→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   453→                const reset = '\x1b[0m';
+   454→
+   455→                const triggerResult = await trigger.trigger({
+   456→                  mint: token.mint,
+   457→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   458→                  action: result.action,
+   459→                  priceSol: marketData.price_sol,
+   460→                  priceUsd: marketData.price_usd,
+   461→                  ruleSetId: ruleSets[0].id,
+   462→                  signals: result.signals,
+   463→                  confidence: result.confidence,
+   464→                  quiet: true,
+   465→                });
+   466→
+   467→                // Only show signals that actually triggered a trade
+   468→                if (triggerResult.triggered) {
+   469→                  scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   470→                }
+   471→                await paperTracker.save();
+   472→              }
+   473→            }
+   474→          } catch {
+   475→            const sym = token.symbol || token.mint.slice(0, 6);
+   476→            const src = sourceLabel(token.source);
+   477→            if (isOpenTrade) {

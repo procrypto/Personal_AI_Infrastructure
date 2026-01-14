@@ -1,0 +1,1032 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { useState, useEffect, useMemo } from "react";
+import SolanaIcon from "@/assets/icons/solana.svg";
+import {
+  Bot,
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  Zap,
+  Target,
+  ShieldAlert,
+  Clock,
+  Eye,
+  Flame,
+  Wallet,
+  Settings,
+  RefreshCw,
+  Power,
+  Layers,
+  CheckCircle2,
+  Circle,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Switch } from "@/components/switch";
+import { Tooltip } from "@/components/tooltip";
+import { useAutopilotSubscription } from "@/hooks/useSubscriptions/useAutopilotSubscription";
+import {
+  useAutopilotData,
+  useTimeAgo,
+  type AutopilotPositionWithPnL,
+} from "@/hooks/useAutopilot";
+import type {
+  AutopilotSignal,
+  AutopilotMarketStatus,
+  AutopilotConfig,
+  AutopilotStrategies,
+  AutopilotStats,
+  WatchedToken,
+} from "@/store/memoryStore/slices/autopilot-store/types";
+import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+
+// Market Status Badge Component
+const MarketStatusBadge = ({ status }: { status: AutopilotMarketStatus }) => {
+  const stateConfig = {
+    NORMAL: {
+      color: "text-text-success",
+      icon: Activity,
+      label: "NORMAL",
+    },
+    CAUTION: {
+      color: "text-text-warning",
+      icon: AlertTriangle,
+      label: "CAUTION",
+    },
+    DUMP: {
+      color: "text-text-error",
+      icon: ShieldAlert,
+      label: "DUMP",
+    },
+  };
+
+  const config = stateConfig[status.state];
+  const Icon = config.icon;
+  const solPrice = status.solPriceUsd ?? 0;
+
+  return (
+    <div className="flex items-center gap-2">
+      {/* SOL Price Display */}
+      <div className="text-text-primary flex items-center gap-1 text-xs">
+        <SolanaIcon className="h-4 w-4" />
+        <span>${solPrice.toFixed(2)}</span>
+      </div>
+      {/* Change Indicator */}
+      <div className={cn("flex items-center gap-1", config.color)}>
+        <Icon className="h-3.5 w-3.5" />
+        <span className="text-xs font-semibold">
+          {/* {status.solPriceChangePercent >= 0 ? "+" : ""} */}
+          {status.solPriceChangePercent.toFixed(2)}%
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// Scan Countdown Component - shows live countdown to next scan
+const ScanCountdown = ({
+  scanTimestamp,
+  intervalMs,
+}: {
+  scanTimestamp: number | null;
+  intervalMs: number;
+}) => {
+  const [countdown, setCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (scanTimestamp === null) {
+      setCountdown(null);
+      return;
+    }
+
+    const calculateCountdown = () => {
+      const nextScanTime = scanTimestamp + intervalMs;
+      const remaining = Math.round((nextScanTime - Date.now()) / 1000);
+      return remaining;
+    };
+
+    // Initial calculation
+    setCountdown(calculateCountdown());
+
+    // Update every second
+    const intervalId = setInterval(() => {
+      setCountdown(calculateCountdown());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [scanTimestamp, intervalMs]);
+
+  if (scanTimestamp === null) {
+    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+  }
+
+  if (countdown === null) {
+    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+  }
+
+  if (countdown <= 0) {
+    return <span className="text-text-turbo text-[10px]">Scanning...</span>;
+  }
+
+  return (
+    <span className="text-text-secondary text-[10px]">Next: {countdown}s</span>
+  );
+};
+
+// Position Card Component - handles nullable P&L from NATS market data
+const PositionCard = ({ position }: { position: AutopilotPositionWithPnL }) => {
+  const isProfit = (position.pnlPercent ?? 0) >= 0;
+  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+  const hasMarketData = position.pnlPercent !== null;
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+      <div className="flex items-center gap-3">
+        <div
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+            hasMarketData
+              ? isProfit
+                ? "bg-bg-success-primary text-text-success"
+                : "bg-bg-error-primary text-text-error"
+              : "bg-bg-tertiary text-text-secondary"
+          )}
+        >
+          {hasMarketData ? (
+            isProfit ? (
+              <TrendingUp className="h-4 w-4" />
+            ) : (
+              <TrendingDown className="h-4 w-4" />
+            )
+          ) : (
+            <Activity className="h-4 w-4 animate-pulse" />
+          )}
+        </div>
+        <div>
+          <span className="text-text-primary text-sm font-medium">
+            ${position.symbol}
+          </span>
+          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+            <Clock className="h-3 w-3" />
+            {holdTime}m
+          </div>
+        </div>
+      </div>
+      <div className="text-right">
+        {hasMarketData ? (
+          <>
+            <div
+              className={cn(
+                "text-sm font-semibold",
+                isProfit ? "text-text-success" : "text-text-error"
+              )}
+            >
+              {isProfit ? "+" : ""}
+              {position.pnlPercent!.toFixed(2)}%
+            </div>
+            <div className="text-text-secondary text-[10px]">
+              {position.positionSizeSol.toFixed(2)} SOL
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="text-text-tertiary animate-pulse text-sm font-semibold">
+              Loading...
+            </div>
+            <div className="text-text-secondary text-[10px]">
+              {position.positionSizeSol.toFixed(2)} SOL
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Signal Item Component
+const SignalItem = ({ signal }: { signal: AutopilotSignal }) => {
+  const signalConfig = {
+    magic_buy: { color: "text-text-turbo", icon: Target, label: "BUY" },
+    magic_exit: { color: "text-purple", icon: Zap, label: "EXIT" },
+    dump_exit: { color: "text-text-error", icon: ShieldAlert, label: "DUMP" },
+    rule_signal: { color: "text-text-info", icon: Activity, label: "SIGNAL" },
+  };
+
+  const config = signalConfig[signal.signalType];
+  const Icon = config.icon;
+  const time = new Date(signal.timestamp).toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  return (
+    <div className="border-border-primary/50 flex items-center gap-2 border-b py-2 last:border-0">
+      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+      <span className="text-text-secondary text-[10px]">{time}</span>
+      <span className={cn("text-xs font-medium", config.color)}>
+        {config.label}
+      </span>
+      <span className="text-text-primary text-xs">${signal.symbol}</span>
+      {signal.pnlPercent !== undefined && (
+        <span
+          className={cn(
+            "text-xs",
+            signal.pnlPercent >= 0 ? "text-text-success" : "text-text-error"
+          )}
+        >
+          {signal.pnlPercent >= 0 ? "+" : ""}
+          {signal.pnlPercent.toFixed(1)}%
+        </span>
+      )}
+    </div>
+  );
+};
+
+// Format token prices in USD - 2 decimals for normal prices, more for tiny prices
+const formatTokenPrice = (price: number): string => {
+  if (price >= 0.01) return price.toFixed(2);
+  if (price >= 0.0001) return price.toFixed(4);
+  if (price >= 0.000001) return price.toFixed(6);
+  // For extremely small prices, show enough decimals to see the value
+  return price.toFixed(8);
+};
+
+// Token Row Component
+const TokenRow = ({ token }: { token: WatchedToken }) => {
+  const change = token.change1h ?? 0;
+  const isPositive = change >= 0;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+        token.hasPosition
+          ? "border-border-turbo-primary bg-bg-turbo-primary border"
+          : "bg-bg-tertiary/30"
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-text-primary font-medium">${token.symbol}</span>
+        {token.hasPosition && (
+          <span className="text-text-turbo text-[8px] font-semibold">OPEN</span>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        {token.priceUsd !== undefined && (
+          <span className="text-text-secondary">
+            ${formatTokenPrice(token.priceUsd)}
+          </span>
+        )}
+        <span
+          className={cn(
+            "font-medium",
+            isPositive ? "text-text-success" : "text-text-error"
+          )}
+        >
+          {isPositive ? "+" : ""}
+          {change.toFixed(1)}%
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// Token List Column Component - for three-column layout
+const TokenListColumn = ({
+  title,
+  icon: Icon,
+  tokens,
+  iconColor,
+}: {
+  title: string;
+  icon: React.ElementType;
+  tokens: WatchedToken[];
+  iconColor: string;
+}) => {
+  // Sort tokens with open positions to the top (sticky)
+  const sortedTokens = useMemo(() => {
+    return [...tokens].sort((a, b) => {
+      // hasPosition tokens first
+      if (a.hasPosition && !b.hasPosition) return -1;
+      if (!a.hasPosition && b.hasPosition) return 1;
+      return 0;
+    });
+  }, [tokens]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="text-text-secondary mb-1.5 flex items-center gap-1.5 text-[10px] font-medium">
+        <Icon className={cn("h-3 w-3", iconColor)} />
+        {title} ({tokens.length})
+      </div>
+      {tokens.length === 0 ? (
+        <div className="text-text-tertiary border-border-primary/30 rounded border border-dashed p-2 text-center text-[10px]">
+          No tokens
+        </div>
+      ) : (
+        <div className="flex-1 space-y-1 overflow-auto">
+          {sortedTokens.map(token => (
+            <TokenRow
+              key={token.mint}
+              token={token}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Controls Panel Component
+const ControlsPanel = ({
+  config,
+  sendCommand,
+  isConnected,
+}: {
+  config: AutopilotConfig;
+  sendCommand: (cmd: AutopilotCommand) => void;
+  isConnected: boolean;
+}) => {
+  const [showControls, setShowControls] = useState(false);
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+      {/* Header - always visible */}
+      <button
+        onClick={() => setShowControls(!showControls)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+        disabled={!isConnected}
+      >
+        <div className="flex items-center gap-2">
+          <Settings className="text-text-secondary h-3.5 w-3.5" />
+          <span className="text-text-secondary font-medium">Controls</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+              config.mode === "paper"
+                ? "bg-bg-warning-primary text-text-warning"
+                : "bg-bg-success-primary text-text-success"
+            )}
+          >
+            {config.mode.toUpperCase()}
+          </span>
+          <span className="text-text-tertiary">{showControls ? "▲" : "▼"}</span>
+        </div>
+      </button>
+
+      {/* Expandable controls */}
+      {showControls && (
+        <div className="border-border-primary/50 space-y-3 border-t px-3 py-2">
+          {/* Mode Toggle - Disabled until LOIS integration */}
+          <Tooltip
+            content="Live trading integration coming soon. Invite only 🔒"
+            side="left"
+            triggerClassName="w-full"
+          >
+            <div className="flex w-full cursor-not-allowed items-center justify-between opacity-50">
+              <div className="flex items-center gap-2">
+                <Power className="text-text-secondary h-3.5 w-3.5" />
+                <span className="text-text-secondary text-xs">
+                  Live Trading
+                </span>
+              </div>
+              <Switch
+                size="sm"
+                checked={false}
+                disabled
+              />
+            </div>
+          </Tooltip>
+
+          {/* Auto Sources Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Eye className="text-text-info h-3.5 w-3.5" />
+              <span className="text-text-secondary text-xs">Auto Sources</span>
+            </div>
+            <Switch
+              size="sm"
+              checked={config.autoSourcesEnabled}
+              onCheckedChange={checked =>
+                sendCommand({ command: "toggle_sources", enabled: checked })
+              }
+            />
+          </div>
+
+          {/* Trending Toggle */}
+          {config.autoSourcesEnabled && (
+            <div className="flex items-center justify-between pl-5">
+              <div className="flex items-center gap-2">
+                <Flame className="text-orange h-3 w-3" />
+                <span className="text-text-tertiary text-[11px]">Trending</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.trendingEnabled}
+                onCheckedChange={checked =>
+                  sendCommand({ command: "toggle_trending", enabled: checked })
+                }
+              />
+            </div>
+          )}
+
+          {/* Whales Toggle */}
+          {config.autoSourcesEnabled && (
+            <div className="flex items-center justify-between pl-5">
+              <div className="flex items-center gap-2">
+                <Wallet className="text-text-success h-3 w-3" />
+                <span className="text-text-tertiary text-[11px]">
+                  Whale Moves
+                </span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.whalesEnabled}
+                onCheckedChange={checked =>
+                  sendCommand({ command: "toggle_whales", enabled: checked })
+                }
+              />
+            </div>
+          )}
+
+          {/* Market Filter Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="text-purple h-3.5 w-3.5" />
+              <span className="text-text-secondary text-xs">Market Filter</span>
+            </div>
+            <Switch
+              size="sm"
+              checked={config.marketFilterEnabled}
+              onCheckedChange={checked =>
+                sendCommand({ command: "toggle_filter", enabled: checked })
+              }
+            />
+          </div>
+
+          {/* Refresh Sources Button */}
+          <button
+            onClick={() => sendCommand({ command: "refresh_sources" })}
+            className="bg-bg-tertiary/50 text-text-secondary hover:bg-bg-tertiary flex w-full items-center justify-center gap-2 rounded px-3 py-1.5 text-xs transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Refresh Sources
+          </button>
+
+          {/* Position Size Display */}
+          <div className="text-text-tertiary border-border-primary/30 flex items-center justify-between border-t pt-1 text-[10px]">
+            <span>Position Size</span>
+            <span>{config.positionSizeSol} SOL</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Strategies Panel Component
+const StrategiesPanel = ({
+  strategies,
+  sendCommand,
+  isConnected,
+}: {
+  strategies: AutopilotStrategies;
+  sendCommand: (cmd: AutopilotCommand) => void;
+  isConnected: boolean;
+}) => {
+  const [showStrategies, setShowStrategies] = useState(false);
+  const activeSet = new Set(strategies.active);
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+      {/* Header - always visible */}
+      <button
+        onClick={() => setShowStrategies(!showStrategies)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+        disabled={!isConnected}
+      >
+        <div className="flex items-center gap-2">
+          <Layers className="text-text-secondary h-3.5 w-3.5" />
+          <span className="text-text-secondary font-medium">Strategies</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+              strategies.active.length > 0
+                ? "bg-bg-success-primary text-text-success"
+                : "bg-bg-tertiary text-text-secondary"
+            )}
+          >
+            {strategies.active.length} ACTIVE
+          </span>
+          <span className="text-text-tertiary">
+            {showStrategies ? "▲" : "▼"}
+          </span>
+        </div>
+      </button>
+
+      {/* Expandable strategies list */}
+      {showStrategies && (
+        <div className="border-border-primary/50 space-y-2 border-t px-3 py-2">
+          {strategies.available.length === 0 ? (
+            <div className="text-text-tertiary py-2 text-center text-xs">
+              No strategies available
+            </div>
+          ) : (
+            strategies.available.map(strategy => {
+              const isActive = activeSet.has(strategy.id);
+              return (
+                <button
+                  key={strategy.id}
+                  onClick={() =>
+                    sendCommand({
+                      command: "toggle_strategy",
+                      strategyId: strategy.id,
+                      enabled: !isActive,
+                    })
+                  }
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded px-2 py-2 text-left transition-colors",
+                    isActive
+                      ? "border-border-success-primary bg-bg-success-primary hover:bg-bg-success-primary-hover border"
+                      : "bg-bg-tertiary/50 hover:bg-bg-tertiary border border-transparent"
+                  )}
+                >
+                  <div className="mt-0.5 flex-shrink-0">
+                    {isActive ? (
+                      <CheckCircle2 className="text-text-success h-4 w-4" />
+                    ) : (
+                      <Circle className="text-text-tertiary h-4 w-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "text-xs font-medium",
+                          isActive ? "text-text-success" : "text-text-primary"
+                        )}
+                      >
+                        {strategy.name}
+                      </span>
+                      <span
+                        className={cn(
+                          "rounded px-1 py-0.5 text-[9px]",
+                          strategy.mode === "all"
+                            ? "bg-bg-info-primary text-text-info"
+                            : "bg-purple/20 text-purple"
+                        )}
+                      >
+                        {strategy.mode.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-text-tertiary truncate text-[10px]">
+                      {strategy.summary}
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Stats Panel Component
+const StatsPanel = ({
+  stats,
+  unrealizedPnlSol,
+  hasOpenPositions,
+  onCloseAll,
+}: {
+  stats: AutopilotStats;
+  unrealizedPnlSol: number;
+  hasOpenPositions: boolean;
+  onCloseAll: () => void;
+}) => {
+  // Realized = lifetime total minus current unrealized
+  const realizedPnlSol = stats.totalPnlSol - unrealizedPnlSol;
+  const isRealizedProfit = realizedPnlSol >= 0;
+  const isUnrealizedProfit = unrealizedPnlSol >= 0;
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 flex items-center gap-2 rounded-lg border p-3">
+      <div className="grid flex-1 grid-cols-5 gap-2">
+        <div className="text-center">
+          <div className="text-text-primary text-lg font-bold">
+            {stats.closedTrades}
+          </div>
+          <div className="text-text-secondary text-[10px]">Trades</div>
+        </div>
+        <div className="text-center">
+          <div className="text-text-primary text-lg font-bold">
+            {(stats.winRate * 100).toFixed(0)}%
+          </div>
+          <div className="text-text-secondary text-[10px]">Win Rate</div>
+        </div>
+        <div className="text-center">
+          <div className="text-text-primary text-lg font-bold">
+            {stats.wins}W/{stats.losses}L
+          </div>
+          <div className="text-text-secondary text-[10px]">Record</div>
+        </div>
+        <div className="text-center">
+          <div
+            className={cn(
+              "text-lg font-bold",
+              isRealizedProfit ? "text-text-success" : "text-text-error"
+            )}
+          >
+            {isRealizedProfit ? "+" : ""}
+            {realizedPnlSol.toFixed(4)}
+          </div>
+          <div className="text-text-secondary text-[10px]">Realized</div>
+        </div>
+        <div className="text-center">
+          <div
+            className={cn(
+              "text-lg font-bold",
+              isUnrealizedProfit ? "text-text-success" : "text-text-error"
+            )}
+          >
+            {isUnrealizedProfit ? "+" : ""}
+            {unrealizedPnlSol.toFixed(4)}
+          </div>
+          <div className="text-text-secondary text-[10px]">Unrealized</div>
+        </div>
+      </div>
+      {/* Close All Button */}
+      <Tooltip
+        content="Close all open positions"
+        side="left"
+      >
+        <button
+          onClick={onCloseAll}
+          disabled={!hasOpenPositions}
+          className={cn(
+            "flex flex-col items-center justify-center rounded px-2 py-1 text-[10px] transition-colors",
+            hasOpenPositions
+              ? "text-text-error hover:bg-bg-error-primary cursor-pointer"
+              : "text-text-tertiary cursor-not-allowed opacity-50"
+          )}
+        >
+          <Target className="h-4 w-4" />
+          <span>Close All</span>
+        </button>
+      </Tooltip>
+    </div>
+  );
+};
+
+// Last Analysis Row Component
+const LastAnalysisRow = ({
+  analysis,
+}: {
+  analysis: {
+    symbol: string;
+    timestamp: number;
+    priceChange5m: number | null;
+    priceChange1h: number | null;
+    buySellRatio: number | null;
+    rulesChecked: number;
+    rulesMatched: number;
+    outcome: string;
+    reason: string;
+  } | null;
+}) => {
+  // Use live-updating time ago hook
+  const timeStr = useTimeAgo(analysis?.timestamp);
+
+  if (!analysis) return null;
+
+  const outcomeConfig = {
+    no_signal: { color: "text-text-secondary", bg: "bg-bg-tertiary" },
+    buy_signal: { color: "text-text-success", bg: "bg-bg-success-primary" },
+    sell_signal: { color: "text-text-error", bg: "bg-bg-error-primary" },
+    skipped: { color: "text-text-warning", bg: "bg-bg-warning-primary" },
+  };
+
+  const config =
+    outcomeConfig[analysis.outcome as keyof typeof outcomeConfig] ||
+    outcomeConfig.no_signal;
+
+  return (
+    <div
+      className={cn("border-border-primary rounded-lg border p-2", config.bg)}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Activity className={cn("h-3.5 w-3.5", config.color)} />
+          <span className="text-text-primary text-xs font-medium">
+            ${analysis.symbol}
+          </span>
+          <span className="text-text-tertiary text-[10px]">{timeStr}</span>
+        </div>
+        <Tooltip
+          content={`Matched ${analysis.rulesMatched} of ${analysis.rulesChecked} strategy rules`}
+          side="left"
+        >
+          <div className="flex cursor-help items-center gap-2">
+            <span className={cn("text-[10px] font-semibold", config.color)}>
+              {analysis.rulesMatched}/{analysis.rulesChecked} rules
+            </span>
+          </div>
+        </Tooltip>
+      </div>
+      <div className="mt-1 flex items-center gap-3 text-[10px]">
+        {analysis.priceChange5m !== null && (
+          <span
+            className={
+              analysis.priceChange5m >= 0
+                ? "text-text-success"
+                : "text-text-error"
+            }
+          >
+            5m: {analysis.priceChange5m >= 0 ? "+" : ""}
+            {analysis.priceChange5m.toFixed(2)}%
+          </span>
+        )}
+        {analysis.priceChange1h !== null && (
+          <span
+            className={
+              analysis.priceChange1h >= 0
+                ? "text-text-success"
+                : "text-text-error"
+            }
+          >
+            1h: {analysis.priceChange1h >= 0 ? "+" : ""}
+            {analysis.priceChange1h.toFixed(2)}%
+          </span>
+        )}
+        {analysis.buySellRatio !== null && (
+          <span className="text-text-secondary">
+            B/S: {analysis.buySellRatio.toFixed(1)}:1
+          </span>
+        )}
+      </div>
+      <div className="text-text-tertiary mt-1 truncate text-[9px]">
+        {analysis.reason}
+      </div>
+    </div>
+  );
+};
+
+// Section Header Component
+const SectionHeader = ({ children }: { children: React.ReactNode }) => (
+  <div className="text-text-tertiary mb-1.5 text-[10px] font-medium tracking-wide uppercase">
+    {children}
+  </div>
+);
+
+// Collapsible Section Component - follows ControlsPanel/StrategiesPanel pattern
+const CollapsibleSection = ({
+  title,
+  defaultExpanded = true,
+  children,
+}: {
+  title: string;
+  defaultExpanded?: boolean;
+  children: React.ReactNode;
+}) => {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  return (
+    <div
+      className={cn(
+        "flex flex-shrink-0 flex-col transition-opacity duration-200",
+        !expanded && "opacity-75"
+      )}
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={cn(
+          "flex cursor-pointer items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase transition-colors",
+          expanded
+            ? "text-text-tertiary hover:text-text-secondary mb-1.5"
+            : "text-text-tertiary/80 hover:text-text-secondary hover:border-border-primary/30 hover:bg-bg-tertiary/30 rounded border border-transparent px-1.5 py-1"
+        )}
+      >
+        <span
+          className={cn(
+            "text-[8px] transition-transform duration-200",
+            expanded ? "rotate-0" : "-rotate-90"
+          )}
+        >
+          ▼
+        </span>
+        {title}
+        {!expanded && (
+          <span className="text-text-tertiary/60 ml-auto text-[8px] font-normal normal-case">
+            click to expand
+          </span>
+        )}
+      </button>
+      <div
+        className={cn(
+          "grid transition-all duration-200",
+          expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="flex flex-col gap-2">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Main Autopilot Widget Component
+export const AutopilotWidget = () => {
+  // Connect to autopilot backend and auto-subscribe to NATS market data
+  useAutopilotSubscription({ isEnabled: true });
+
+  // Get all autopilot data from Zustand store
+  const {
+    positions,
+    signals,
+    marketStatus,
+    stats,
+    scanTick,
+    lastAnalysis,
+    tokenList,
+    config,
+    strategies,
+    isConnected,
+    sendCommand,
+    unrealizedPnlSol,
+  } = useAutopilotData();
+
+  const totalTokens =
+    tokenList.watchlist.length +
+    tokenList.trending.length +
+    tokenList.whales.length;
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-hidden">
+      {/* Header - Market Status */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot
+            className={cn(
+              "h-5 w-5",
+              isConnected ? "text-text-success" : "text-text-error"
+            )}
+          />
+          <span className="text-text-primary text-sm font-semibold">
+            Token Autopilot
+          </span>
+          {scanTick && (
+            <Tooltip
+              content={`Scan #${scanTick.scanNumber} analyzed ${totalTokens} tokens this cycle`}
+              side="bottom"
+            >
+              <span className="text-text-secondary cursor-help text-[10px]">
+                #{scanTick.scanNumber} · {totalTokens} tokens
+              </span>
+            </Tooltip>
+          )}
+          {isConnected && (
+            <>
+              <span className="text-text-tertiary text-[10px]">|</span>
+              <ScanCountdown
+                scanTimestamp={scanTick?.timestamp ?? null}
+                intervalMs={config.pollIntervalMs}
+              />
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Tooltip
+            content="SOL price and market condition (change since widget opened)"
+            side="bottom"
+          >
+            <div className="cursor-help">
+              <MarketStatusBadge status={marketStatus} />
+            </div>
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* Connection Status - Always visible when disconnected */}
+      {!isConnected && (
+        <div className="bg-bg-warning-primary border-border-warning-primary flex items-center gap-2 rounded-lg border px-3 py-2">
+          <AlertTriangle className="text-text-warning h-4 w-4" />
+          <span className="text-text-warning text-xs">
+            Connecting to autopilot backend...
+          </span>
+        </div>
+      )}
+
+      {/* ═══ OPEN POSITIONS SECTION ═══ */}
+      {positions.length > 0 && (
+        <div className="flex flex-shrink-0 flex-col">
+          <SectionHeader>Open Positions ({positions.length})</SectionHeader>
+          <div className="max-h-40 space-y-2 overflow-auto">
+            {positions.map(pos => (
+              <PositionCard
+                key={pos.mint}
+                position={pos}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ PERFORMANCE SECTION ═══ */}
+      <CollapsibleSection
+        title="Performance"
+        defaultExpanded={true}
+      >
+        <StatsPanel
+          stats={stats}
+          unrealizedPnlSol={unrealizedPnlSol}
+          hasOpenPositions={positions.length > 0}
+          onCloseAll={() => sendCommand({ command: "close_all" })}
+        />
+      </CollapsibleSection>
+
+      {/* ═══ ACTIVITY SECTION ═══ */}
+      <CollapsibleSection
+        title="Activity"
+        defaultExpanded={true}
+      >
+        <LastAnalysisRow analysis={lastAnalysis} />
+
+        {/* Recent Signals */}
+        {signals.length > 0 && (
+          <div>
+            <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+              <Zap className="h-3.5 w-3.5" />
+              Recent Signals
+            </div>
+            <div className="max-h-24 overflow-auto">
+              <div className="space-y-0">
+                {signals.slice(0, 5).map((signal, idx) => (
+                  <SignalItem
+                    key={`${signal.timestamp}-${idx}`}
+                    signal={signal}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </CollapsibleSection>
+
+      {/* ═══ TOKEN WATCH SECTION ═══ (Three-column layout) */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
+        <SectionHeader>Tokens</SectionHeader>
+
+        <div className="grid min-h-0 flex-1 grid-cols-3 gap-2 overflow-hidden">
+          {/* Watchlist Column */}
+          <TokenListColumn
+            title="Watchlist"
+            icon={Eye}
+            tokens={tokenList.watchlist}
+            iconColor="text-text-info"
+          />
+
+          {/* Trending Column */}
+          <TokenListColumn
+            title="Trending"
+            icon={Flame}
+            tokens={tokenList.trending}
+            iconColor="text-orange"
+          />
+
+          {/* Whale Moves Column */}
+          <TokenListColumn
+            title="Whales"
+            icon={Wallet}
+            tokens={tokenList.whales}
+            iconColor="text-text-success"
+          />
+        </div>
+      </div>
+
+      {/* ═══ CONFIGURATION SECTION ═══ */}
+      <div className="border-border-primary/30 flex flex-shrink-0 flex-col gap-2 border-t pt-3">
+        <SectionHeader>Configuration</SectionHeader>
+        <ControlsPanel
+          config={config}
+          sendCommand={sendCommand}
+          isConnected={isConnected}
+        />
+        <StrategiesPanel
+          strategies={strategies}
+          sendCommand={sendCommand}
+          isConnected={isConnected}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default AutopilotWidget;

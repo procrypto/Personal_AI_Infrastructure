@@ -1,0 +1,115 @@
+---
+phase: 03-interface-cleanup-cutover
+plan: 02
+type: execute
+---
+
+<objective>
+Add performance instrumentation and validate sub-100ms signal generation latency.
+
+Purpose: Verify the system meets the core performance requirement before cutover.
+Output: Performance metrics, benchmark test, proof of sub-100ms latency.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/03-interface-cleanup-cutover/03-01-SUMMARY.md
+
+# Key files:
+@src/signal/processor.ts
+@src/signal/integration.ts
+
+**Core requirement:** Sub-100ms signal evaluation latency (from PROJECT.md)
+**Tech stack:** vitest for benchmarks
+**Patterns:** Sync-only validation established in Phase 1
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add performance instrumentation</name>
+  <files>src/signal/processor.ts</files>
+  <action>
+Add optional timing instrumentation to SignalProcessor:
+
+1. Add `enableMetrics?: boolean` to SignalProcessorOptions
+2. Add private `metrics` object to track:
+   - lastProcessingTimeMs: number
+   - avgProcessingTimeMs: number
+   - totalCalls: number
+3. Wrap processMarketData and processOHLCV in timing:
+   ```typescript
+   const start = performance.now();
+   // ... existing logic ...
+   const elapsed = performance.now() - start;
+   if (this.enableMetrics) this.recordTiming(elapsed);
+   ```
+4. Add `getMetrics()` method returning current stats
+5. Add `resetMetrics()` method
+
+Keep metrics OFF by default (no perf impact in production).
+Use `performance.now()` for sub-ms precision.
+  </action>
+  <verify>tsc --noEmit passes, npm test passes</verify>
+  <done>Metrics collection available via getMetrics(), disabled by default</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create benchmark test</name>
+  <files>src/signal/processor.benchmark.ts</files>
+  <action>
+Create benchmark test that proves sub-100ms performance:
+
+1. Create test file using vitest's bench API or manual timing
+2. Test scenarios:
+   - Fast path (processMarketData): 100 iterations with realistic TokenMarketData
+   - Complex path (processOHLCV): 100 iterations with 50-candle OHLCV array
+3. Create fixture data:
+   - Realistic TokenMarketData with all fields populated
+   - 50-candle OHLCV array (typical analysis window)
+4. Assert:
+   - Fast path avg < 10ms (should be <1ms)
+   - Complex path avg < 50ms (rotations are heaviest)
+   - P99 < 100ms for both paths
+5. Run with: `npm test -- processor.benchmark`
+
+Use vitest's `bench` if available, otherwise manual timing loop.
+Print results to console for visibility.
+  </action>
+  <verify>npm test -- processor.benchmark runs and all assertions pass</verify>
+  <done>Benchmark proves sub-100ms latency, results documented in summary</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm test` passes all tests including benchmark
+- [ ] Fast path consistently under 10ms
+- [ ] Complex path consistently under 50ms
+- [ ] No P99 exceeds 100ms
+- [ ] Metrics disabled by default (no production impact)
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- Sub-100ms latency proven with benchmark data
+- Performance metrics available for debugging
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-interface-cleanup-cutover/03-02-SUMMARY.md` with:
+- Benchmark results (avg, P99 for each path)
+- Any optimizations made
+- Performance characteristics documented
+</output>

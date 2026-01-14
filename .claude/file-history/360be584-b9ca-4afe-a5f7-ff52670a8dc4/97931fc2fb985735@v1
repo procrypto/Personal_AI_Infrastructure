@@ -1,0 +1,118 @@
+# Codebase Concerns
+
+**Analysis Date:** 2026-01-13
+
+## Tech Debt
+
+**Complex SQL Without Comments:**
+- Issue: Trending scoring algorithm lacks inline documentation
+- Files: `src/endpoints/generic/discovery_trending.ts` (lines 414-454)
+- Why: Complex weighted calculations (0.08, 0.10, 0.35 weights) without explanation
+- Impact: Difficult to understand or modify scoring logic
+- Fix approach: Add inline comments explaining each weight and threshold
+
+**Duplicate Type Definitions:**
+- Issue: Similar types defined in multiple files
+- Files: `TradeRow` in `src/endpoints/generic/trades.ts` and `src/endpoints/generic/wallet_tracker.ts`
+- Why: Each endpoint was developed independently
+- Impact: Changes need to be made in multiple places
+- Fix approach: Create shared `src/types/common.ts` for reusable types
+
+**Scattered Constants:**
+- Issue: MAX_LIMIT, DEFAULT_LIMIT defined repeatedly with different values
+- Files: `token_market_data.ts` (100), `wallet_tracker.ts` (100), `trades.ts` (200)
+- Why: Per-endpoint development without centralization
+- Impact: Inconsistent limits across endpoints
+- Fix approach: Centralize in `src/constants.ts` or `src/config.ts`
+
+## Known Bugs
+
+**No Known Bugs:**
+- Codebase appears stable
+- No TODO/FIXME comments found
+
+## Security Considerations
+
+**JSON Parsing Without Try/Catch:**
+- Risk: `JSON.parse(line)` in `src/clickhouse/client.ts:54` could throw on malformed response
+- Files: `src/clickhouse/client.ts`
+- Current mitigation: Outer try/catch catches error but message may be unclear
+- Recommendations: Add specific JSON parsing error handling with context
+
+**No Request Timeout:**
+- Risk: `fetch()` call has no timeout - could hang indefinitely
+- Files: `src/clickhouse/client.ts:33`
+- Current mitigation: Relies on Bun/system defaults
+- Recommendations: Add explicit timeout (e.g., 30 seconds) to fetch options
+
+## Performance Bottlenecks
+
+**Repeated CASE Statements:**
+- Problem: Timestamp check repeated 48 times in SQL
+- Files: `src/endpoints/generic/token_market_data.ts` (lines 251-341)
+- Measurement: Not benchmarked, likely minor
+- Cause: 4 time windows × 12 columns each
+- Improvement path: Calculate timestamp comparison once in CTE
+
+**Two-Query Pattern:**
+- Problem: Trending endpoint runs two sequential queries
+- Files: `src/endpoints/generic/discovery_trending.ts` (lines 511-540)
+- Measurement: 2x round-trip latency
+- Cause: First query gets mints, second gets market data
+- Improvement path: Consider single JOIN query or parallel execution
+
+## Fragile Areas
+
+**No Fragile Areas Identified:**
+- Architecture is straightforward
+- Each endpoint is self-contained
+- Extension system is optional and isolated
+
+## Scaling Limits
+
+**ClickHouse Cloud API:**
+- Current capacity: Depends on ClickHouse Cloud plan
+- Limit: API rate limits (not documented in code)
+- Symptoms at limit: 429 errors from ClickHouse
+- Scaling path: ClickHouse handles scaling; local-api is stateless
+
+## Dependencies at Risk
+
+**Minimal Dependencies (Good):**
+- Only `elysia@^1.0.0` as runtime dependency
+- Low attack surface
+- Elysia is actively maintained
+
+## Missing Critical Features
+
+**No Test Coverage:**
+- Problem: Zero automated tests
+- Files: None
+- Current workaround: Manual testing via smoke.html
+- Blocks: Refactoring confidence, regression detection
+- Implementation complexity: Low - add Vitest and basic tests
+
+**No Structured Logging:**
+- Problem: Only console.log statements
+- Files: Throughout codebase
+- Current workaround: Manual log inspection
+- Blocks: Production debugging, audit trails
+- Implementation complexity: Low - add pino or similar
+
+## Test Coverage Gaps
+
+**Entire Codebase Untested:**
+- What's not tested: All endpoints, ClickHouse client, extensions
+- Risk: Regressions go undetected
+- Priority: Medium (local dev tool, not production)
+- Difficulty to test: Low - mostly pure functions and HTTP handlers
+
+**Candidates for Testing:**
+- `src/clickhouse/client.ts` - Utility functions (escapeString, buildInList, clamp, isSolanaPubkey)
+- `src/endpoints/generic/*.ts` - Validation functions
+- `src/extensions/catalog/*.ts` - Extension behavior
+
+---
+
+*Concerns audit: 2026-01-13*
+*Update as issues are fixed or new ones discovered*

@@ -1,0 +1,54 @@
+   145→
+   146→      // Run all rules
+   147→      const signals: Signal[] = [];
+   148→      for (const rule of this.rules) {
+   149→        try {
+   150→          const signal = rule.analyze(context);
+   151→          if (signal) {
+   152→            signals.push(signal);
+   153→          }
+   154→        } catch (error) {
+   155→          console.error(`Rule ${rule.config.id} failed:`, error);
+   156→        }
+   157→      }
+   158→
+   159→      return signals;
+   160→    } catch (error) {
+   161→      console.error(`Failed to analyze token ${mint}:`, error);
+   162→      return [];
+   163→    }
+   164→  }
+   165→
+   166→  /**
+   167→   * Analyze multiple tokens
+   168→   */
+   169→  async analyzeTokens(mints: string[]): Promise<Map<string, Signal[]>> {
+   170→    const results = new Map<string, Signal[]>();
+   171→
+   172→    // Process in parallel with concurrency limit
+   173→    const concurrency = 5;
+   174→    for (let i = 0; i < mints.length; i += concurrency) {
+   175→      const batch = mints.slice(i, i + concurrency);
+   176→      const batchResults = await Promise.all(
+   177→        batch.map(mint => this.analyzeToken(mint).then(signals => ({ mint, signals })))
+   178→      );
+   179→
+   180→      for (const { mint, signals } of batchResults) {
+   181→        results.set(mint, signals);
+   182→      }
+   183→    }
+   184→
+   185→    return results;
+   186→  }
+   187→
+   188→  /**
+   189→   * Aggregate signals and determine final action
+   190→   */
+   191→  aggregateSignals(signals: Signal[], mode: 'all' | 'any' = 'any'): {
+   192→    action: 'buy' | 'sell' | 'hold';
+   193→    confidence: number;
+   194→    signals: Signal[];
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

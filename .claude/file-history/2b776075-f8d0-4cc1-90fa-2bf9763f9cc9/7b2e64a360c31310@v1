@@ -1,0 +1,106 @@
+---
+phase: 06-backend-feed-consumption
+plan: 02
+subsystem: data-feeds
+tags: [websocket, watchlist, feed-logging, debugging]
+
+# Dependency graph
+requires:
+  - phase: 06-backend-feed-consumption
+    provides: Feed freshness tracking (isFeedFresh, getFeedStats)
+provides:
+  - Watchlist feed handler (watchlist_feed message type)
+  - Feed activity logging (every 10 scans)
+  - Stale feed warning (>5m threshold)
+affects: [07-validation-cleanup]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [feed-activity-monitoring]
+
+key-files:
+  created: []
+  modified:
+    - src/websocket-server.ts
+    - src/cli.ts
+
+key-decisions:
+  - "Log feed activity every 10 scans (balance visibility vs noise)"
+  - "5-minute stale threshold for warning (matches OHLCV freshness from 06-01)"
+
+patterns-established:
+  - "Feed activity monitoring: periodic logging with human-readable age formatting"
+
+issues-created: []
+
+# Metrics
+duration: 4min
+completed: 2026-01-09
+---
+
+# Phase 6 Plan 2: Watchlist Feed & Activity Logging Summary
+
+**Watchlist feed handler following trending/whale pattern, feed activity logging every 10 scans with stale warnings**
+
+## Performance
+
+- **Duration:** 4 min
+- **Started:** 2026-01-09T13:14:41Z
+- **Completed:** 2026-01-09T13:18:56Z
+- **Tasks:** 2
+- **Files modified:** 2
+
+## Accomplishments
+
+- Added WatchlistFeedItem interface and watchlist_feed message type handler
+- Implemented watchlistTokens Map storage with getWatchlistFromFeed() getter
+- Added feed activity logging every 10 scans with human-readable age formatting
+- Implemented stale feed warning when all feeds are >5m old
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Add watchlist_feed handler to WebSocket server** - `01914f6` (feat)
+2. **Task 2: Add feed activity logging to run loop** - `7e7155c` (feat)
+
+## Files Created/Modified
+
+- `src/websocket-server.ts` - Added WatchlistFeedItem interface, watchlist_feed handler, watchlistTokens Map, getWatchlistFromFeed() getter
+- `src/cli.ts` - Added feed activity logging every 10 scans with age formatting and stale warning
+
+## Decisions Made
+
+- **Log every 10 scans:** Balances debugging visibility with log noise - detailed enough to see feed health without flooding output on every scan.
+- **5-minute stale threshold:** Consistent with OHLCV freshness threshold from 06-01, indicates likely disconnection.
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions
+
+**Notes:** Clean execution with all 65 tests passing. Build successful. Followed existing trending_feed/whale_feed pattern exactly.
+
+## Next Phase Readiness
+
+- Phase 6 complete - all feed handlers implemented
+- Ready for Phase 7 (Validation & Cleanup)
+- End-to-end testing needed to verify zero API calls when frontend connected
+
+---
+*Phase: 06-backend-feed-consumption*
+*Completed: 2026-01-09*

@@ -1,0 +1,145 @@
+     1→// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+     2→// © antek  
+     3→// with hacking from procrypt
+     4→// Note: TradingView automatically generates color input controls for all plot() and barcolor() functions.
+     5→// These cannot be disabled but the colors are intentionally hardcoded in the script logic.
+     6→
+     7→//@version=5 
+     8→indicator("Rotations v1.5.2", overlay=true) 
+     9→ 
+    10→// Input for custom start time 
+    11→startDate = input.time(defval=timestamp("2022-01-01"), title="Start Date") 
+    12→
+    13→// Input for additional timeframe
+    14→enableMTF = input.bool(defval=false, title="Enable Multi-Timeframe Levels", group="Multi-Timeframe Settings")
+    15→mtfTimeframe = input.timeframe(defval="240", title="Timeframe for Additional Levels", group="Multi-Timeframe Settings")
+    16→
+    17→// Input for displaying labels
+    18→showLabels = input.bool(defval=false, title="Show Price Labels", group="Display Settings")
+    19→
+    20→// ============================================================================
+    21→// ROTATION CALCULATION FUNCTION
+    22→// ============================================================================
+    23→
+    24→calcRotation(simple int startTime) =>
+    25→    // Store rotation candle data 
+    26→    var float rotationHigh = na 
+    27→    var float rotationLow = na 
+    28→    var int currentRotation = 0 
+    29→    var int rotationStartIndex = 0 
+    30→    var bool hasStarted = false 
+    31→     
+    32→    // Determine if we've reached the start time 
+    33→    if time >= startTime 
+    34→        hasStarted := true 
+    35→     
+    36→    // Determine rotation 
+    37→    if hasStarted 
+    38→        newRotation = currentRotation 
+    39→        if close > rotationHigh and close > high[1] 
+    40→            newRotation := 1 
+    41→            rotationHigh := high 
+    42→            rotationLow := low 
+    43→            rotationStartIndex := bar_index 
+    44→        else if close < rotationLow and close < low[1] 
+    45→            newRotation := -1 
+    46→            rotationHigh := high 
+    47→            rotationLow := low 
+    48→            rotationStartIndex := bar_index 
+    49→        else if (currentRotation > 0 and close < rotationLow) or (currentRotation < 0 and close > rotationHigh) 
+    50→            newRotation := 0 // Invalidation without new rotation 
+    51→     
+    52→        // Update current rotation 
+    53→        currentRotation := newRotation 
+    54→     
+    55→        // Initialize values on the first active candle 
+    56→        if na(rotationHigh) or na(rotationLow) 
+    57→            rotationHigh := high 
+    58→            rotationLow := low
+    59→    
+    60→    [rotationHigh, rotationLow, currentRotation, hasStarted]
+    61→
+    62→// Calculate rotation for current timeframe
+    63→[currentTfRotationHigh, currentTfRotationLow, currentRotation, hasStarted] = calcRotation(startDate) 
+    64→ 
+    65→// Set bar colors 
+    66→barColor = if hasStarted 
+    67→    currentRotation > 0 ? #469C68 : currentRotation < 0 ? #B64524 : #808080 
+    68→else 
+    69→    color.new(color.gray, 70) // Translucent gray for candles before start time 
+    70→ 
+    71→// Plot colored bars 
+    72→barcolor(barColor) 
+    73→ 
+    74→// Detect breakouts that don't close beyond the range 
+    75→highBreakout = high > currentTfRotationHigh and close <= currentTfRotationHigh 
+    76→lowBreakout = low < currentTfRotationLow and close >= currentTfRotationLow 
+    77→ 
+    78→// Plot rotation levels with conditional coloring for breakouts 
+    79→plot(series=currentTfRotationHigh, color=highBreakout ? color.orange : color.new(color.green, 50), title="Rotation High", style=plot.style_circles, linewidth=3) 
+    80→plot(series=currentTfRotationLow, color=lowBreakout ? color.orange : color.new(color.red, 50), title="Rotation Low", style=plot.style_circles, linewidth=3) 
+    81→ 
+    82→// Plot solid lines for current rotation high and low levels, extending to the right 
+    83→var line currentHighLine = na 
+    84→var line currentLowLine = na 
+    85→ 
+    86→if barstate.islast 
+    87→    line.delete(currentHighLine) 
+    88→    line.delete(currentLowLine) 
+    89→    currentHighLine := line.new(x1=bar_index[1], y1=currentTfRotationHigh, x2=bar_index + 50, y2=currentTfRotationHigh, color=color.green, style=line.style_dashed) 
+    90→    currentLowLine := line.new(x1=bar_index[1], y1=currentTfRotationLow, x2=bar_index + 50, y2=currentTfRotationLow, color=color.purple, style=line.style_dashed) 
+    91→ 
+    92→// Display rotation high and low values on price scale 
+    93→plotchar(currentTfRotationHigh, "Rotation High", "‒", location.absolute, color.green, size=size.tiny, show_last=1) 
+    94→plotchar(currentTfRotationLow, "Rotation Low", "‒", location.absolute, color.red, size=size.tiny, show_last=1) 
+    95→ 
+    96→// Display high and low labels 
+    97→if barstate.islast and showLabels
+    98→    label.new(bar_index, currentTfRotationHigh, text="RHigh: " + str.tostring(currentTfRotationHigh, "#.##"),  
+    99→              color=color.new(color.green, 100), style=label.style_label_down, textcolor=color.green) 
+   100→    label.new(bar_index, currentTfRotationLow, text="RLow: " + str.tostring(currentTfRotationLow, "#.##"),  
+   101→              color=color.new(color.purple, 100), style=label.style_label_up, textcolor=color.purple)
+   102→
+   103→// ============================================================================
+   104→// MULTI-TIMEFRAME ROTATION LEVELS
+   105→// ============================================================================
+   106→
+   107→// Check if we're on a different timeframe than the selected MTF
+   108→isDifferentTimeframe = timeframe.period != mtfTimeframe
+   109→
+   110→// Fetch rotation data from selected timeframe using the function
+   111→[mtfRotationHigh, mtfRotationLow, mtfCurrentRotation, mtfHasStarted] = request.security(syminfo.tickerid, mtfTimeframe, calcRotation(startDate), gaps=barmerge.gaps_off)
+   112→
+   113→// Detect interactions with MTF levels (price touches but doesn't close beyond)
+   114→mtfHighBreakout = high > mtfRotationHigh and close <= mtfRotationHigh
+   115→mtfLowBreakout = low < mtfRotationLow and close >= mtfRotationLow
+   116→
+   117→// Plot MTF rotation levels with different colors (only if on different timeframe)
+   118→plot(series=enableMTF and isDifferentTimeframe ? mtfRotationHigh : na, color=mtfHighBreakout ? color.yellow : color.new(color.blue, 50), title="MTF Rotation High", style=plot.style_circles, linewidth=3) 
+   119→plot(series=enableMTF and isDifferentTimeframe ? mtfRotationLow : na, color=mtfLowBreakout ? color.yellow : color.new(color.aqua, 50), title="MTF Rotation Low", style=plot.style_circles, linewidth=3) 
+   120→
+   121→// Plot solid lines for MTF rotation levels, extending to the right
+   122→var line mtfHighLine = na
+   123→var line mtfLowLine = na
+   124→
+   125→if barstate.islast and enableMTF and isDifferentTimeframe
+   126→    line.delete(mtfHighLine)
+   127→    line.delete(mtfLowLine)
+   128→    mtfHighLine := line.new(x1=bar_index[1], y1=mtfRotationHigh, x2=bar_index + 50, y2=mtfRotationHigh, color=color.blue, style=line.style_dashed, width=1)
+   129→    mtfLowLine := line.new(x1=bar_index[1], y1=mtfRotationLow, x2=bar_index + 50, y2=mtfRotationLow, color=color.aqua, style=line.style_dashed, width=1)
+   130→
+   131→// Display MTF rotation high and low values on price scale
+   132→plotchar(enableMTF and isDifferentTimeframe ? mtfRotationHigh : na, "MTF Rotation High", "‒", location.absolute, color.blue, size=size.tiny, show_last=1)
+   133→plotchar(enableMTF and isDifferentTimeframe ? mtfRotationLow : na, "MTF Rotation Low", "‒", location.absolute, color.aqua, size=size.tiny, show_last=1)
+   134→
+   135→// Display MTF high and low labels
+   136→if barstate.islast and enableMTF and isDifferentTimeframe and showLabels
+   137→    label.new(bar_index, mtfRotationHigh, text="MTF RHigh: " + str.tostring(mtfRotationHigh, "#.##"),
+   138→              color=color.new(color.blue, 100), style=label.style_label_down, textcolor=color.blue)
+   139→    label.new(bar_index, mtfRotationLow, text="MTF RLow: " + str.tostring(mtfRotationLow, "#.##"),
+   140→              color=color.new(color.aqua, 100), style=label.style_label_up, textcolor=color.aqua)
+   141→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

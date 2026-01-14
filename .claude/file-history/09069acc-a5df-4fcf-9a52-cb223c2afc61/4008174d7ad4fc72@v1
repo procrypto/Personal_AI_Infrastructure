@@ -1,0 +1,128 @@
+# External Integrations
+
+**Analysis Date:** 2025-01-07
+
+## APIs & External Services
+
+**BONKbot Web API:**
+- Primary system under test - REST API for trading bot
+  - Base URL: `https://api.bonkbot.io` (prod) - `config/environments/prod.env`
+  - Client: Native fetch with timeout - `src/core/utils.ts`
+  - Auth: Bearer token in `TEST_USER_TOKEN` env var
+  - Endpoints tested:
+    - Health: `/health`, `/health/detailed` - `src/systems/web-api/scripts/health-check.ts`
+    - Auth: `/v1/auth/auth-solana-wallet-message`, `/v1/auth/refresh` - `src/systems/web-api/scripts/auth-check.ts`
+    - User: `/v1/user/me`, `/v1/user/signer-account`, `/v1/signer-wallet` - `src/systems/web-api/scripts/user-api-check.ts`
+    - Trading: `/v1/swap/chain/solana/token/{mint}/getQuote`, `/v1/orders/*` - `src/systems/web-api/scripts/trading-api-check.ts`
+
+**WebSocket/Real-time Services:**
+- Market data and price streaming
+  - URL: `wss://terminal-ws.bonkbot.io` (prod) - `config/environments/prod.env`
+  - Client: ws npm package - `src/systems/web-api/scripts/websocket-check.ts`
+  - Topics: `market_data.*`, `sol_price`, `trades_2.*`
+
+**Telegram Bot API:**
+- Bot health verification
+  - Endpoint: `https://api.telegram.org/bot{token}/getMe`
+  - Client: Native fetch - `src/systems/telegram/scripts/tg-canary-check.ts`
+  - Tokens: `TG_MIGRATION_BOT_TOKEN`, `TG_FURIOSA_BOT_TOKEN`, `TG_BOT_NODE_TOKEN` - `config/systems/telegram.env`
+
+**PUM3 API (Quote Routing):**
+- Swap quote calculation service
+  - Base URL: `https://pum3-api.bonkbot.io` (prod) - `config/environments/prod.env`
+  - Endpoints: `/health`, `/quote` - `src/systems/web-api/scripts/dependency-check.ts`
+
+## Data Storage
+
+**Databases:**
+- PostgreSQL - Monitored via `/health/detailed` endpoint
+  - No direct connection (tested via API health check)
+  - Check: `A-DEP-01: PostgreSQL Connectivity` - `src/systems/web-api/scripts/dependency-check.ts`
+
+**Caching:**
+- Redis - Monitored via `/health/detailed` endpoint
+  - No direct connection (tested via API health check)
+  - Check: `A-DEP-06: Redis Connectivity` - `src/systems/web-api/scripts/dependency-check.ts`
+
+**Message Queue:**
+- NATS - Monitored via `/health/detailed` endpoint
+  - No direct connection (tested via API health check)
+  - Check: `A-DEP-02: NATS Connectivity` - `src/systems/web-api/scripts/dependency-check.ts`
+
+## Data Infrastructure (Placeholder)
+
+**Services to be integrated:**
+- Geyser-Geezer: `GEYSER_GEEZER_URL` - `config/environments/prod.env`
+- Materializer: `MATERIALIZER_URL` - `config/environments/prod.env`
+- ClickHouse: `CLICKHOUSE_URL` - `config/environments/prod.env`
+- Currently placeholder implementation - `src/systems/data-infra/run.ts`
+
+## Authentication & Identity
+
+**Auth Pattern:**
+- Bearer token authentication for API requests
+  - Token stored in `TEST_USER_TOKEN` env var
+  - Header format: `Authorization: Bearer {token}`
+  - Token refresh tested via `/v1/auth/refresh`
+
+**Wallet Integration:**
+- Solana wallet signing for authentication
+  - Wallet pubkey: `TEST_WALLET_PUBKEY` env var
+  - Auth message endpoint returns signing payload
+
+## Monitoring & Observability
+
+**Error Tracking:**
+- Not integrated (console logging only)
+
+**Analytics:**
+- Not integrated
+
+**Logs:**
+- Console output with colored formatting - `src/core/reporter.ts`
+- JSON format available for programmatic consumption
+- GitHub Actions step summary integration
+
+## CI/CD & Deployment
+
+**CI Pipeline:**
+- GitHub Actions
+  - Outputs: `GITHUB_OUTPUT` env var - `src/run-all.ts`
+  - Step summary: `GITHUB_STEP_SUMMARY` - `src/core/reporter.ts`
+  - Variables set: `status`, `passed`, `failed`, `skipped`
+
+**Reporting:**
+- Multiple output formats supported:
+  - Console (default, colored)
+  - JSON (for CI/CD integration)
+  - GitHub Actions markdown tables
+  - Allure TestOps (planned, not yet implemented)
+
+## Environment Configuration
+
+**Development:**
+- Required env vars loaded from `config/` directory
+- Local overrides: `config/.env.local` (gitignored)
+- Environment selection: `ENV` variable (prod/staging/beta)
+
+**Staging/Beta:**
+- Separate endpoint URLs in `config/environments/staging.env`, `config/environments/beta.env`
+- Same token configuration structure
+
+**Production:**
+- Environment files: `config/environments/prod.env`
+- System-specific tokens in `config/systems/*.env`
+
+## Blockchain Integration
+
+**Solana:**
+- Token addresses used for testing:
+  - BONK: `DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263`
+  - USDC: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+  - SOL: `So11111111111111111111111111111111111111112`
+- Configured in `config/environments/prod.env` and `src/core/config.ts`
+
+---
+
+*Integration audit: 2025-01-07*
+*Update when adding/removing external services*

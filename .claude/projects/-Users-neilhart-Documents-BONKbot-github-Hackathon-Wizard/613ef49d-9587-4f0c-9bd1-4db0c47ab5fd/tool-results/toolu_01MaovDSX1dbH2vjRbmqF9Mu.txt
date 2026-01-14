@@ -1,0 +1,260 @@
+     1→import {
+     2→  Binoculars,
+     3→  CircleCheck,
+     4→  CircleAlert,
+     5→  Cpu,
+     6→  Globe,
+     7→  LayoutDashboard,
+     8→  LibraryBig,
+     9→  LogOut,
+    10→  PieChart,
+    11→  ScanLine,
+    12→  Settings,
+    13→  Settings2,
+    14→  ShieldMinus,
+    15→  ScanEye,
+    16→} from "lucide-react";
+    17→import XIcon from "@/assets/icons/x.svg";
+    18→import DiscordIcon from "@/assets/icons/discord.svg";
+    19→
+    20→import { DISCORD_URL, DOCS_URL, X_URL } from "@/config";
+    21→import type { PresetTab } from "@/presets/preset-tab";
+    22→import { t } from "@lingui/core/macro";
+    23→import { DropDownItemProps } from "./header/user-dropdown-item";
+    24→import { OVERWATCH_CONTENT } from "@/walletTracker/tab-ids";
+    25→import { OverwatchContentType } from "@/store/persistentStore/slices/user-settings-store/types";
+    26→import { Badge } from "@/components/badge";
+    27→import { useAccountStrength } from "@/pages/SecurityPage/hooks/useAccountStrength";
+    28→import type { Tab } from "@/components/tabs";
+    29→
+    30→export const getTabs = (): Tab<PresetTab>[] => [
+    31→  {
+    32→    value: "buy-sell",
+    33→    label: t`Buy & Sell`,
+    34→    color: "success",
+    35→    icon: <Settings2 />,
+    36→  },
+    37→  // {
+    38→  //   value: "snipe" as const,
+    39→  //   label: "Snipe",
+    40→  //   color: "lightblue" as const,
+    41→  //   icon: <Crosshair />,
+    42→  //   disabled: true,
+    43→  // },
+    44→  {
+    45→    value: "auto-strat",
+    46→    label: t`Auto Strat`,
+    47→    color: "purple",
+    48→    icon: <Cpu />,
+    49→  },
+    50→];
+    51→
+    52→export type OverwatchDropdownOptions = {
+    53→  label: string;
+    54→  value: OverwatchContentType;
+    55→}[];
+    56→
+    57→export const getOverwatchDropdownOptions = (): {
+    58→  label: string;
+    59→  value: OverwatchContentType;
+    60→}[] =>
+    61→  [
+    62→    {
+    63→      label: t`Wallet Tracker`,
+    64→      value: OVERWATCH_CONTENT.WALLET_TRACKER,
+    65→    },
+    66→    {
+    67→      label: t`X-Ray`,
+    68→      value: OVERWATCH_CONTENT.X_RAY,
+    69→    },
+    70→    {
+    71→      label: t`Whale Moves`,
+    72→      value: OVERWATCH_CONTENT.WHALE_MOVES,
+    73→    },
+    74→    {
+    75→      label: t`Discovery`,
+    76→      value: OVERWATCH_CONTENT.TRENDING_LIST,
+    77→    },
+    78→    {
+    79→      label: t`Sentinel Alerts`,
+    80→      value: OVERWATCH_CONTENT.SENTINEL_ALERTS,
+    81→    },
+    82→  ] satisfies OverwatchDropdownOptions;
+    83→
+    84→export const createMenuItems = ({
+    85→  isSentinelEnabled,
+    86→  isDashboardEnabled,
+    87→}: {
+    88→  isSentinelEnabled: boolean;
+    89→  isDashboardEnabled: boolean;
+    90→}) => [
+    91→  {
+    92→    label: t`Dashboard`,
+    93→    id: "dashboard",
+    94→    to: "/dashboard",
+    95→    icon: <LayoutDashboard />,
+    96→    className: "hidden sm:block whitespace-nowrap",
+    97→    disabled: !isDashboardEnabled,
+    98→    tooltipContent: !isDashboardEnabled
+    99→      ? t`Dashboard is currently unavailable`
+   100→      : undefined,
+   101→  },
+   102→  {
+   103→    label: t`Discovery`,
+   104→    id: "discovery",
+   105→    to: "/discovery",
+   106→    icon: <Binoculars />,
+   107→    className: "hidden sm:block whitespace-nowrap",
+   108→  },
+   109→  {
+   110→    label: t`X-Ray`,
+   111→    id: "x-ray",
+   112→    icon: <ScanLine />,
+   113→    to: "/x-ray",
+   114→    className: "hidden sm:block whitespace-nowrap",
+   115→  },
+   116→  {
+   117→    label: t`Portfolio`,
+   118→    id: "portfolio",
+   119→    to: "/portfolio",
+   120→    icon: <PieChart />,
+   121→    className: "hidden sm:block whitespace-nowrap",
+   122→  },
+   123→  {
+   124→    label: t`Sentinel`,
+   125→    id: "sentinel",
+   126→    to: "/sentinel",
+   127→    icon: <ScanEye />,
+   128→    className: "hidden sm:block whitespace-nowrap",
+   129→    disabled: !isSentinelEnabled,
+   130→    tooltipContent: !isSentinelEnabled
+   131→      ? t`The complete on/off-chain intelligence & alerting suite. Invite only 🔒`
+   132→      : undefined,
+   133→  },
+   134→];
+   135→
+   136→export const useUserDropdownItems = ({
+   137→  logout,
+   138→  size = "24",
+   139→  enabledPasskeyFetch = false,
+   140→}: {
+   141→  logout: () => void;
+   142→  size?: string;
+   143→  enabledPasskeyFetch: boolean;
+   144→}): DropDownItemProps[] => {
+   145→  const { allSteps, completedSteps, isLoading } =
+   146→    useAccountStrength(enabledPasskeyFetch);
+   147→
+   148→  const isComplete = completedSteps >= allSteps;
+   149→
+   150→  const securityLabel = (
+   151→    <div className="flex items-center gap-2">
+   152→      <span>{t`Security`}</span>
+   153→      {!isLoading && (
+   154→        <Badge
+   155→          color={isComplete ? "success" : "warning"}
+   156→          variant="primary"
+   157→          className="h-6 text-xs whitespace-nowrap"
+   158→        >
+   159→          {isComplete ? (
+   160→            <CircleCheck
+   161→              width={12}
+   162→              height={12}
+   163→              className="text-success! mr-1 size-3!"
+   164→            />
+   165→          ) : (
+   166→            <CircleAlert
+   167→              width={12}
+   168→              height={12}
+   169→              className="text-warning! mr-1 size-3!"
+   170→            />
+   171→          )}
+   172→          {isComplete
+   173→            ? t`Setup Complete`
+   174→            : t`Finish Setup (${completedSteps} / ${allSteps})`}
+   175→        </Badge>
+   176→      )}
+   177→    </div>
+   178→  );
+   179→
+   180→  const items: DropDownItemProps[] = [
+   181→    {
+   182→      id: "security",
+   183→      ariaLabel: t`Security`,
+   184→      label: securityLabel,
+   185→      to: "/security",
+   186→      icon: <ShieldMinus size={size} />,
+   187→      type: "internal" as const,
+   188→      testId: "security-menu-item",
+   189→    },
+   190→    {
+   191→      id: "settings",
+   192→      ariaLabel: t`Settings`,
+   193→      label: t`Settings`,
+   194→      to: "/settings",
+   195→      icon: <Settings size={size} />,
+   196→      type: "internal" as const,
+   197→      testId: "settings-menu-item",
+   198→    },
+   199→    {
+   200→      id: "language",
+   201→      ariaLabel: t`Language`,
+   202→      label: t`Language`,
+   203→      icon: <Globe />,
+   204→      type: "language",
+   205→    },
+   206→    {
+   207→      id: "docs",
+   208→      ariaLabel: t`Documentation`,
+   209→      label: t`Documentation`,
+   210→      href: DOCS_URL,
+   211→      icon: <LibraryBig size={size} />,
+   212→      type: "external" as const,
+   213→      className: "sm:hidden",
+   214→    },
+   215→    {
+   216→      id: "discord",
+   217→      ariaLabel: t`Discord`,
+   218→      label: t`Discord`,
+   219→      href: DISCORD_URL,
+   220→      icon: (
+   221→        <DiscordIcon
+   222→          width={size}
+   223→          height={size}
+   224→        />
+   225→      ),
+   226→      type: "external" as const,
+   227→      className: "sm:hidden",
+   228→    },
+   229→    {
+   230→      id: "x",
+   231→      ariaLabel: t`X / Twitter`,
+   232→      label: t`X / Twitter`,
+   233→      href: X_URL,
+   234→      icon: (
+   235→        <XIcon
+   236→          width={size}
+   237→          height={size}
+   238→        />
+   239→      ),
+   240→      type: "external" as const,
+   241→      className: "sm:hidden",
+   242→    },
+   243→    {
+   244→      id: "logout",
+   245→      ariaLabel: t`Logout`,
+   246→      label: t`Logout`,
+   247→      onClick: logout,
+   248→      icon: <LogOut size={size} />,
+   249→      type: "action" as const,
+   250→      testId: "logout-menu-item",
+   251→    },
+   252→  ];
+   253→
+   254→  return items;
+   255→};
+   256→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

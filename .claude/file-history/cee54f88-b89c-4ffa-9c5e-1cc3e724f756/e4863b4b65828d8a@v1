@@ -1,0 +1,2879 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { memo, useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { cn } from "@/lib/utils";
+import {
+  AlertTriangle,
+  TrendingUp,
+  Skull,
+  Zap,
+  Users,
+  Crown,
+  Filter,
+  RotateCcw,
+  Landmark,
+  BarChart3,
+  ArrowLeft,
+  Target,
+} from "lucide-react";
+import { motion } from "framer-motion";
+import { TokenImage } from "@/components/token-image";
+import { getBonkbotImageUrl } from "@/utils/asset-mappers";
+import SolanaIcon from "@/assets/icons/solana.svg";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { useGetTrackedWallets } from "@/api/walletTracking/useTrackedWallets";
+import { useKols, type Kol } from "@bonkbot/pvp";
+import { socketIOManagerPvp } from "@/websocket/socketio/socketIOInstance";
+import { useWalletTrackerSubscription } from "@/hooks/useSubscriptions/useWalletTrackerSubscription";
+import { useXUserProfileApi } from "@/api/social/useXUserProfileApi";
+import { Tooltip } from "@/components/tooltip";
+import { ChartPreviewTooltip } from "@/components/TradingViewChart/chart-preview-tooltip";
+import XIcon from "@/assets/icons/x.svg";
+import TelegramIcon from "@/assets/icons/telegram.svg";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/popover";
+import { Slider } from "@/components/slider";
+import { ElapsedTimeCounter } from "@/components/elapsed-time-counter";
+import type { LiveTrade } from "@/store/memoryStore/slices/wallet-tracking-store/types";
+import { useTrenchBenchBackfill } from "@/hooks/useTrenchBenchBackfill";
+import { useTrenchBenchStore } from "@/store/trenchBenchStore";
+
+// =============================================================================
+// TODO: Backend improvements needed for better baseline loading:
+//
+// 1. Add `n` and `offset` params to WalletTrackerFilteringParams
+//    Location: web-terminal/crates/data-sdk/src/queries/data_api/trades.rs
+//    This would enable pagination: fetch 500+ trades instead of 30 per request.
+//    Currently DEFAULT_LIMIT is hardcoded to 30.
+//
+// 2. Add caching to /wallet_tracker/summary_all_v2 endpoint
+//    The 7-day aggregation query is slow (~30s+ for 20 wallets).
+//    A 5-minute cache would help significantly.
+//
+// 3. Move trader addresses from query string to POST body
+//    Current URL length limit (~8KB) causes WebSocket failures with 500+ wallets.
+//    POST body would allow unlimited wallet addresses.
+// =============================================================================
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type AnomalyType =
+  | "conviction-stack"
+  | "whale-trade"
+  | "dead-coin-revival"
+  | "re-entry"
+  | "big-cap-entry"
+  | "quick-reaction";
+
+type AnomalySeverity = "low" | "medium" | "high" | "critical";
+
+type WalletSource = "tracked" | "kol" | "both";
+
+// Individual signal with its details
+type Signal = {
+  type: AnomalyType;
+  severity: AnomalySeverity;
+  details: {
+    // Conviction Stack
+    buyCount?: number;
+    totalSolInvested?: number;
+    // Whale Trade
+    tradeSize?: number;
+    avgTradeSize?: number;
+    multiplier?: number;
+    // Dead Coin Revival
+    tokenAge?: number; // in days
+    volume24h?: number;
+    // Re-entry
+    timeSinceSell?: number; // in minutes
+    reEntrySize?: number; // SOL amount of re-entry buy
+    // Big Cap Entry
+    marketCapUsd?: number;
+    buySizeSOL?: number;
+    // Quick Reaction
+    tokenAgeSeconds?: number; // How old the token was when they bought
+    avgTokenAge?: number; // Their average token age at buy (in seconds)
+    speedMultiplier?: number; // How many times faster than their average
+  };
+};
+
+// Anomaly represents a trade that triggered one or more signals
+type Anomaly = {
+  id: string;
+  signals: Signal[]; // One or more signals triggered by this trade
+  // Computed from signals - highest severity wins
+  severity: AnomalySeverity;
+  walletAddress: string;
+  walletName: string | null;
+  walletEmoji: string | null;
+  source: WalletSource;
+  tokenMint: string;
+  tokenSymbol: string;
+  tokenName: string;
+  tokenImage: string;
+  timestamp: number;
+  // Price tracking (entry)
+  marketCapAtSignal: number; // Market cap in USD when signal fired
+  solInvested: number; // SOL amount invested in this signal
+  tradeCount?: number; // Number of trades consolidated into this anomaly (for deduplication)
+  // Outcome tracking (when they sell)
+  soldAt?: number; // Timestamp when they sold
+  marketCapAtSell?: number; // Market cap when they sold
+  solRecovered?: number; // SOL amount recovered from selling
+  realizedPnL?: number; // Actual profit/loss percentage: ((solRecovered - solInvested) / solInvested) * 100
+  // Legacy - keep for backwards compatibility during migration
+  type?: AnomalyType;
+  details?: Signal["details"];
+};
+
+type TraderBaseline = {
+  totalTrades: number; // All trades observed
+  qualifyingTrades: number; // Trades >= minSol threshold (used for whale detection)
+  qualifyingSolVolume: number; // Sum of qualifying trades
+  avgTradeSize: number; // Average of qualifying trades only
+  lastUpdated: number;
+  // Timing tracking for Quick Reaction
+  timedTrades: number; // Trades where we know the token age
+  totalTokenAge: number; // Sum of token ages (in seconds)
+  avgTokenAge: number; // Average token age at buy (in seconds)
+};
+
+type TokenBuyTracker = {
+  count: number;
+  totalSol: number;
+  lastBuyTimestamp: number;
+};
+
+// Track when a wallet sells 100% of a token (for re-entry detection)
+type SellOutTracker = {
+  tokenMint: string;
+  tokenSymbol: string;
+  tokenName: string;
+  sellTimestamp: number;
+};
+
+type SourceFilter = "all" | "tracked" | "kols";
+
+type SignalFilter = {
+  "conviction-stack": boolean;
+  "whale-trade": boolean;
+  "dead-coin-revival": boolean;
+  "re-entry": boolean;
+  "big-cap-entry": boolean;
+  "quick-reaction": boolean;
+};
+
+const DEFAULT_SIGNAL_FILTER: SignalFilter = {
+  "conviction-stack": true,
+  "whale-trade": true,
+  "dead-coin-revival": true,
+  "re-entry": true,
+  "big-cap-entry": true,
+  "quick-reaction": true,
+};
+
+// Sensitivity settings - each signal has a value from 0-100
+// 0 = Low (more signals, looser thresholds)
+// 50 = Medium (default)
+// 100 = High (fewer signals, stricter thresholds)
+type SensitivitySettings = {
+  "conviction-stack": number;
+  "whale-trade": number;
+  "dead-coin-revival": number;
+  "re-entry": number;
+  "big-cap-entry": number;
+  "quick-reaction": number;
+};
+
+const DEFAULT_SENSITIVITY: SensitivitySettings = {
+  "conviction-stack": 0, // Default to low (1 SOL)
+  "whale-trade": 0, // Default to low (3x)
+  "dead-coin-revival": 0, // Default to low (1 day)
+  "re-entry": 0, // Default to low (1 SOL)
+  "big-cap-entry": 0, // Default to low ($100k)
+  "quick-reaction": 0, // Default to low (3x faster)
+};
+
+// Sensitivity ranges: [low, medium, high] thresholds
+const SENSITIVITY_RANGES: Record<
+  AnomalyType,
+  { min: number; mid: number; max: number }
+> = {
+  "conviction-stack": { min: 3, mid: 7, max: 15 }, // Min SOL (stricter)
+  "whale-trade": { min: 3, mid: 5, max: 10 }, // Multiplier
+  "dead-coin-revival": { min: 1, mid: 3, max: 7 }, // Days
+  "re-entry": { min: 1, mid: 3, max: 5 }, // Min SOL
+  "big-cap-entry": { min: 100_000, mid: 500_000, max: 1_000_000 }, // Market cap USD
+  "quick-reaction": { min: 3, mid: 5, max: 10 }, // Speed multiplier (x times faster than avg)
+};
+
+// Helper to interpolate sensitivity value to actual threshold
+const getSensitivityThreshold = (
+  type: AnomalyType,
+  sensitivityValue: number
+): number => {
+  const range = SENSITIVITY_RANGES[type];
+  // sensitivityValue is 0-100, where 0 = min (more signals), 100 = max (fewer signals)
+  if (sensitivityValue <= 50) {
+    // Interpolate between min and mid
+    const t = sensitivityValue / 50;
+    return range.min + (range.mid - range.min) * t;
+  } else {
+    // Interpolate between mid and max
+    const t = (sensitivityValue - 50) / 50;
+    return range.mid + (range.max - range.mid) * t;
+  }
+};
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const ANOMALY_CONFIG = {
+  // Conviction Stack: Minimum buys to trigger (stricter = real conviction)
+  convictionStackMinBuys: 5,
+  // Conviction Stack: Minimum total SOL to be considered real conviction
+  convictionStackMinSol: 3.0,
+  // Whale Trade: Multiplier threshold
+  whaleTradeMultiplier: 3,
+  // Whale Trade: Minimum qualifying trades to establish baseline
+  whaleTradeMinTrades: 5,
+  // Whale Trade: Minimum SOL for a trade to count toward baseline (filters micro-pumps)
+  whaleTradeBaselineMinSol: 0.1,
+  // Dead Coin Revival: Token age in days (controlled by sensitivity)
+  deadCoinMinAgeDays: 7,
+  // Dead Coin Revival: Maximum market cap to be considered "dead" ($100k)
+  deadCoinMaxMarketCapUsd: 100_000,
+  // Big Cap Entry: Minimum market cap in USD to be considered "big cap"
+  bigCapMinMarketCapUsd: 500_000, // $500k
+  // Re-entry: Minimum SOL to be considered a real re-entry (not micro-pump)
+  reEntryMinSol: 0.5,
+  // Re-entry: Minimum sell size to track (ignore tiny partial sells)
+  reEntrySellMinSol: 0.5,
+  // Re-entry: Minimum time gap in minutes between sell and re-buy
+  reEntryMinGapMinutes: 15,
+  // Max anomalies to keep in feed. Can increase to 200+ if users want more anomalies visible.
+  maxAnomalies: 100,
+  // Time window for conviction stack (ms) - 2 hours (concentrated buying)
+  convictionStackWindow: 2 * 60 * 60 * 1000,
+};
+
+const SEVERITY_CONFIG: Record<
+  AnomalySeverity,
+  { color: string; labelBg: string }
+> = {
+  low: { color: "text-blue-400", labelBg: "bg-blue-500/20" },
+  medium: { color: "text-yellow-400", labelBg: "bg-yellow-500/20" },
+  high: { color: "text-orange-400", labelBg: "bg-orange-500/20" },
+  critical: { color: "text-red-400", labelBg: "bg-red-500/20" },
+};
+
+const ANOMALY_ICONS: Record<AnomalyType, typeof AlertTriangle> = {
+  "conviction-stack": TrendingUp,
+  "whale-trade": Zap,
+  "dead-coin-revival": Skull,
+  "re-entry": RotateCcw,
+  "big-cap-entry": Landmark,
+  "quick-reaction": Target,
+};
+
+const ANOMALY_LABELS: Record<AnomalyType, string> = {
+  "conviction-stack": "Conviction Stack",
+  "whale-trade": "Whale Trade",
+  "dead-coin-revival": "Dead Coin Revival",
+  "re-entry": "Re-entry",
+  "big-cap-entry": "Big Cap Entry",
+  "quick-reaction": "Quick Reaction",
+};
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+// Generate unique ID for a trade (uses signature for guaranteed uniqueness)
+const generateTradeId = (signature: string) => `trade-${signature}`;
+
+// Severity order for comparison
+const SEVERITY_ORDER: Record<AnomalySeverity, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3,
+};
+
+// Get highest severity from multiple signals
+const getHighestSeverity = (signals: Signal[]): AnomalySeverity => {
+  if (signals.length === 0) return "low";
+  return signals.reduce((highest, signal) => {
+    return SEVERITY_ORDER[signal.severity] > SEVERITY_ORDER[highest]
+      ? signal.severity
+      : highest;
+  }, signals[0].severity);
+};
+
+const calculateSeverity = (
+  type: AnomalyType,
+  details: Signal["details"]
+): AnomalySeverity => {
+  switch (type) {
+    case "conviction-stack": {
+      const count = details.buyCount ?? 0;
+      const totalSol = details.totalSolInvested ?? 0;
+      // Severity based on buy count and SOL (min is now 5 buys, 3 SOL)
+      if (count >= 12 || (count >= 10 && totalSol >= 20)) return "critical";
+      if (count >= 8 || (count >= 7 && totalSol >= 10)) return "high";
+      if (count >= 6 || totalSol >= 7) return "medium";
+      return "low";
+    }
+    case "whale-trade": {
+      const multiplier = details.multiplier ?? 1;
+      // Original thresholds for whale trades
+      if (multiplier >= 10) return "critical";
+      if (multiplier >= 6) return "high";
+      if (multiplier >= 4) return "medium";
+      return "low";
+    }
+    case "dead-coin-revival": {
+      const age = details.tokenAge ?? 0;
+      const mcap = details.marketCapUsd ?? 0;
+      // Severity based on how "dead" the coin is (older + lower mcap = more dead)
+      if (age >= 30 && mcap < 10_000) return "critical"; // 30+ days, <$10k
+      if (age >= 14 && mcap < 50_000) return "high"; // 14+ days, <$50k
+      if (age >= 7 && mcap < 100_000) return "medium"; // 7+ days, <$100k
+      return "low";
+    }
+    case "re-entry": {
+      const reEntrySize = details.reEntrySize ?? 0;
+      const timeSinceSell = details.timeSinceSell ?? 0;
+      // Higher severity for quick re-entries with significant size
+      if (reEntrySize >= 5 && timeSinceSell <= 30) return "critical";
+      if (reEntrySize >= 2 || timeSinceSell <= 60) return "high";
+      if (reEntrySize >= 0.5) return "medium";
+      return "low";
+    }
+    case "big-cap-entry": {
+      const marketCap = details.marketCapUsd ?? 0;
+      const buySize = details.buySizeSOL ?? 0;
+      // Higher severity for very large caps and bigger buys
+      if (marketCap >= 10_000_000 && buySize >= 5) return "critical"; // $10M+ with 5+ SOL
+      if (marketCap >= 5_000_000 || buySize >= 3) return "high"; // $5M+ or 3+ SOL
+      if (marketCap >= 1_000_000) return "medium"; // $1M+
+      return "low"; // $500k-$1M
+    }
+    case "quick-reaction": {
+      const tokenAgeSeconds = details.tokenAgeSeconds ?? 0;
+      const speedMultiplier = details.speedMultiplier ?? 1;
+      // Higher severity for very early buys and large deviations from average
+      if (tokenAgeSeconds < 30 && speedMultiplier >= 10) return "critical"; // <30s and 10x faster
+      if (tokenAgeSeconds < 120 && speedMultiplier >= 5) return "high"; // <2m and 5x faster
+      if (tokenAgeSeconds < 300) return "medium"; // <5m
+      return "low";
+    }
+  }
+};
+
+const formatWalletName = (
+  address: string,
+  name: string | null,
+  emoji: string | null
+) => {
+  if (name) {
+    return emoji ? `${emoji} ${name}` : name;
+  }
+  return `${address.slice(0, 4)}...${address.slice(-4)}`;
+};
+
+// =============================================================================
+// Header Controls
+// =============================================================================
+
+// Store for syncing state between header controls and widget
+const filterStore = new Map<string, SourceFilter>([["default", "all"]]);
+const signalFilterStore = new Map<string, SignalFilter>([
+  ["default", { ...DEFAULT_SIGNAL_FILTER }],
+]);
+const sensitivityStore = new Map<string, SensitivitySettings>([
+  ["default", { ...DEFAULT_SENSITIVITY }],
+]);
+
+// LocalStorage key for sensitivity settings
+const SENSITIVITY_STORAGE_KEY = "anomalyzer-sensitivity";
+
+// Load sensitivity from localStorage
+const loadSensitivity = (): SensitivitySettings => {
+  try {
+    const stored = localStorage.getItem(SENSITIVITY_STORAGE_KEY);
+    if (!stored) return { ...DEFAULT_SENSITIVITY };
+    const parsed = JSON.parse(stored) as Partial<SensitivitySettings>;
+    // Merge with defaults to handle new keys added after initial storage
+    return { ...DEFAULT_SENSITIVITY, ...parsed };
+  } catch {
+    return { ...DEFAULT_SENSITIVITY };
+  }
+};
+
+// Save sensitivity to localStorage
+const saveSensitivity = (settings: SensitivitySettings) => {
+  try {
+    localStorage.setItem(SENSITIVITY_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+// LocalStorage keys for persisting data
+const ANOMALIES_STORAGE_KEY = "anomalyzer-anomalies";
+const ARCHIVED_ANOMALIES_STORAGE_KEY = "anomalyzer-archived"; // Closed positions for analytics
+const BASELINES_STORAGE_KEY = "anomalyzer-baselines";
+const TOKEN_TRACKERS_STORAGE_KEY = "anomalyzer-token-trackers";
+const SELL_TRACKERS_STORAGE_KEY = "anomalyzer-sell-trackers";
+const MAX_STORED_ANOMALIES = 200; // Increased for better coverage
+const MAX_ARCHIVED_ANOMALIES = 500; // Keep more closed positions for analytics
+// Keep baselines for 7 days before considering them stale
+const BASELINE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Helper to check if a signal still meets current thresholds
+const isValidSignal = (signal: Signal): boolean => {
+  // Conviction stacks must meet minimum SOL threshold
+  if (signal.type === "conviction-stack") {
+    const totalSol = signal.details.totalSolInvested ?? 0;
+    if (totalSol < ANOMALY_CONFIG.convictionStackMinSol) {
+      return false;
+    }
+  }
+  // Re-entries must meet minimum SOL threshold (filter out micro-pumps)
+  if (signal.type === "re-entry") {
+    const reEntrySize = signal.details.reEntrySize ?? 0;
+    if (reEntrySize < ANOMALY_CONFIG.reEntryMinSol) {
+      return false;
+    }
+  }
+  return true;
+};
+
+// Helper to load anomalies from localStorage
+const loadStoredAnomalies = (): Anomaly[] => {
+  try {
+    const stored = localStorage.getItem(ANOMALIES_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored) as Anomaly[];
+    // Filter out anomalies older than 24 hours
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    // Migrate and filter anomalies
+    return parsed
+      .filter(a => a.timestamp > oneDayAgo)
+      .map(a => {
+        // Migrate: Convert old single-type anomalies to new signals array format
+        let signals = a.signals;
+        if (!signals && a.type && a.details) {
+          signals = [
+            {
+              type: a.type,
+              severity: calculateSeverity(a.type, a.details),
+              details: a.details,
+            },
+          ];
+        }
+
+        // Filter out invalid signals (those that no longer meet thresholds)
+        if (signals) {
+          signals = signals.filter(isValidSignal);
+        }
+
+        const solInvested =
+          a.solInvested ??
+          (a.details?.totalSolInvested ||
+            a.details?.tradeSize ||
+            a.details?.reEntrySize ||
+            a.details?.buySizeSOL ||
+            0);
+
+        // Calculate highest severity from signals
+        const severity =
+          signals && signals.length > 0
+            ? getHighestSeverity(signals)
+            : a.severity;
+
+        return {
+          ...a,
+          signals,
+          severity,
+          marketCapAtSignal: a.marketCapAtSignal ?? 0,
+          solInvested,
+          // Reset PnL for fresh tracking
+          realizedPnL: undefined,
+          soldAt: undefined,
+          solRecovered: undefined,
+        };
+      })
+      .filter(a => a.signals && a.signals.length > 0);
+  } catch {
+    return [];
+  }
+};
+
+// Helper to save anomalies to localStorage
+const saveAnomalies = (anomalies: Anomaly[]) => {
+  try {
+    // Keep only the most recent anomalies
+    const toStore = anomalies.slice(0, MAX_STORED_ANOMALIES);
+    localStorage.setItem(ANOMALIES_STORAGE_KEY, JSON.stringify(toStore));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+// Helper to load archived (closed) anomalies for analytics
+const loadArchivedAnomalies = (): Anomaly[] => {
+  try {
+    const stored = localStorage.getItem(ARCHIVED_ANOMALIES_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored) as Anomaly[];
+    // Keep archived anomalies for 7 days
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return parsed
+      .filter(a => a.timestamp > sevenDaysAgo)
+      .map(a => {
+        // Migrate old format if needed
+        if (!a.signals && a.type && a.details) {
+          return {
+            ...a,
+            signals: [
+              {
+                type: a.type,
+                severity: calculateSeverity(a.type, a.details),
+                details: a.details,
+              },
+            ],
+          };
+        }
+        return a;
+      });
+  } catch {
+    return [];
+  }
+};
+
+// Helper to archive a closed anomaly (has realizedPnL)
+const archiveAnomaly = (anomaly: Anomaly) => {
+  try {
+    const existing = loadArchivedAnomalies();
+    // Don't add duplicates
+    if (existing.some(a => a.id === anomaly.id)) return;
+    const updated = [anomaly, ...existing].slice(0, MAX_ARCHIVED_ANOMALIES);
+    localStorage.setItem(
+      ARCHIVED_ANOMALIES_STORAGE_KEY,
+      JSON.stringify(updated)
+    );
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+// Helper to load trader baselines from localStorage
+const loadTraderBaselines = (): Map<string, TraderBaseline> => {
+  try {
+    const stored = localStorage.getItem(BASELINES_STORAGE_KEY);
+    if (!stored) return new Map();
+    const parsed = JSON.parse(stored) as Array<[string, TraderBaseline]>;
+    const now = Date.now();
+    // Filter out stale baselines (older than 7 days)
+    const filtered = parsed.filter(
+      ([, baseline]) => now - baseline.lastUpdated < BASELINE_MAX_AGE_MS
+    );
+    return new Map(filtered);
+  } catch {
+    return new Map();
+  }
+};
+
+// Helper to save trader baselines to localStorage
+const saveTraderBaselines = (baselines: Map<string, TraderBaseline>) => {
+  try {
+    const entries = Array.from(baselines.entries());
+    localStorage.setItem(BASELINES_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+// Helper to load token buy trackers from localStorage
+const loadTokenBuyTrackers = (): Map<string, TokenBuyTracker> => {
+  try {
+    const stored = localStorage.getItem(TOKEN_TRACKERS_STORAGE_KEY);
+    if (!stored) return new Map();
+    const parsed = JSON.parse(stored) as Array<[string, TokenBuyTracker]>;
+    const now = Date.now();
+    // Filter out trackers older than the conviction stack window
+    const filtered = parsed.filter(
+      ([, tracker]) =>
+        now - tracker.lastBuyTimestamp < ANOMALY_CONFIG.convictionStackWindow
+    );
+    return new Map(filtered);
+  } catch {
+    return new Map();
+  }
+};
+
+// Helper to save token buy trackers to localStorage
+const saveTokenBuyTrackers = (trackers: Map<string, TokenBuyTracker>) => {
+  try {
+    const entries = Array.from(trackers.entries());
+    localStorage.setItem(TOKEN_TRACKERS_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+// Helper to load sell out trackers from localStorage
+const loadSellOutTrackers = (): Map<string, SellOutTracker> => {
+  try {
+    const stored = localStorage.getItem(SELL_TRACKERS_STORAGE_KEY);
+    if (!stored) return new Map();
+    const parsed = JSON.parse(stored) as Array<[string, SellOutTracker]>;
+    const now = Date.now();
+    // Only keep sells from the last 24 hours (re-entry window)
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    const filtered = parsed.filter(
+      ([, tracker]) => tracker.sellTimestamp > oneDayAgo
+    );
+    return new Map(filtered);
+  } catch {
+    return new Map();
+  }
+};
+
+// Helper to save sell out trackers to localStorage
+const saveSellOutTrackers = (trackers: Map<string, SellOutTracker>) => {
+  try {
+    const entries = Array.from(trackers.entries());
+    localStorage.setItem(SELL_TRACKERS_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+// Helper to format sensitivity value for display
+const formatSensitivityValue = (type: AnomalyType, value: number): string => {
+  const threshold = getSensitivityThreshold(type, value);
+  switch (type) {
+    case "conviction-stack":
+      return `${threshold.toFixed(0)} SOL`;
+    case "whale-trade":
+      return `${threshold.toFixed(0)}x`;
+    case "dead-coin-revival":
+      return `${threshold.toFixed(0)}d`;
+    case "re-entry":
+      return `${threshold.toFixed(0)} SOL`;
+    case "big-cap-entry":
+      return threshold >= 1_000_000
+        ? `$${(threshold / 1_000_000).toFixed(1)}M`
+        : `$${(threshold / 1_000).toFixed(0)}k`;
+    case "quick-reaction":
+      return `${threshold.toFixed(0)}x faster`;
+  }
+};
+
+export const AnomalyzerWidgetHeaderControls = ({
+  widgetId,
+}: {
+  widgetId?: string;
+}) => {
+  const key = widgetId || "default";
+  const [filter, setFilter] = useState<SourceFilter>(
+    filterStore.get(key) || "all"
+  );
+
+  const handleFilterChange = (value: string) => {
+    const newFilter = value as SourceFilter;
+    setFilter(newFilter);
+    filterStore.set(key, newFilter);
+    window.dispatchEvent(
+      new CustomEvent("anomalyzer-filter-change", {
+        detail: { widgetId: key, filter: newFilter },
+      })
+    );
+  };
+
+  const buttonBase =
+    "flex items-center justify-center rounded-md px-2 py-1 text-[10px] font-medium leading-none transition-all";
+  const buttonActive = "bg-bg-quartiary text-text-primary";
+  const buttonInactive =
+    "text-text-secondary bg-bg-secondary hover:text-text-primary hover:bg-bg-secondary-hover";
+
+  return (
+    <div className="border-border-primary bg-bg-secondary flex items-center gap-0.5 rounded-md border p-0.5">
+      <Tooltip content="Show all anomalies">
+        <button
+          onClick={() => handleFilterChange("all")}
+          className={cn(
+            buttonBase,
+            filter === "all" ? buttonActive : buttonInactive
+          )}
+        >
+          All
+        </button>
+      </Tooltip>
+      <Tooltip content="Your tracked wallets only">
+        <button
+          onClick={() => handleFilterChange("tracked")}
+          className={cn(
+            buttonBase,
+            filter === "tracked" ? buttonActive : buttonInactive
+          )}
+        >
+          <Users className="size-3" />
+        </button>
+      </Tooltip>
+      <Tooltip content="KOL wallets only">
+        <button
+          onClick={() => handleFilterChange("kols")}
+          className={cn(
+            buttonBase,
+            filter === "kols" ? buttonActive : buttonInactive
+          )}
+        >
+          <Crown className="size-3" />
+        </button>
+      </Tooltip>
+    </div>
+  );
+};
+
+// =============================================================================
+// Anomaly Card Component
+// =============================================================================
+
+type AnomalyCardProps = {
+  anomaly: Anomaly;
+  kols: Kol[];
+  onDismiss?: (id: string) => void;
+  isHighlighted?: boolean;
+  onSelect?: (anomaly: Anomaly) => void;
+};
+
+// Helper to get detail text for a signal
+const getSignalDetail = (signal: Signal): React.ReactNode => {
+  const SolAmountInline = ({ amount }: { amount: string }) => (
+    <span className="inline-flex items-center gap-0.5">
+      {amount}
+      <SolanaIcon className="size-2 text-white/70" />
+    </span>
+  );
+
+  switch (signal.type) {
+    case "conviction-stack": {
+      const sol = (signal.details.totalSolInvested ?? 0).toFixed(2);
+      return (
+        <>
+          {signal.details.buyCount} buys · <SolAmountInline amount={sol} />
+        </>
+      );
+    }
+    case "whale-trade": {
+      const mult = (signal.details.multiplier ?? 0).toFixed(1);
+      return `${mult}x avg`;
+    }
+    case "dead-coin-revival": {
+      const mcap = signal.details.marketCapUsd ?? 0;
+      const mcapStr =
+        mcap >= 1_000
+          ? `$${(mcap / 1_000).toFixed(0)}k`
+          : `$${mcap.toFixed(0)}`;
+      return `${signal.details.tokenAge}d old · ${mcapStr}`;
+    }
+    case "re-entry": {
+      const time = signal.details.timeSinceSell ?? 0;
+      const timeStr = time < 60 ? `${time}m` : `${Math.round(time / 60)}h`;
+      return `${timeStr} since exit`;
+    }
+    case "big-cap-entry": {
+      const mcap = signal.details.marketCapUsd ?? 0;
+      return mcap >= 1_000_000
+        ? `$${(mcap / 1_000_000).toFixed(1)}M mcap`
+        : `$${(mcap / 1_000).toFixed(0)}k mcap`;
+    }
+    case "quick-reaction": {
+      const tokenAge = signal.details.tokenAgeSeconds ?? 0;
+      return tokenAge < 60
+        ? `${Math.round(tokenAge)}s old`
+        : `${Math.round(tokenAge / 60)}m old`;
+    }
+  }
+};
+
+// Signal badge component
+const SignalBadge = ({ signal }: { signal: Signal }) => {
+  const Icon = ANOMALY_ICONS[signal.type];
+  const severityConfig = SEVERITY_CONFIG[signal.severity];
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1.5 rounded-md border px-2 py-1",
+        signal.severity === "critical"
+          ? "border-red-500/40 bg-red-500/20"
+          : signal.severity === "high"
+            ? "border-orange-500/30 bg-orange-500/10"
+            : "border-white/10 bg-white/5"
+      )}
+    >
+      <Icon className={cn("size-3", severityConfig.color)} />
+      <span className={cn("text-[10px] font-medium", severityConfig.color)}>
+        {ANOMALY_LABELS[signal.type]}
+      </span>
+      <span className="text-muted-foreground text-[10px]">
+        {getSignalDetail(signal)}
+      </span>
+    </div>
+  );
+};
+
+// KOL Avatar component - fetches Twitter profile image
+const KolAvatarImage = memo(
+  ({ kol, size = "md" }: { kol: Kol; size?: "sm" | "md" }) => {
+    const { data: profile, isLoading } = useXUserProfileApi(kol.twitter);
+
+    const emojiSize = size === "sm" ? "text-xs" : "text-lg";
+
+    if (profile?.avatarUrl) {
+      return (
+        <img
+          src={profile.avatarUrl}
+          alt={kol.name}
+          className="size-full object-cover"
+        />
+      );
+    }
+
+    if (isLoading) {
+      return <div className="bg-bg-quartiary size-full animate-pulse" />;
+    }
+
+    return <span className={emojiSize}>{kol.emoji}</span>;
+  }
+);
+
+KolAvatarImage.displayName = "KolAvatarImage";
+
+// Trader tooltip content component
+const TraderTooltipContent = ({
+  anomaly,
+  kol,
+}: {
+  anomaly: Anomaly;
+  kol: Kol | undefined;
+}) => {
+  if (kol) {
+    // Rich KOL tooltip
+    const stats1d = kol.timeframe_1d;
+    const stats7d = kol.timeframe_7d;
+    const winRate1d = stats1d
+      ? Math.round((stats1d.wins / (stats1d.wins + stats1d.losses)) * 100)
+      : 0;
+    const winRate7d = stats7d
+      ? Math.round((stats7d.wins / (stats7d.wins + stats7d.losses)) * 100)
+      : 0;
+
+    return (
+      <div className="bg-bg-secondary border-border-primary min-w-[240px] rounded-lg border p-3 shadow-xl">
+        <div className="mb-3 flex items-center gap-2.5">
+          <div className="border-border-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-white/5">
+            <KolAvatarImage kol={kol} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-white">{kol.name}</div>
+            <div className="text-text-secondary flex items-center gap-2 text-xs">
+              <span>KOL</span>
+              {(kol.twitter || kol.telegram) && (
+                <div className="flex items-center gap-1.5">
+                  {kol.twitter && (
+                    <a
+                      href={
+                        kol.twitter.startsWith("http")
+                          ? kol.twitter
+                          : `https://x.com/${kol.twitter}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-text-tertiary transition-colors hover:text-white"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <XIcon className="size-3.5" />
+                    </a>
+                  )}
+                  {kol.telegram && (
+                    <a
+                      href={
+                        kol.telegram.startsWith("http")
+                          ? kol.telegram
+                          : `https://t.me/${kol.telegram}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-text-tertiary transition-colors hover:text-white"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <TelegramIcon className="size-3.5" />
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {stats1d && (
+          <div className="space-y-1 text-xs">
+            <div className="text-text-secondary text-[10px] tracking-wide uppercase">
+              24h Stats
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-text-secondary">P/L</span>
+              <span
+                className={
+                  stats1d.profit >= 0 ? "text-green-400" : "text-red-400"
+                }
+              >
+                {stats1d.profit >= 0 ? "+" : ""}
+                {stats1d.profit.toFixed(1)}%
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-text-secondary">Win Rate</span>
+              <span className="text-white">
+                {winRate1d}% ({stats1d.wins}W/{stats1d.losses}L)
+              </span>
+            </div>
+          </div>
+        )}
+
+        {stats7d && (
+          <div className="mt-2.5 space-y-1 border-t border-white/10 pt-2.5 text-xs">
+            <div className="text-text-secondary text-[10px] tracking-wide uppercase">
+              7d Stats
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-text-secondary">P/L</span>
+              <span
+                className={
+                  stats7d.profit >= 0 ? "text-green-400" : "text-red-400"
+                }
+              >
+                {stats7d.profit >= 0 ? "+" : ""}
+                {stats7d.profit.toFixed(1)}%
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-text-secondary">Win Rate</span>
+              <span className="text-white">
+                {winRate7d}% ({stats7d.wins}W/{stats7d.losses}L)
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Simple tooltip for tracked wallets
+  return (
+    <div className="bg-bg-secondary border-border-primary min-w-[180px] rounded-lg border p-3 shadow-xl">
+      <div className="text-text-secondary text-xs">Tracked Wallet</div>
+      <div className="mt-1 font-mono text-xs text-white">
+        {anomaly.walletAddress}
+      </div>
+    </div>
+  );
+};
+
+const AnomalyCard = memo(
+  ({
+    anomaly,
+    kols,
+    onDismiss: _onDismiss,
+    isHighlighted,
+    onSelect,
+  }: AnomalyCardProps) => {
+    const navigate = useNavigate();
+
+    // Look up KOL data if this is a KOL
+    const kol = useMemo(() => {
+      if (anomaly.source === "tracked") return undefined;
+      return kols.find(
+        k => k.address.toLowerCase() === anomaly.walletAddress.toLowerCase()
+      );
+    }, [anomaly.walletAddress, anomaly.source, kols]);
+
+    // Use signals array if available, otherwise fallback to legacy single type
+    const signals: Signal[] =
+      anomaly.signals ||
+      (anomaly.type && anomaly.details
+        ? [
+            {
+              type: anomaly.type,
+              severity: anomaly.severity,
+              details: anomaly.details,
+            },
+          ]
+        : []);
+
+    const handleTokenClick = useCallback(() => {
+      navigate({ to: "/trading/$mint", params: { mint: anomaly.tokenMint } });
+    }, [navigate, anomaly.tokenMint]);
+
+    const handleCardClick = useCallback(() => {
+      onSelect?.(anomaly);
+    }, [anomaly, onSelect]);
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: -5 }}
+        animate={{ opacity: 1, y: 0 }}
+        onClick={handleCardClick}
+        className={cn(
+          "flex cursor-pointer gap-2.5 rounded px-2 py-2 transition-colors",
+          isHighlighted
+            ? "bg-blue/10 ring-blue/40 ring-1"
+            : "bg-bg-tertiary hover:bg-bg-quartiary"
+        )}
+      >
+        {/* Token Image */}
+        <div className="flex-shrink-0">
+          <ChartPreviewTooltip
+            mint={anomaly.tokenMint}
+            location="anomalyzer"
+            tokenSymbol={anomaly.tokenSymbol}
+            tokenName={anomaly.tokenName || anomaly.tokenSymbol}
+            side="right"
+            align="start"
+            width={380}
+            height={320}
+            timeframes={["1s", "1m", "5m"] as const}
+            defaultResolution="1s"
+          >
+            <div
+              onClick={handleTokenClick}
+              className="size-9 cursor-pointer overflow-hidden rounded-md border border-white/10 transition-all hover:border-white/30"
+            >
+              <TokenImage
+                imgSrc={getBonkbotImageUrl(anomaly.tokenMint).imgSrc}
+                symbol={anomaly.tokenSymbol}
+                className="size-full"
+              />
+            </div>
+          </ChartPreviewTooltip>
+        </div>
+
+        {/* Content */}
+        <div className="min-w-0 flex-1">
+          {/* Row 1: Trader bought Token | Time */}
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs">
+              {/* KOL Avatar - small version for card */}
+              {kol && (
+                <div className="flex size-5 shrink-0 items-center justify-center overflow-hidden rounded">
+                  <KolAvatarImage
+                    kol={kol}
+                    size="sm"
+                  />
+                </div>
+              )}
+              <span className="font-bold text-white">
+                {!kol && anomaly.walletEmoji && (
+                  <span className="mr-0.5 text-[10px]">
+                    {anomaly.walletEmoji}
+                  </span>
+                )}
+                <Tooltip
+                  content={
+                    <TraderTooltipContent
+                      anomaly={anomaly}
+                      kol={kol}
+                    />
+                  }
+                  disableHoverableContent={false}
+                  delayDuration={200}
+                  withArrow={false}
+                  className="p-0"
+                  unstyled
+                >
+                  <span className="cursor-help">
+                    {formatWalletName(
+                      anomaly.walletAddress,
+                      anomaly.walletName,
+                      null
+                    )}
+                  </span>
+                </Tooltip>
+              </span>
+              <span className="text-white/30">bought</span>
+              <ChartPreviewTooltip
+                mint={anomaly.tokenMint}
+                location="anomalyzer"
+                tokenSymbol={anomaly.tokenSymbol}
+                tokenName={anomaly.tokenName || anomaly.tokenSymbol}
+                side="right"
+                align="center"
+                width={380}
+                height={320}
+                timeframes={["1s", "1m", "5m"] as const}
+                defaultResolution="1s"
+              >
+                <span
+                  onClick={handleTokenClick}
+                  className="cursor-pointer font-semibold text-white"
+                >
+                  ${anomaly.tokenSymbol}
+                </span>
+              </ChartPreviewTooltip>
+              {anomaly.tradeCount && anomaly.tradeCount > 1 && (
+                <Tooltip
+                  content={`${anomaly.tradeCount} trades within 5 minutes`}
+                >
+                  <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/70">
+                    {anomaly.tradeCount}x
+                  </span>
+                </Tooltip>
+              )}
+            </div>
+            <ElapsedTimeCounter
+              created={anomaly.timestamp * 1000000}
+              className="text-[10px] text-white/40"
+              roundDown
+            />
+          </div>
+
+          {/* Row 2: Signal Badges */}
+          <div className="flex flex-wrap gap-1.5">
+            {signals.map((signal, idx) => (
+              <SignalBadge
+                key={`${signal.type}-${idx}`}
+                signal={signal}
+              />
+            ))}
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+);
+
+AnomalyCard.displayName = "AnomalyCard";
+
+// =============================================================================
+// Empty State
+// =============================================================================
+
+const EmptyState = () => (
+  <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+    <div className="bg-muted/50 mb-3 rounded-full p-3">
+      <AlertTriangle className="text-muted-foreground size-6" />
+    </div>
+    <h3 className="mb-1 text-sm font-medium text-white">
+      No Anomalies Detected
+    </h3>
+    <p className="text-muted-foreground max-w-[200px] text-xs">
+      Monitoring tracked wallets for unusual trading patterns...
+    </p>
+  </div>
+);
+
+// =============================================================================
+// Analytics View
+// =============================================================================
+
+type SignalStats = {
+  type: AnomalyType;
+  label: string;
+  count: number;
+  icon: typeof TrendingUp;
+  // Simulated success rates based on signal characteristics
+  successRate: number;
+  avgGain: number;
+};
+
+// Helper to check if anomaly has a specific signal type
+const hasSignalType = (anomaly: Anomaly, type: AnomalyType): boolean => {
+  if (anomaly.signals) {
+    return anomaly.signals.some(s => s.type === type);
+  }
+  // Legacy fallback
+  return anomaly.type === type;
+};
+
+// Calculate real success rates from anomalies with sell-based outcome tracking
+const calculateRealStats = (
+  anomalies: Anomaly[],
+  type: AnomalyType
+): {
+  successRate: number;
+  avgGain: number;
+  trackedCount: number;
+  pendingCount: number;
+} => {
+  // Filter anomalies that contain this signal type and have a realized P/L
+  const closedAnomalies = anomalies.filter(
+    a => hasSignalType(a, type) && a.realizedPnL !== undefined
+  );
+
+  // Also count pending ones
+  const pendingAnomalies = anomalies.filter(
+    a =>
+      hasSignalType(a, type) && a.solInvested > 0 && a.realizedPnL === undefined
+  );
+
+  if (closedAnomalies.length === 0) {
+    return {
+      successRate: 0,
+      avgGain: 0,
+      trackedCount: 0,
+      pendingCount: pendingAnomalies.length,
+    };
+  }
+
+  // A signal is "successful" if the realized P/L is positive
+  const successful = closedAnomalies.filter(a => (a.realizedPnL || 0) > 0);
+  const successRate = Math.round(
+    (successful.length / closedAnomalies.length) * 100
+  );
+
+  // Calculate average P/L across ALL closed trades (including losses)
+  const totalPnL = closedAnomalies.reduce(
+    (sum, a) => sum + (a.realizedPnL || 0),
+    0
+  );
+  const avgGain = totalPnL / closedAnomalies.length;
+
+  return {
+    successRate,
+    avgGain: Math.round(avgGain * 10) / 10, // Round to 1 decimal
+    trackedCount: closedAnomalies.length,
+    pendingCount: pendingAnomalies.length,
+  };
+};
+
+type AnalyticsViewProps = {
+  anomalies: Anomaly[];
+  onBack: () => void;
+};
+
+const AnalyticsView = memo(({ anomalies, onBack }: AnalyticsViewProps) => {
+  // Combine live anomalies with archived ones for analytics
+  // This ensures we have historical data even after anomalies drop out of the live feed
+  const allAnomalies = useMemo(() => {
+    const archived = loadArchivedAnomalies();
+    const liveIds = new Set(anomalies.map(a => a.id));
+    // Combine: live anomalies + archived ones not in live
+    const combined = [
+      ...anomalies,
+      ...archived.filter(a => !liveIds.has(a.id)),
+    ];
+    return combined;
+  }, [anomalies]);
+
+  // Calculate real stats from sell-based outcome tracking
+  const signalStats: (SignalStats & {
+    trackedCount: number;
+    pendingCount: number;
+  })[] = useMemo(() => {
+    const counts: Record<AnomalyType, number> = {
+      "conviction-stack": 0,
+      "whale-trade": 0,
+      "dead-coin-revival": 0,
+      "re-entry": 0,
+      "big-cap-entry": 0,
+      "quick-reaction": 0,
+    };
+
+    allAnomalies.forEach(a => {
+      if (a.signals) {
+        a.signals.forEach(s => {
+          counts[s.type]++;
+        });
+      } else if (a.type) {
+        counts[a.type]++;
+      }
+    });
+
+    const types: Array<{
+      type: AnomalyType;
+      label: string;
+      icon: typeof TrendingUp;
+    }> = [
+      { type: "conviction-stack", label: "Conviction Stack", icon: TrendingUp },
+      { type: "whale-trade", label: "Whale Trade", icon: Zap },
+      { type: "re-entry", label: "Re-entry", icon: RotateCcw },
+      { type: "big-cap-entry", label: "Big Cap Entry", icon: Landmark },
+      { type: "quick-reaction", label: "Quick Reaction", icon: Target },
+      { type: "dead-coin-revival", label: "Dead Coin Revival", icon: Skull },
+    ];
+
+    return types
+      .map(({ type, label, icon }) => {
+        const realStats = calculateRealStats(allAnomalies, type);
+        return {
+          type,
+          label,
+          icon,
+          count: counts[type],
+          successRate: realStats.successRate,
+          avgGain: realStats.avgGain,
+          trackedCount: realStats.trackedCount,
+          pendingCount: realStats.pendingCount,
+        };
+      })
+      .sort((a, b) => {
+        // Sort by tracked count first (show signals with data at top)
+        if (a.trackedCount > 0 && b.trackedCount === 0) return -1;
+        if (a.trackedCount === 0 && b.trackedCount > 0) return 1;
+        // Then by success rate
+        return b.successRate - a.successRate;
+      });
+  }, [allAnomalies]);
+
+  const totalClosed = useMemo(
+    () => signalStats.reduce((sum, s) => sum + s.trackedCount, 0),
+    [signalStats]
+  );
+  const totalPending = useMemo(
+    () => signalStats.reduce((sum, s) => sum + s.pendingCount, 0),
+    [signalStats]
+  );
+
+  const avgSuccessRate = useMemo(() => {
+    if (totalClosed === 0) return 0;
+    // Weight by tracked count, not total count
+    const weightedSum = signalStats.reduce(
+      (sum, s) => sum + s.successRate * s.trackedCount,
+      0
+    );
+    return Math.round(weightedSum / totalClosed);
+  }, [signalStats, totalClosed]);
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-white/5 px-3 py-2">
+        <button
+          onClick={onBack}
+          className="text-muted-foreground flex items-center gap-1.5 text-xs transition-colors hover:text-white"
+        >
+          <ArrowLeft className="size-3.5" />
+          Back to Feed
+        </button>
+        <span className="text-muted-foreground text-xs">
+          {totalClosed} closed • {totalPending} pending
+        </span>
+      </div>
+
+      {/* Summary Card */}
+      <div className="mx-3 mt-3 rounded-lg border border-white/10 bg-white/5 p-3">
+        <div className="mb-2 text-center">
+          {totalClosed > 0 ? (
+            <>
+              <div className="text-3xl font-bold text-white">
+                {avgSuccessRate}%
+              </div>
+              <div className="text-muted-foreground text-xs">
+                Average Win Rate
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-muted-foreground text-xl">Awaiting Data</div>
+              <div className="text-muted-foreground text-xs">
+                Results tracked when trader sells
+              </div>
+            </>
+          )}
+        </div>
+        <div className="text-muted-foreground text-center text-[10px]">
+          {totalClosed > 0
+            ? `Based on ${totalClosed} completed trades`
+            : totalPending > 0
+              ? `${totalPending} positions waiting for sell`
+              : "Signals tracked automatically when traders sell"}
+        </div>
+      </div>
+
+      {/* Signal Breakdown */}
+      <div className="hide-scrollbar flex-1 overflow-y-auto p-3">
+        <div className="text-muted-foreground mb-2 text-xs font-medium">
+          Success Rate by Signal Type
+        </div>
+        <div className="space-y-2">
+          {signalStats.map(stat => {
+            const Icon = stat.icon;
+            const barColor =
+              stat.successRate >= 60
+                ? "bg-green-500"
+                : stat.successRate >= 50
+                  ? "bg-yellow-500"
+                  : "bg-orange-500";
+
+            return (
+              <div
+                key={stat.type}
+                className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Icon className="text-muted-foreground size-3.5" />
+                    <span className="text-xs font-medium text-white">
+                      {stat.label}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground text-[10px]">
+                      {stat.trackedCount > 0
+                        ? `${stat.trackedCount} closed`
+                        : `${stat.count} signals`}
+                      {stat.pendingCount > 0 && (
+                        <span className="text-muted-foreground/60">
+                          {" "}
+                          ({stat.pendingCount} open)
+                        </span>
+                      )}
+                    </span>
+                    {stat.trackedCount > 0 ? (
+                      <span
+                        className={cn(
+                          "text-xs font-semibold",
+                          stat.successRate >= 60
+                            ? "text-green-400"
+                            : stat.successRate >= 50
+                              ? "text-yellow-400"
+                              : "text-orange-400"
+                        )}
+                      >
+                        {stat.successRate}%
+                      </span>
+                    ) : stat.pendingCount > 0 ? (
+                      <span className="text-muted-foreground/60 text-[10px]">
+                        waiting...
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                {/* Progress bar - always show */}
+                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all",
+                      barColor
+                    )}
+                    style={{
+                      width: `${stat.trackedCount > 0 ? stat.successRate : 0}%`,
+                    }}
+                  />
+                </div>
+                {stat.trackedCount > 0 ? (
+                  <div
+                    className={cn(
+                      "mt-1 text-[10px]",
+                      stat.avgGain >= 0
+                        ? "text-green-400/70"
+                        : "text-red-400/70"
+                    )}
+                  >
+                    Avg P/L: {stat.avgGain >= 0 ? "+" : ""}
+                    {stat.avgGain}%
+                  </div>
+                ) : stat.pendingCount > 0 ? (
+                  <div className="text-muted-foreground/60 mt-1 text-[10px]">
+                    Results tracked when trader sells
+                  </div>
+                ) : (
+                  <div className="text-muted-foreground/60 mt-1 text-[10px]">
+                    No data yet
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+AnalyticsView.displayName = "AnalyticsView";
+
+// =============================================================================
+// Main Widget
+// =============================================================================
+
+export const AnomalyzerWidget = memo(({ widgetId }: { widgetId?: string }) => {
+  const key = widgetId || "default";
+
+  // Subscribe to wallet tracker websocket to receive live trades
+  // This ensures the widget works independently without needing Overwatch open
+  useWalletTrackerSubscription();
+
+  // State - load anomalies from localStorage on mount
+  const [anomalies, setAnomalies] = useState<Anomaly[]>(() =>
+    loadStoredAnomalies()
+  );
+  const [filter, setFilter] = useState<SourceFilter>(
+    filterStore.get(key) || "all"
+  );
+  const [signalFilter, setSignalFilter] = useState<SignalFilter>(
+    signalFilterStore.get(key) || { ...DEFAULT_SIGNAL_FILTER }
+  );
+  const [sensitivity, setSensitivity] = useState<SensitivitySettings>(() => {
+    const stored = sensitivityStore.get(key);
+    if (stored) return stored;
+    const loaded = loadSensitivity();
+    sensitivityStore.set(key, loaded);
+    return loaded;
+  });
+
+  // Analytics view toggle
+  const [showAnalytics, setShowAnalytics] = useState(false);
+
+  // Cross-widget highlight state (synced with Intel Grid and Vantage)
+  const [highlightedMints, setHighlightedMints] = useState<Set<string>>(
+    new Set()
+  );
+  const [highlightedWallets, setHighlightedWallets] = useState<Set<string>>(
+    new Set()
+  );
+
+  // Listen for Intel Grid token selection events
+  useEffect(() => {
+    const handleIntelGridSelect = (e: CustomEvent) => {
+      const { action, mint } = e.detail;
+      if (action === "add" && mint) {
+        setHighlightedMints(prev => new Set([...prev, mint]));
+      } else if (action === "remove" && mint) {
+        setHighlightedMints(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(mint);
+          return newSet;
+        });
+      } else if (action === "clear") {
+        // Clear both mints and wallets to fully unhighlight Anomalyzer cards
+        setHighlightedMints(new Set());
+        setHighlightedWallets(new Set());
+      }
+    };
+    window.addEventListener(
+      "intel-grid-token-select",
+      handleIntelGridSelect as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "intel-grid-token-select",
+        handleIntelGridSelect as EventListener
+      );
+  }, []);
+
+  // Listen for Vantage token selection events
+  useEffect(() => {
+    const handleVantageSelect = (e: CustomEvent) => {
+      const { mint } = e.detail;
+      if (mint) {
+        setHighlightedMints(prev => new Set([...prev, mint]));
+      }
+    };
+    const handleVantageDeselect = (e: CustomEvent) => {
+      const { mint } = e.detail;
+      if (mint) {
+        setHighlightedMints(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(mint);
+          return newSet;
+        });
+      }
+    };
+    window.addEventListener(
+      "vantage-token-select",
+      handleVantageSelect as EventListener
+    );
+    window.addEventListener(
+      "vantage-token-deselect",
+      handleVantageDeselect as EventListener
+    );
+    return () => {
+      window.removeEventListener(
+        "vantage-token-select",
+        handleVantageSelect as EventListener
+      );
+      window.removeEventListener(
+        "vantage-token-deselect",
+        handleVantageDeselect as EventListener
+      );
+    };
+  }, []);
+
+  // Listen for Vantage KOL selection events
+  useEffect(() => {
+    const handleKolSelect = (e: CustomEvent) => {
+      const { action, walletAddress } = e.detail;
+      if (action === "select" && walletAddress) {
+        setHighlightedWallets(new Set([walletAddress.toLowerCase()]));
+      } else if (action === "clear") {
+        // Clear both wallets and mints to fully unhighlight Anomalyzer cards
+        setHighlightedWallets(new Set());
+        setHighlightedMints(new Set());
+      }
+    };
+    window.addEventListener(
+      "vantage-kol-select",
+      handleKolSelect as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "vantage-kol-select",
+        handleKolSelect as EventListener
+      );
+  }, []);
+
+  // Get shared store selection state and toggle functions (must be before handleAnomalySelect)
+  const {
+    selectedTokenMints: sharedSelectedTokens,
+    toggleToken: toggleSharedToken,
+    selectedTraderAddresses: sharedSelectedTraders,
+    toggleTrader: toggleSharedTrader,
+  } = useTrenchBenchStore(
+    useShallow(state => ({
+      selectedTokenMints: state.selectedTokenMints,
+      toggleToken: state.toggleToken,
+      selectedTraderAddresses: state.selectedTraderAddresses,
+      toggleTrader: state.toggleTrader,
+    }))
+  );
+
+  // Handle Anomalyzer row click - dispatch events to other widgets
+  const handleAnomalySelect = useCallback(
+    (anomaly: Anomaly) => {
+      const mintLower = anomaly.tokenMint;
+      const walletLower = anomaly.walletAddress.toLowerCase();
+
+      // Check if this anomaly is already highlighted
+      const isTokenHighlighted = highlightedMints.has(mintLower);
+      const isWalletHighlighted = highlightedWallets.has(walletLower);
+      const isCurrentlyHighlighted = isTokenHighlighted || isWalletHighlighted;
+
+      if (isCurrentlyHighlighted) {
+        // Deselect - clear all highlights
+        const currentMints = highlightedMints;
+        setHighlightedMints(new Set());
+        setHighlightedWallets(new Set());
+
+        // Clear store selections
+        currentMints.forEach(mint => {
+          toggleSharedToken(mint);
+        });
+        if (isWalletHighlighted) {
+          toggleSharedTrader(walletLower);
+        }
+
+        // Dispatch clear events to all widgets (fallback for CustomEvent listeners)
+        // Clear Intel Grid
+        window.dispatchEvent(
+          new CustomEvent("anomalyzer-token-select", {
+            detail: { action: "clear" },
+          })
+        );
+        // Clear Vantage KOL filter
+        window.dispatchEvent(
+          new CustomEvent("vantage-kol-select", {
+            detail: { action: "clear" },
+          })
+        );
+        // Clear Vantage bag selections
+        currentMints.forEach(mint => {
+          window.dispatchEvent(
+            new CustomEvent("vantage-token-deselect", {
+              detail: { mint },
+            })
+          );
+        });
+      } else {
+        // Select - highlight this token and wallet
+        setHighlightedMints(new Set([mintLower]));
+        setHighlightedWallets(new Set([walletLower]));
+
+        // Update store selections
+        toggleSharedToken(mintLower);
+        toggleSharedTrader(walletLower);
+
+        // Dispatch events to Intel Grid and Vantage (fallback for CustomEvent listeners)
+        window.dispatchEvent(
+          new CustomEvent("anomalyzer-token-select", {
+            detail: {
+              action: "add",
+              mint: mintLower,
+              walletAddress: walletLower,
+            },
+          })
+        );
+      }
+    },
+    [
+      highlightedMints,
+      highlightedWallets,
+      toggleSharedToken,
+      toggleSharedTrader,
+    ]
+  );
+
+  // Toggle signal filter
+  const handleSignalToggle = useCallback(
+    (signalType: AnomalyType) => {
+      const newFilter = {
+        ...signalFilter,
+        [signalType]: !signalFilter[signalType],
+      };
+      setSignalFilter(newFilter);
+      signalFilterStore.set(key, newFilter);
+      // Dispatch event for header controls to stay in sync
+      window.dispatchEvent(
+        new CustomEvent("anomalyzer-signal-filter-change", {
+          detail: { widgetId: key, signalFilter: newFilter },
+        })
+      );
+    },
+    [key, signalFilter]
+  );
+
+  // Persist anomalies to localStorage when they change
+  // Also archive any closed anomalies for long-term analytics
+  useEffect(() => {
+    saveAnomalies(anomalies);
+    // Archive any closed anomalies (with realizedPnL) for analytics
+    anomalies
+      .filter(a => a.realizedPnL !== undefined)
+      .forEach(a => archiveAnomaly(a));
+  }, [anomalies]);
+
+  // Tracking state for detection - loaded from localStorage
+  const [traderBaselines, setTraderBaselines] = useState<
+    Map<string, TraderBaseline>
+  >(() => loadTraderBaselines());
+  const [tokenBuyTrackers, setTokenBuyTrackers] = useState<
+    Map<string, TokenBuyTracker>
+  >(() => loadTokenBuyTrackers());
+  // Track when wallets sell out of tokens (for re-entry detection)
+  // Key: `${walletAddress}-${tokenMint}`
+  const [sellOutTrackers, setSellOutTrackers] = useState<
+    Map<string, SellOutTracker>
+  >(() => loadSellOutTrackers());
+
+  // Persist tracking state to localStorage when they change
+  useEffect(() => {
+    saveTraderBaselines(traderBaselines);
+  }, [traderBaselines]);
+
+  useEffect(() => {
+    saveTokenBuyTrackers(tokenBuyTrackers);
+  }, [tokenBuyTrackers]);
+
+  useEffect(() => {
+    saveSellOutTrackers(sellOutTrackers);
+  }, [sellOutTrackers]);
+
+  // Data sources
+  const { data: trackedWalletsData } = useGetTrackedWallets();
+  const { kols } = useKols({ socketManager: socketIOManagerPvp });
+
+  // Get live trades from store
+  const liveTradeMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.live_trades.itemsMap)
+  );
+
+  // Create lookup maps for wallet info
+  const trackedWalletsMap = useMemo(() => {
+    const map = new Map<
+      string,
+      { name: string | null; emoji: string | null }
+    >();
+    trackedWalletsData?.trackedWallets.forEach(w => {
+      map.set(w.walletAddress.toLowerCase(), {
+        name: w.nickname,
+        emoji: w.emoji,
+      });
+    });
+    return map;
+  }, [trackedWalletsData]);
+
+  const kolsMap = useMemo(() => {
+    const map = new Map<string, Kol>();
+    kols.forEach(k => {
+      map.set(k.address.toLowerCase(), k);
+    });
+    return map;
+  }, [kols]);
+
+  // =============================================================================
+  // 3-Stage Baseline Loading
+  // Stage 1: Immediate - Compute from existing store data (0ms latency)
+  // Stage 2: Fast - Batched 24h trades fetch (seconds)
+  // Stage 3: Background - Batched 7d summary fetch (minutes, optional)
+  // =============================================================================
+
+  // Track which stages have been completed
+  const stage1CompleteRef = useRef(false);
+  const stage2FetchedRef = useRef(false);
+  const stage3FetchedRef = useRef(false);
+  const [stage2Complete, setStage2Complete] = useState(false);
+
+  // Use centralized backfill - shared across all TrenchBench widgets
+  // This triggers the backfill if not already running; data arrives in live_trades store
+  useTrenchBenchBackfill();
+
+  // Helper: Update baselines from trade data
+  const updateBaselinesFromTrades = useCallback((trades: LiveTrade[]) => {
+    if (!trades || trades.length === 0) return;
+
+    const walletStats = new Map<string, { trades: number; volume: number }>();
+    trades.forEach(trade => {
+      const addr = trade.maker?.toLowerCase();
+      if (!addr) return;
+      const existing = walletStats.get(addr) || { trades: 0, volume: 0 };
+      walletStats.set(addr, {
+        trades: existing.trades + 1,
+        volume: existing.volume + parseFloat(trade.sol_amount || "0"),
+      });
+    });
+
+    setTraderBaselines(prev => {
+      const newMap = new Map(prev);
+      walletStats.forEach((stats, addr) => {
+        const existing = newMap.get(addr);
+        // Only seed if no existing baseline or existing has fewer trades
+        if (!existing || existing.totalTrades < stats.trades) {
+          newMap.set(addr, {
+            totalTrades: stats.trades,
+            qualifyingTrades: stats.trades,
+            qualifyingSolVolume: stats.volume,
+            avgTradeSize: stats.trades > 0 ? stats.volume / stats.trades : 0,
+            lastUpdated: Date.now(),
+            timedTrades: 0,
+            totalTokenAge: 0,
+            avgTokenAge: 0,
+          });
+        }
+      });
+      return newMap;
+    });
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // STAGE 1: Compute baselines from existing store data (immediate, 0 latency)
+  // The liveTradeMap already contains trades from Intel Grid/Vantage fetches.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (stage1CompleteRef.current) return;
+    if (!liveTradeMap || liveTradeMap.size === 0) return;
+
+    stage1CompleteRef.current = true;
+    const trades = Array.from(liveTradeMap.values());
+    updateBaselinesFromTrades(trades);
+    console.debug(
+      `[Anomalyzer] Stage 1 complete: ${trades.length} existing trades processed`
+    );
+  }, [liveTradeMap, updateBaselinesFromTrades]);
+
+  // ---------------------------------------------------------------------------
+  // STAGE 2: Batched 24h trades fetch
+  // Stage 2 is now handled by centralized useTrenchBenchBackfill hook.
+  // Derive baselines from shared store instead of fetching separately.
+  // ---------------------------------------------------------------------------
+
+  // Get shared store data for baseline derivation and selection sync
+  const sharedTraderIndex = useTrenchBenchStore(state => state.traderIndex);
+  const getBaselineForTrader = useTrenchBenchStore(
+    state => state.getBaselineForTrader
+  );
+  const {
+    selectedTokenMints: sharedSelectedTokens,
+    toggleToken: toggleSharedToken,
+    selectedTraderAddresses: sharedSelectedTraders,
+    toggleTrader: toggleSharedTrader,
+  } = useTrenchBenchStore(
+    useShallow(state => ({
+      selectedTokenMints: state.selectedTokenMints,
+      toggleToken: state.toggleToken,
+      selectedTraderAddresses: state.selectedTraderAddresses,
+      toggleTrader: state.toggleTrader,
+    }))
+  );
+
+  // Sync local selection from shared store
+  useEffect(() => {
+    // Update highlightedMints from store
+    setHighlightedMints(new Set(sharedSelectedTokens));
+  }, [sharedSelectedTokens]);
+
+  useEffect(() => {
+    // Update highlightedWallets from store
+    setHighlightedWallets(new Set(sharedSelectedTraders));
+  }, [sharedSelectedTraders]);
+
+  // Derive baselines from shared store trader index
+  useEffect(() => {
+    if (stage2FetchedRef.current) return;
+    if (sharedTraderIndex.size === 0) return;
+
+    stage2FetchedRef.current = true;
+
+    // Update baselines from shared store trader metrics
+    setTraderBaselines(prev => {
+      const newMap = new Map(prev);
+      let updatedCount = 0;
+
+      sharedTraderIndex.forEach((_metrics, address) => {
+        const baseline = getBaselineForTrader(address);
+        if (baseline && baseline.trades > 0) {
+          const existing = newMap.get(address);
+          // Only update if no existing baseline or this has more data
+          if (!existing || existing.totalTrades < baseline.trades) {
+            const avgTradeSize = baseline.volume / Math.max(1, baseline.trades);
+            newMap.set(address, {
+              totalTrades: baseline.trades,
+              qualifyingTrades: baseline.trades,
+              qualifyingSolVolume: baseline.volume,
+              avgTradeSize,
+              lastUpdated: Date.now(),
+              timedTrades: 0,
+              totalTokenAge: 0,
+              avgTokenAge: 0,
+            });
+            updatedCount++;
+          }
+        }
+      });
+
+      console.debug(
+        `[Anomalyzer] Stage 2 complete (shared store): ${updatedCount} trader baselines derived`
+      );
+      return newMap;
+    });
+
+    setStage2Complete(true);
+  }, [sharedTraderIndex, getBaselineForTrader]);
+
+  // ---------------------------------------------------------------------------
+  // STAGE 3: 7d summary data
+  // Previously fetched from summary endpoint, now derived from shared store.
+  // The shared store traderIndex already contains aggregated metrics.
+  // Note: 7d summary could be re-added as a future enhancement if needed.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!stage2Complete) return;
+    if (stage3FetchedRef.current) return;
+
+    stage3FetchedRef.current = true;
+
+    // Stage 3 baselines are now derived from shared store in Stage 2
+    // The traderIndex already contains pre-aggregated trader metrics
+    // No additional fetch needed - shared store has the data
+    console.debug(
+      `[Anomalyzer] Stage 3 skipped: baselines derived from shared store`
+    );
+  }, [stage2Complete]);
+
+  // Determine wallet source
+  const getWalletSource = useCallback(
+    (address: string): WalletSource | null => {
+      const lowerAddress = address.toLowerCase();
+      const isTracked = trackedWalletsMap.has(lowerAddress);
+      const isKol = kolsMap.has(lowerAddress);
+
+      if (isTracked && isKol) return "both";
+      if (isTracked) return "tracked";
+      if (isKol) return "kol";
+      return null;
+    },
+    [trackedWalletsMap, kolsMap]
+  );
+
+  // Get wallet display info
+  const getWalletInfo = useCallback(
+    (address: string) => {
+      const lowerAddress = address.toLowerCase();
+      const tracked = trackedWalletsMap.get(lowerAddress);
+      const kol = kolsMap.get(lowerAddress);
+
+      return {
+        name: tracked?.name || kol?.name || null,
+        emoji: tracked?.emoji || kol?.emoji || null,
+      };
+    },
+    [trackedWalletsMap, kolsMap]
+  );
+
+  // Listen for filter/signal changes from header controls
+  useEffect(() => {
+    const handleFilterChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setFilter(e.detail.filter);
+      }
+    };
+    const handleSignalFilterChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setSignalFilter(e.detail.signalFilter);
+      }
+    };
+
+    window.addEventListener(
+      "anomalyzer-filter-change",
+      handleFilterChange as EventListener
+    );
+    window.addEventListener(
+      "anomalyzer-signal-filter-change",
+      handleSignalFilterChange as EventListener
+    );
+
+    return () => {
+      window.removeEventListener(
+        "anomalyzer-filter-change",
+        handleFilterChange as EventListener
+      );
+      window.removeEventListener(
+        "anomalyzer-signal-filter-change",
+        handleSignalFilterChange as EventListener
+      );
+    };
+  }, [key]);
+
+  // Process new trades for anomaly detection
+  const processedTradesRef = useMemo(() => new Set<string>(), []);
+
+  useEffect(() => {
+    const trades = Array.from(liveTradeMap.values());
+
+    trades.forEach((trade: LiveTrade) => {
+      // Skip if already processed
+      if (processedTradesRef.has(trade.signature)) return;
+      processedTradesRef.add(trade.signature);
+
+      const walletSource = getWalletSource(trade.maker);
+      if (!walletSource) return;
+
+      const walletInfo = getWalletInfo(trade.maker);
+
+      // sol_amount from backend might be in lamports or human-readable SOL
+      // Detect format: if it's a large integer (>= 1 million, no decimal), it's lamports
+      const rawSolStr = trade.sol_amount || "0";
+      const rawSol = parseFloat(rawSolStr);
+      const isLikelyLamports = rawSol >= 1_000_000 && !rawSolStr.includes(".");
+      const solAmount = isLikelyLamports ? rawSol / 1_000_000_000 : rawSol;
+
+      const walletKey = trade.maker.toLowerCase();
+      const tokenKey = `${walletKey}-${trade.mint}`;
+
+      // Track sells for re-entry detection AND outcome tracking
+      if (trade.type === "sell") {
+        const sellSolAmount = solAmount;
+        const sellMarketCap = parseFloat(trade.market_cap_usd || "0");
+        const now = Date.now();
+
+        // Update any pending anomalies from this wallet on this token with the sell outcome
+        setAnomalies(prev => {
+          // Find pending anomalies (no realizedPnL yet) for this wallet+token
+          const pendingAnomalies = prev.filter(
+            a =>
+              a.walletAddress.toLowerCase() === walletKey &&
+              a.tokenMint === trade.mint &&
+              a.realizedPnL === undefined &&
+              a.solInvested > 0
+          );
+
+          if (pendingAnomalies.length === 0) return prev;
+
+          // Calculate total SOL invested and already recovered across all pending anomalies
+          const totalInvested = pendingAnomalies.reduce(
+            (sum, a) => sum + a.solInvested,
+            0
+          );
+          const previouslyRecovered = pendingAnomalies.reduce(
+            (sum, a) => sum + (a.solRecovered || 0),
+            0
+          );
+          const totalRecovered = previouslyRecovered + sellSolAmount;
+
+          // Only finalize PnL when they've exited ~80%+ of the position
+          // Otherwise just accumulate the recovered amount
+          const exitThreshold = totalInvested * 0.8;
+          const hasExited = totalRecovered >= exitThreshold;
+
+          // Calculate realized PnL: ((solRecovered - solInvested) / solInvested) * 100
+          const realizedPnL = hasExited
+            ? ((totalRecovered - totalInvested) / totalInvested) * 100
+            : undefined;
+
+          // Update all pending anomalies with the sell outcome
+          return prev.map(anomaly => {
+            if (!pendingAnomalies.find(a => a.id === anomaly.id)) {
+              return anomaly;
+            }
+            return {
+              ...anomaly,
+              ...(hasExited && { soldAt: now }),
+              marketCapAtSell: sellMarketCap,
+              solRecovered: totalRecovered / pendingAnomalies.length, // Distribute evenly
+              ...(realizedPnL !== undefined && { realizedPnL }),
+            };
+          });
+        });
+
+        // Also track for re-entry detection - only track meaningful sells
+        if (sellSolAmount >= ANOMALY_CONFIG.reEntrySellMinSol) {
+          setSellOutTrackers(prev => {
+            const newMap = new Map(prev);
+            newMap.set(tokenKey, {
+              tokenMint: trade.mint,
+              tokenSymbol: trade.token_symbol || "???",
+              tokenName: trade.token_name || trade.token_symbol || "Unknown",
+              sellTimestamp: now,
+            });
+            return newMap;
+          });
+        }
+        return; // Don't process sells further
+      }
+
+      // Skip if not a buy
+      if (trade.type !== "buy") return;
+
+      // Collect all signals triggered by this buy
+      const triggeredSignals: Signal[] = [];
+      const now = Date.now();
+      let shouldRemoveSellTracker = false;
+
+      // Check for Re-entry (buy after a meaningful sell with time gap)
+      const previousSell = sellOutTrackers.get(tokenKey);
+      const reEntryThreshold = getSensitivityThreshold(
+        "re-entry",
+        sensitivity["re-entry"]
+      );
+      if (previousSell && solAmount >= reEntryThreshold) {
+        const timeSinceSell = now - previousSell.sellTimestamp;
+        const timeSinceSellMinutes = Math.round(timeSinceSell / (1000 * 60));
+        const minGapMs = ANOMALY_CONFIG.reEntryMinGapMinutes * 60 * 1000;
+
+        // Only trigger re-entry if:
+        // 1. Minimum time gap has passed (15+ min by default)
+        // 2. The sell was within the last 24 hours
+        if (timeSinceSell >= minGapMs && timeSinceSell < 24 * 60 * 60 * 1000) {
+          const details = {
+            timeSinceSell: timeSinceSellMinutes,
+            reEntrySize: solAmount,
+          };
+          triggeredSignals.push({
+            type: "re-entry",
+            severity: calculateSeverity("re-entry", details),
+            details,
+          });
+          shouldRemoveSellTracker = true;
+        }
+      }
+
+      // Get baseline before updating (for whale trade and quick reaction)
+      const baseline = traderBaselines.get(walletKey);
+
+      // Update trader baseline
+      setTraderBaselines(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(walletKey) || {
+          totalTrades: 0,
+          qualifyingTrades: 0,
+          qualifyingSolVolume: 0,
+          avgTradeSize: 0,
+          lastUpdated: now,
+          timedTrades: 0,
+          totalTokenAge: 0,
+          avgTokenAge: 0,
+        };
+
+        const newTotalTrades = existing.totalTrades + 1;
+        const isQualifyingTrade =
+          solAmount >= ANOMALY_CONFIG.whaleTradeBaselineMinSol;
+        const newQualifyingTrades = isQualifyingTrade
+          ? existing.qualifyingTrades + 1
+          : existing.qualifyingTrades;
+        const newQualifyingSolVolume = isQualifyingTrade
+          ? existing.qualifyingSolVolume + solAmount
+          : existing.qualifyingSolVolume;
+        const newAvg =
+          newQualifyingTrades > 0
+            ? newQualifyingSolVolume / newQualifyingTrades
+            : 0;
+
+        newMap.set(walletKey, {
+          ...existing,
+          totalTrades: newTotalTrades,
+          qualifyingTrades: newQualifyingTrades,
+          qualifyingSolVolume: newQualifyingSolVolume,
+          avgTradeSize: newAvg,
+          lastUpdated: now,
+        });
+
+        return newMap;
+      });
+
+      // Check for Conviction Stack
+      const existingTokenTracker = tokenBuyTrackers.get(tokenKey);
+      const timeSinceLastBuy = existingTokenTracker
+        ? now - existingTokenTracker.lastBuyTimestamp
+        : Infinity;
+      const isWithinWindow =
+        timeSinceLastBuy < ANOMALY_CONFIG.convictionStackWindow;
+      const newBuyCount = isWithinWindow
+        ? (existingTokenTracker?.count || 0) + 1
+        : 1;
+      const newTotalSol = isWithinWindow
+        ? (existingTokenTracker?.totalSol || 0) + solAmount
+        : solAmount;
+
+      // Update token buy tracker
+      setTokenBuyTrackers(prev => {
+        const newMap = new Map(prev);
+        newMap.set(tokenKey, {
+          count: newBuyCount,
+          totalSol: newTotalSol,
+          lastBuyTimestamp: now,
+        });
+        return newMap;
+      });
+
+      // Check Conviction Stack threshold
+      const convictionStackThreshold = getSensitivityThreshold(
+        "conviction-stack",
+        sensitivity["conviction-stack"]
+      );
+      if (
+        newBuyCount >= ANOMALY_CONFIG.convictionStackMinBuys &&
+        newTotalSol >= convictionStackThreshold
+      ) {
+        const details = {
+          buyCount: newBuyCount,
+          totalSolInvested: newTotalSol,
+        };
+        triggeredSignals.push({
+          type: "conviction-stack",
+          severity: calculateSeverity("conviction-stack", details),
+          details,
+        });
+      }
+
+      // Check for Whale Trade
+      if (
+        baseline &&
+        baseline.qualifyingTrades >= ANOMALY_CONFIG.whaleTradeMinTrades &&
+        baseline.avgTradeSize > 0
+      ) {
+        const multiplier = solAmount / baseline.avgTradeSize;
+        const whaleTradeThreshold = getSensitivityThreshold(
+          "whale-trade",
+          sensitivity["whale-trade"]
+        );
+        if (multiplier >= whaleTradeThreshold) {
+          const details = {
+            tradeSize: solAmount,
+            avgTradeSize: baseline.avgTradeSize,
+            multiplier,
+          };
+          triggeredSignals.push({
+            type: "whale-trade",
+            severity: calculateSeverity("whale-trade", details),
+            details,
+          });
+        }
+      }
+
+      // Check for Big Cap Entry
+      const marketCapUsd = parseFloat(trade.market_cap_usd || "0");
+      const bigCapThreshold = getSensitivityThreshold(
+        "big-cap-entry",
+        sensitivity["big-cap-entry"]
+      );
+      if (marketCapUsd >= bigCapThreshold) {
+        const details = {
+          marketCapUsd,
+          buySizeSOL: solAmount,
+        };
+        triggeredSignals.push({
+          type: "big-cap-entry",
+          severity: calculateSeverity("big-cap-entry", details),
+          details,
+        });
+      }
+
+      // Look up token in X-Ray data to get creation time
+      const xrayState = useGlobalStore.getState().websocketMessages;
+      const xrayToken =
+        xrayState.xray_new_pair.itemsMap.get(trade.mint) ||
+        xrayState.about_to_graduate.itemsMap.get(trade.mint) ||
+        xrayState.xray_graduated.itemsMap.get(trade.mint);
+
+      // Calculate token age if we have X-Ray data
+      let tokenAgeSeconds = 0;
+      if (xrayToken) {
+        const createdAtNs =
+          typeof xrayToken.created === "string"
+            ? parseInt(xrayToken.created, 10)
+            : xrayToken.created;
+        const createdAtMs = createdAtNs / 1_000_000;
+        tokenAgeSeconds = (now - createdAtMs) / 1000;
+      }
+      const tokenAgeDays = tokenAgeSeconds / (60 * 60 * 24);
+
+      // Check for Dead Coin Revival
+      // Old token (X+ days) with low market cap (<$100k) being bought
+      if (xrayToken && tokenAgeDays > 0) {
+        const deadCoinAgeThreshold = getSensitivityThreshold(
+          "dead-coin-revival",
+          sensitivity["dead-coin-revival"]
+        );
+
+        // Token must be old enough AND have low market cap
+        if (
+          tokenAgeDays >= deadCoinAgeThreshold &&
+          marketCapUsd < ANOMALY_CONFIG.deadCoinMaxMarketCapUsd
+        ) {
+          const details = {
+            tokenAge: Math.round(tokenAgeDays),
+            marketCapUsd,
+          };
+          triggeredSignals.push({
+            type: "dead-coin-revival",
+            severity: calculateSeverity("dead-coin-revival", details),
+            details,
+          });
+        }
+      }
+
+      // Check for Quick Reaction anomaly
+      if (xrayToken && baseline && tokenAgeSeconds > 0) {
+        // Only for new tokens (< 30 minutes old)
+        if (tokenAgeSeconds > 0 && tokenAgeSeconds < 1800) {
+          const avgTokenAge = baseline.avgTokenAge || 0;
+          const timedTrades = baseline.timedTrades || 0;
+
+          // Need at least 3 timed trades for baseline
+          if (timedTrades >= 3 && avgTokenAge > 0) {
+            const speedMultiplier = avgTokenAge / tokenAgeSeconds;
+            const threshold = getSensitivityThreshold(
+              "quick-reaction",
+              sensitivity["quick-reaction"]
+            );
+
+            if (speedMultiplier >= threshold) {
+              const details = {
+                tokenAgeSeconds,
+                avgTokenAge,
+                speedMultiplier,
+              };
+              triggeredSignals.push({
+                type: "quick-reaction",
+                severity: calculateSeverity("quick-reaction", details),
+                details,
+              });
+            }
+          }
+
+          // Update trader's timing baseline
+          setTraderBaselines(prev => {
+            const newMap = new Map(prev);
+            const existing = newMap.get(walletKey);
+            if (existing) {
+              const newTimedTrades = (existing.timedTrades || 0) + 1;
+              const newTotalTokenAge =
+                (existing.totalTokenAge || 0) + tokenAgeSeconds;
+              newMap.set(walletKey, {
+                ...existing,
+                timedTrades: newTimedTrades,
+                totalTokenAge: newTotalTokenAge,
+                avgTokenAge: newTotalTokenAge / newTimedTrades,
+              });
+            }
+            return newMap;
+          });
+        }
+      }
+
+      // If any signals were triggered, create a single anomaly with all of them
+      if (triggeredSignals.length > 0) {
+        // Remove sell tracker if re-entry was triggered
+        if (shouldRemoveSellTracker) {
+          setSellOutTrackers(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(tokenKey);
+            return newMap;
+          });
+        }
+
+        const newAnomaly: Anomaly = {
+          id: generateTradeId(trade.signature),
+          signals: triggeredSignals,
+          severity: getHighestSeverity(triggeredSignals),
+          walletAddress: trade.maker,
+          walletName: walletInfo.name,
+          walletEmoji: walletInfo.emoji,
+          source: walletSource,
+          tokenMint: trade.mint,
+          tokenSymbol: trade.token_symbol || "???",
+          tokenName: trade.token_name || trade.token_symbol || "Unknown",
+          tokenImage: trade.token_image || "",
+          marketCapAtSignal: parseFloat(trade.market_cap_usd || "0"),
+          solInvested: solAmount,
+          tradeCount: 1, // Initial trade count
+          timestamp: now,
+        };
+
+        setAnomalies(prev => {
+          // Dedupe: Check if we already have an anomaly for this wallet+token
+          // within the last 5 minutes. If so, update it instead of creating a new one.
+          const DEDUPE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+          const recentSame = prev.find(
+            a =>
+              a.walletAddress.toLowerCase() === walletKey &&
+              a.tokenMint === trade.mint &&
+              now - a.timestamp < DEDUPE_WINDOW_MS
+          );
+
+          if (recentSame) {
+            // Update existing anomaly with latest data, merge signals
+            const mergedSignals = [...(recentSame.signals || [])];
+            triggeredSignals.forEach(newSig => {
+              // Only add signal if not already present (by type)
+              if (!mergedSignals.some(s => s.type === newSig.type)) {
+                mergedSignals.push(newSig);
+              }
+            });
+
+            const newTradeCount = (recentSame.tradeCount || 1) + 1;
+
+            return prev.map(a =>
+              a.id === recentSame.id
+                ? {
+                    ...newAnomaly,
+                    id: a.id,
+                    signals: mergedSignals,
+                    severity: getHighestSeverity(mergedSignals),
+                    solInvested: (recentSame.solInvested || 0) + solAmount, // Accumulate SOL
+                    tradeCount: newTradeCount, // Increment trade count
+                    timestamp: now, // Update timestamp to latest
+                  }
+                : a
+            );
+          }
+
+          return [newAnomaly, ...prev].slice(0, ANOMALY_CONFIG.maxAnomalies);
+        });
+      }
+    });
+  }, [
+    liveTradeMap,
+    getWalletSource,
+    getWalletInfo,
+    traderBaselines,
+    sellOutTrackers,
+    sensitivity,
+  ]);
+
+  // Filter anomalies based on source filter and signal type filter
+  // Also deduplicate by ID to prevent duplicate key warnings in React
+  const filteredAnomalies = useMemo(() => {
+    // Deduplicate by ID before filtering (prevents duplicate key warnings)
+    const seenIds = new Set<string>();
+    const deduped = anomalies.filter(a => {
+      if (seenIds.has(a.id)) return false;
+      seenIds.add(a.id);
+      return true;
+    });
+
+    return deduped.filter(a => {
+      // Filter by signal type - show if ANY signal in the anomaly passes the filter
+      const hasEnabledSignal = a.signals
+        ? a.signals.some(s => signalFilter[s.type])
+        : a.type
+          ? signalFilter[a.type]
+          : false;
+      if (!hasEnabledSignal) return false;
+
+      // Filter by source
+      if (filter === "all") return true;
+      if (filter === "tracked") {
+        return a.source === "tracked" || a.source === "both";
+      }
+      if (filter === "kols") {
+        return a.source === "kol" || a.source === "both";
+      }
+      return true;
+    });
+  }, [anomalies, filter, signalFilter]);
+
+  // Stats - count each signal type across all anomalies
+  const stats = useMemo(() => {
+    const byType: Record<AnomalyType, number> = {
+      "conviction-stack": 0,
+      "whale-trade": 0,
+      "dead-coin-revival": 0,
+      "re-entry": 0,
+      "big-cap-entry": 0,
+      "quick-reaction": 0,
+    };
+    const bySeverity = { low: 0, medium: 0, high: 0, critical: 0 };
+
+    filteredAnomalies.forEach(a => {
+      // Count each signal type within the anomaly
+      if (a.signals) {
+        a.signals.forEach(s => {
+          byType[s.type]++;
+        });
+      } else if (a.type) {
+        // Legacy fallback
+        byType[a.type]++;
+      }
+      bySeverity[a.severity]++;
+    });
+
+    return { byType, bySeverity };
+  }, [filteredAnomalies]);
+
+  // Show analytics view
+  if (showAnalytics) {
+    return (
+      <AnalyticsView
+        anomalies={anomalies}
+        onBack={() => setShowAnalytics(false)}
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Stats Bar - Toggleable signal filters */}
+      <div className="flex items-center justify-between border-b border-white/5 px-2.5 py-1.5 text-xs">
+        <div className="flex items-center gap-1">
+          <Tooltip content="Conviction Stack: 5+ buys on same token within 2h (min 3 SOL)">
+            <button
+              onClick={() => handleSignalToggle("conviction-stack")}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+                signalFilter["conviction-stack"]
+                  ? "bg-white/10 text-white"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              )}
+            >
+              <TrendingUp className="size-3.5" />
+              <span>{stats.byType["conviction-stack"]}</span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Whale Trade: Trade ≥3x their average (after 5+ trades of 0.1+ SOL)">
+            <button
+              onClick={() => handleSignalToggle("whale-trade")}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+                signalFilter["whale-trade"]
+                  ? "bg-white/10 text-white"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              )}
+            >
+              <Zap className="size-3.5" />
+              <span>{stats.byType["whale-trade"]}</span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Dead Coin Revival: Buying old token (1+ days) with low mcap (<$100k)">
+            <button
+              onClick={() => handleSignalToggle("dead-coin-revival")}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+                signalFilter["dead-coin-revival"]
+                  ? "bg-white/10 text-white"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              )}
+            >
+              <Skull className="size-3.5" />
+              <span>{stats.byType["dead-coin-revival"]}</span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Re-entry: Buying back 15+ min after a meaningful sell">
+            <button
+              onClick={() => handleSignalToggle("re-entry")}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+                signalFilter["re-entry"]
+                  ? "bg-white/10 text-white"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              )}
+            >
+              <RotateCcw className="size-3.5" />
+              <span>{stats.byType["re-entry"]}</span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Big Cap Entry: Buying token with $500k+ market cap">
+            <button
+              onClick={() => handleSignalToggle("big-cap-entry")}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+                signalFilter["big-cap-entry"]
+                  ? "bg-white/10 text-white"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              )}
+            >
+              <Landmark className="size-3.5" />
+              <span>{stats.byType["big-cap-entry"]}</span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Quick Reaction: Buying much earlier than their usual pattern">
+            <button
+              onClick={() => handleSignalToggle("quick-reaction")}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+                signalFilter["quick-reaction"]
+                  ? "bg-white/10 text-white"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              )}
+            >
+              <Target className="size-3.5" />
+              <span>{stats.byType["quick-reaction"]}</span>
+            </button>
+          </Tooltip>
+        </div>
+
+        {/* Filter & Analytics Buttons */}
+        <div className="flex items-center gap-1">
+          <Popover>
+            <Tooltip content="Adjust signal sensitivity">
+              <PopoverTrigger asChild>
+                <button className="text-muted-foreground flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 hover:text-white">
+                  <Filter className="size-3.5" />
+                </button>
+              </PopoverTrigger>
+            </Tooltip>
+            <PopoverContent
+              className="w-64 p-3"
+              align="end"
+            >
+              <div className="text-muted-foreground mb-3 text-xs font-medium">
+                Signal Sensitivity
+              </div>
+              <div className="space-y-4">
+                {/* Conviction Stack */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <TrendingUp className="text-muted-foreground size-3.5" />
+                      <span className="text-xs">Conviction Stack</span>
+                    </div>
+                    <span className="text-muted-foreground text-[10px]">
+                      {formatSensitivityValue(
+                        "conviction-stack",
+                        sensitivity["conviction-stack"]
+                      )}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[sensitivity["conviction-stack"]]}
+                    onValueChange={([v]) => {
+                      const newSensitivity = {
+                        ...sensitivity,
+                        "conviction-stack": v,
+                      };
+                      setSensitivity(newSensitivity);
+                      saveSensitivity(newSensitivity);
+                    }}
+                    min={0}
+                    max={100}
+                    size="sm"
+                  />
+                </div>
+
+                {/* Whale Trade */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Zap className="text-muted-foreground size-3.5" />
+                      <span className="text-xs">Whale Trade</span>
+                    </div>
+                    <span className="text-muted-foreground text-[10px]">
+                      {formatSensitivityValue(
+                        "whale-trade",
+                        sensitivity["whale-trade"]
+                      )}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[sensitivity["whale-trade"]]}
+                    onValueChange={([v]) => {
+                      const newSensitivity = {
+                        ...sensitivity,
+                        "whale-trade": v,
+                      };
+                      setSensitivity(newSensitivity);
+                      saveSensitivity(newSensitivity);
+                    }}
+                    min={0}
+                    max={100}
+                    size="sm"
+                  />
+                </div>
+
+                {/* Dead Coin Revival */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Skull className="text-muted-foreground size-3.5" />
+                      <span className="text-xs">Dead Coin Revival</span>
+                    </div>
+                    <span className="text-muted-foreground text-[10px]">
+                      {formatSensitivityValue(
+                        "dead-coin-revival",
+                        sensitivity["dead-coin-revival"]
+                      )}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[sensitivity["dead-coin-revival"]]}
+                    onValueChange={([v]) => {
+                      const newSensitivity = {
+                        ...sensitivity,
+                        "dead-coin-revival": v,
+                      };
+                      setSensitivity(newSensitivity);
+                      saveSensitivity(newSensitivity);
+                    }}
+                    min={0}
+                    max={100}
+                    size="sm"
+                  />
+                </div>
+
+                {/* Re-entry */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <RotateCcw className="text-muted-foreground size-3.5" />
+                      <span className="text-xs">Re-entry</span>
+                    </div>
+                    <span className="text-muted-foreground text-[10px]">
+                      {formatSensitivityValue(
+                        "re-entry",
+                        sensitivity["re-entry"]
+                      )}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[sensitivity["re-entry"]]}
+                    onValueChange={([v]) => {
+                      const newSensitivity = { ...sensitivity, "re-entry": v };
+                      setSensitivity(newSensitivity);
+                      saveSensitivity(newSensitivity);
+                    }}
+                    min={0}
+                    max={100}
+                    size="sm"
+                  />
+                </div>
+
+                {/* Big Cap Entry */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Landmark className="text-muted-foreground size-3.5" />
+                      <span className="text-xs">Big Cap Entry</span>
+                    </div>
+                    <span className="text-muted-foreground text-[10px]">
+                      {formatSensitivityValue(
+                        "big-cap-entry",
+                        sensitivity["big-cap-entry"]
+                      )}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[sensitivity["big-cap-entry"]]}
+                    onValueChange={([v]) => {
+                      const newSensitivity = {
+                        ...sensitivity,
+                        "big-cap-entry": v,
+                      };
+                      setSensitivity(newSensitivity);
+                      saveSensitivity(newSensitivity);
+                    }}
+                    min={0}
+                    max={100}
+                    size="sm"
+                  />
+                </div>
+
+                {/* Quick Reaction */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Target className="text-muted-foreground size-3.5" />
+                      <span className="text-xs">Quick Reaction</span>
+                    </div>
+                    <span className="text-muted-foreground text-[10px]">
+                      {formatSensitivityValue(
+                        "quick-reaction",
+                        sensitivity["quick-reaction"]
+                      )}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[sensitivity["quick-reaction"]]}
+                    onValueChange={([v]) => {
+                      const newSensitivity = {
+                        ...sensitivity,
+                        "quick-reaction": v,
+                      };
+                      setSensitivity(newSensitivity);
+                      saveSensitivity(newSensitivity);
+                    }}
+                    min={0}
+                    max={100}
+                    size="sm"
+                  />
+                </div>
+
+                <div className="text-muted-foreground/60 flex justify-between pt-1 text-[9px]">
+                  <span>← More signals</span>
+                  <span>Fewer signals →</span>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          <Tooltip content="View signal success rates">
+            <button
+              onClick={() => setShowAnalytics(true)}
+              className="text-muted-foreground flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <BarChart3 className="size-3.5" />
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* Anomaly Feed */}
+      <div className="hide-scrollbar flex flex-1 flex-col gap-1 overflow-y-auto px-1 py-1.5">
+        {filteredAnomalies.length === 0 ? (
+          <EmptyState />
+        ) : (
+          filteredAnomalies.map(anomaly => (
+            <AnomalyCard
+              key={anomaly.id}
+              anomaly={anomaly}
+              kols={kols}
+              isHighlighted={
+                highlightedMints.has(anomaly.tokenMint) ||
+                highlightedWallets.has(anomaly.walletAddress.toLowerCase())
+              }
+              onSelect={handleAnomalySelect}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+});
+
+AnomalyzerWidget.displayName = "AnomalyzerWidget";

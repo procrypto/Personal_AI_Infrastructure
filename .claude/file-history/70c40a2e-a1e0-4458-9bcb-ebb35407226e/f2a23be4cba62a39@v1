@@ -1,0 +1,100 @@
+---
+phase: 25-command-event-protocol
+plan: 01
+subsystem: websocket
+tags: [typescript, vitest, pure-functions, event-parsing]
+
+# Dependency graph
+requires:
+  - phase: 23-websocket-client-refactor
+    provides: Data feed protocol types and sendFeed method
+  - phase: 24-data-feed-implementation
+    provides: Feed adapter pattern for NATS-to-backend conversion
+provides:
+  - eventParser.ts as single source of truth for event types
+  - parseAutopilotEvent pure function for testability
+  - BackendPositionData and AutopilotEvent exports
+affects: [integration-testing, future-event-types]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [extracted-parser-pattern]
+
+key-files:
+  created: [apps/web-terminal/src/websocket/autopilot/eventParser.ts]
+  modified:
+    - apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+    - apps/web-terminal/src/websocket/autopilot/messageParser.test.ts
+
+key-decisions:
+  - "Parser validates 9 event types (added last_analysis to original 8)"
+  - "connectAutopilotWebsocket only imports parseAutopilotEvent, not types"
+
+patterns-established:
+  - "Extracted parser pattern: Pure validation function separate from handler logic"
+
+issues-created: []
+
+# Metrics
+duration: 2min
+completed: 2026-01-09
+---
+
+# Phase 25 Plan 01: Extract Event Parser Summary
+
+**Pure event parser extracted to eventParser.ts with 9 event types, enabling testability without WebSocket mocking**
+
+## Performance
+
+- **Duration:** 2 min
+- **Started:** 2026-01-09T09:30:23Z
+- **Completed:** 2026-01-09T09:33:03Z
+- **Tasks:** 3
+- **Files modified:** 3
+
+## Accomplishments
+
+- Created eventParser.ts as single source of truth for AutopilotEvent union type
+- Extracted parseAutopilotEvent pure function from test file to production code
+- Refactored connectAutopilotWebsocket to use imported parser
+- All 8 existing tests pass without modification
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Extract event parser to production code** - `88be73a2a` (feat)
+2. **Task 2: Refactor connectAutopilotWebsocket to use extracted parser** - `844f699be` (refactor)
+3. **Task 3: Update tests to import from production code** - `3005a1aa2` (test)
+
+**Plan metadata:** (pending)
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/websocket/autopilot/eventParser.ts` - New file: AutopilotEvent union, parseAutopilotEvent, BackendPositionData
+- `apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts` - Removed inline types, imports from eventParser
+- `apps/web-terminal/src/websocket/autopilot/messageParser.test.ts` - Imports from eventParser instead of defining locally
+
+## Decisions Made
+
+- Added `last_analysis` to valid event types (was missing from test file's local copy)
+- Kept switch statement in connectAutopilotWebsocket for store dispatch (parser only validates)
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Next Phase Readiness
+
+- Event parser extracted and tested
+- Ready for Phase 26: Integration Testing
+- Pure functions enable comprehensive unit testing without WebSocket mocking
+
+---
+*Phase: 25-command-event-protocol*
+*Completed: 2026-01-09*

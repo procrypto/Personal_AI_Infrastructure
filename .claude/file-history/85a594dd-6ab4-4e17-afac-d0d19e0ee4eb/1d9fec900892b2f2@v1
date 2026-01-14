@@ -1,0 +1,79 @@
+/**
+ * useAutopilotDiscoveryTokens
+ *
+ * Gets whale moves and trending tokens from Discovery sources and combines
+ * with watchlist from user's watchlist API.
+ *
+ * Data sources:
+ * - Whale moves: Discovery API hook (1s refresh)
+ * - Trending: WebSocket discovery_trending_list store (same as Discovery/Overwatch pages)
+ * - Watchlist: User's watchlist API (tokens they've starred in the app)
+ *
+ * Replaces slow backend token_list for whale/trending sources.
+ */
+
+import { useMemo } from "react";
+import { useWhaleMoves } from "@/api/discovery/useWhaleMoves";
+import { useGetWatchlist } from "@/api/watchlist/useGetWatchlist";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type {
+  AutopilotWatchedToken,
+  AutopilotTokenList,
+} from "@/store/memoryStore/slices/autopilot-store/types";
+
+export const useAutopilotDiscoveryTokens = (): AutopilotTokenList => {
+  // Fast Discovery API data (1s refresh for whales)
+  const { data: whaleMoves } = useWhaleMoves();
+
+  // Full trending table from WebSocket store (same as Discovery/Overwatch)
+  const trendingMap = useGlobalStore(
+    useShallow(
+      state => state.websocketMessages.discovery_trending_list.itemsMap
+    )
+  );
+
+  // Watchlist from user's watchlist API (tokens they've starred)
+  const { data: watchlistData } = useGetWatchlist();
+
+  // Watchlist WebSocket data (has symbol/name from same source as Overwatch)
+  const watchlistItemsMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.watchlist.itemsMap)
+  );
+
+  // Transform whale moves to AutopilotWatchedToken
+  const whales = useMemo((): AutopilotWatchedToken[] => {
+    return whaleMoves.map(whale => ({
+      mint: whale.mint,
+      symbol: whale.token_symbol,
+      source: "whales" as const,
+    }));
+  }, [whaleMoves]);
+
+  // Transform trending from store Map to AutopilotWatchedToken array
+  const trending = useMemo((): AutopilotWatchedToken[] => {
+    return Array.from(trendingMap.values()).map(token => ({
+      mint: token.mint,
+      symbol: token.market_data.symbol,
+      source: "trending" as const,
+    }));
+  }, [trendingMap]);
+
+  // Transform user watchlist to AutopilotWatchedToken array
+  // Note: User watchlist only has tokenMint, symbol will be derived from NATS market data
+  const watchlist = useMemo((): AutopilotWatchedToken[] => {
+    if (!watchlistData?.watchlistTokens) return [];
+    return watchlistData.watchlistTokens
+      .flatMap(group => group.watchlistTokens)
+      .map(token => ({
+        mint: token.tokenMint,
+        symbol: "", // Symbol derived from NATS market data later
+        source: "watchlist" as const,
+      }));
+  }, [watchlistData]);
+
+  return {
+    watchlist,
+    trending,
+    whales,
+  };
+};

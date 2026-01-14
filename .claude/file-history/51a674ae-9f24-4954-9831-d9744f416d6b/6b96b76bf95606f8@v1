@@ -1,0 +1,111 @@
+---
+phase: 02-linear-integration
+plan: 01
+subsystem: linear
+tags: [linear-sdk, webhooks, singleton, typescript]
+
+# Dependency graph
+requires:
+  - phase: 01-foundation
+    provides: Event bus, types, singleton pattern
+provides:
+  - LinearClient singleton for API access
+  - Webhook signature verification with LinearWebhooks
+  - Typed webhook payload handling for Issue events
+  - Linear module barrel export
+affects: [02-02, 03, 04]
+
+# Tech tracking
+tech-stack:
+  added: [@linear/sdk v69.0.0]
+  patterns: [LinearWebhooks for signature verification, Buffer for raw body handling]
+
+key-files:
+  created:
+    - src/coordination/linear/client.ts
+    - src/coordination/linear/webhook-handler.ts
+    - src/coordination/linear/types.ts
+    - src/coordination/linear/index.ts
+  modified:
+    - package.json
+    - bun.lock
+
+key-decisions:
+  - "LinearWebhooks.verify() requires Buffer, not string - convert raw body"
+  - "InstanceType<typeof LinearWebhooks> for class instance typing"
+  - "Webhook handler logs events for now, full integration in later phases"
+
+patterns-established:
+  - "LinearClient singleton matches EventBus singleton pattern"
+  - "Union types for Linear action/resource types (not enums)"
+  - "Type guards for webhook payload validation"
+
+issues-created: []
+
+# Metrics
+duration: 6min
+completed: 2026-01-08
+---
+
+# Phase 2 Plan 01: Linear SDK + Webhook Handler Summary
+
+**Linear SDK client with singleton pattern and webhook handler using LinearWebhooks for signature verification**
+
+## Performance
+
+- **Duration:** 6 min
+- **Started:** 2026-01-08T16:27:32Z
+- **Completed:** 2026-01-08T16:33:54Z
+- **Tasks:** 3
+- **Files created:** 4
+
+## Accomplishments
+
+- Installed @linear/sdk (v69.0.0) with full TypeScript support
+- Created LinearClient singleton following established event bus pattern
+- Implemented webhook signature verification using SDK's LinearWebhooks class
+- Defined typed webhook payload interfaces with union types per project convention
+- Added type guards and priority mapping helpers for Linear data
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Install @linear/sdk and create LinearClient singleton** - `b124c4e` (feat)
+2. **Task 2: Create webhook handler with signature verification** - `f1a162e` (feat)
+3. **Task 3: Add webhook payload TypeScript types** - `76147e2` (feat)
+
+**Plan metadata:** (this commit)
+
+## Files Created/Modified
+
+- `src/coordination/linear/client.ts` - LinearClient singleton with getLinearClient()/resetLinearClient()
+- `src/coordination/linear/webhook-handler.ts` - Signature verification and Issue event handling
+- `src/coordination/linear/types.ts` - LinearWebhookPayload, IssueWebhookData, type guards
+- `src/coordination/linear/index.ts` - Barrel export for linear module
+- `package.json` - Added @linear/sdk dependency
+- `bun.lock` - Lockfile for bun package manager
+
+## Decisions Made
+
+1. **Buffer for signature verification:** LinearWebhooks.verify() expects Buffer, not string. Convert raw body with `Buffer.from(rawBody, 'utf-8')` before verification.
+2. **InstanceType pattern:** Used `InstanceType<typeof LinearWebhooks>` for typing the webhook verifier instance since LinearWebhooks is a class export.
+3. **Logging-only webhook handler:** Handler currently logs Issue events. Full event bus integration will happen when ticket store is connected (future phases).
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Next Phase Readiness
+
+- LinearClient ready for API calls (needs LINEAR_API_KEY environment variable)
+- Webhook handler ready for integration (needs LINEAR_WEBHOOK_SECRET environment variable)
+- Ready for 02-02: Tester profile sync from Linear users
+
+---
+*Phase: 02-linear-integration*
+*Completed: 2026-01-08*

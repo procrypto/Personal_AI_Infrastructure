@@ -1,0 +1,119 @@
+# TrenchBench Branch Unification
+
+## What This Is
+
+Merge of two parallel TrenchBench development branches in web-terminal-frontend: `feat/dash-pauls` (37 UI commits with cross-widget sync, badges, PNL fixes) into `feat/dash-pauls-preload-data` (unified `trenchBenchStore` architecture with local-api integration). Creates a new `feat/trenchbench-unified` branch with feature parity and the clean data architecture.
+
+## Core Value
+
+**Feature parity** — all 37 UI features from dash-pauls must work in the unified architecture. Users should get the same (or better) experience with the improved data layer underneath.
+
+## Requirements
+
+### Validated
+
+- trenchBenchStore centralized data management — existing
+- useTrenchBenchBackfill unified backfill hook — existing
+- Local-api integration for 1d+ history — existing
+- WebSocket dual-write (live_trades + trenchBenchStore) — existing
+- localStorage persistence with 30-min staleness — existing
+
+### Active (All Complete)
+
+- [x] Pause-on-hover for Intel Grid
+- [x] HOT/TRENDING badge logic (3+ KOLs holding >50%)
+- [x] Cross-widget selection sync (Intel Grid ↔ Vantage ↔ Anomalyzer)
+- [x] Lamports vs SOL smart detection
+- [x] User PNL accuracy fixes (use backend pnl_total_usd)
+- [x] Exfil open positions expandable section
+- [x] Anomalyzer deduplication (same trader+token within 5 min)
+- [x] Intel Grid chart refresh mechanism (prevent blanking)
+- [x] Connection removal when KOLs sell
+- [x] Session P/L tracking in Exfil
+
+### Out of Scope
+
+- 7-day wallet summary endpoint — data team dependency, defer
+- IndexedDB caching — Phase 2 per architecture doc
+- Full test coverage — focus on working features first
+- Remote holders_stats_batch endpoint — using local-api for now
+
+## Context
+
+### Branch State
+
+- **Common ancestor:** `baad821b3` (12 days ago)
+- **feat/dash-pauls:** 37 commits ahead (UI/bugfixes)
+- **feat/dash-pauls-preload-data:** 16 commits ahead (architecture)
+- **Conflict files:** intel-grid-widget.tsx, vantage-widget.tsx, anomalyzer-widget.tsx, exfil-widget.tsx
+
+### TrenchBench Widgets
+
+| Widget     | Purpose                                   |
+| ---------- | ----------------------------------------- |
+| Intel Grid | Token discovery with KOL position cards   |
+| Vantage    | Bubble visualization of trader activity   |
+| Anomalyzer | Deviation detection from trader baselines |
+| Exfil      | Quick trade execution + portfolio summary |
+
+### Data Architecture (preload-data)
+
+```
+Data Sources              Shared Store               Widgets (Subscribe)
+──────────────────────────────────────────────────────────────────────
+WebSocket (live)    ─┐
+Remote API (2h)     ─┼──► processTrade() ──► traderIndex    ──► Vantage
+Local-API (1d+)     ─┤                   ──► tokenIndex     ──► Intel Grid
+Batched Holders     ─┘                   ──► holdingsMatrix ──► Anomalyzer
+                                         ──► positionsByToken
+                                         ──► selectedTokenMints
+                                         ──► selectedTraderAddresses
+```
+
+### Cross-Widget Sync (COMPLETED - Store-Only)
+
+~~Uses CustomEvents for inter-widget communication~~ **MIGRATED TO STORE:**
+
+- All cross-widget selection sync now uses `trenchBenchStore` exclusively
+- CustomEvents removed in Phase 6 (237 lines of legacy code removed)
+- Store subscriptions: `selectedTokenMints`, `selectedTraderAddresses`
+
+### Migration Strategy: ~~Hybrid → Pure~~ COMPLETE
+
+1. ~~**This merge:** Keep CustomEvents working, add store subscriptions in parallel~~ ✅ Done (Phase 1-3)
+2. ~~**Validate:** Confirm positionsByToken has all needed holder data~~ ✅ Done (Phase 5)
+3. ~~**Follow-up:** Remove CustomEvent listeners once store is proven~~ ✅ Done (Phase 6)
+
+## Constraints
+
+- **Data pipeline integrity**: Can't break Overwatch sidebar or existing live_trades store — only add and augment
+- **Local-api optional**: Must work without local-api server running (graceful fallback)
+- **Git worktree structure**: Working in worktree, not main repo
+
+## Key Decisions
+
+| Decision                              | Rationale                                                      | Outcome                        |
+| ------------------------------------- | -------------------------------------------------------------- | ------------------------------ |
+| New branch (feat/trenchbench-unified) | Preserve both source branches for rollback                     | Done                           |
+| Hybrid → Pure sync migration          | Feature parity priority; validate store before removing events | Done                           |
+| Merge dash-pauls INTO preload-data    | preload-data has cleaner architecture as base                  | Done                           |
+| Keep CustomEvents during merge        | Lower risk, easier to validate feature parity                  | Done (then removed in Phase 6) |
+| Token amounts for position tracking   | SOL amounts fluctuate with price; token amounts are definitive | Done                           |
+| Lamports detection pattern            | rawSol >= 1M && no decimal → divide by 1e9                     | Done                           |
+| useShallow for store subscriptions    | Prevent unnecessary re-renders in widgets                      | Done                           |
+
+## Final Summary
+
+**Branch:** `feat/trenchbench-unified` — 170 commits ahead of `develop-ui`
+
+**Scope completed:**
+
+- Merged 37 UI commits from dash-pauls into preload-data architecture
+- Migrated from CustomEvents to pure Zustand store sync (237 lines removed)
+- Added lamports/SOL smart detection in store
+- Fixed position tracking to use token amounts (price-independent)
+- All 4 TrenchBench widgets working with unified data layer
+
+---
+
+_Last updated: 2026-01-13 after Phase 7 completion_

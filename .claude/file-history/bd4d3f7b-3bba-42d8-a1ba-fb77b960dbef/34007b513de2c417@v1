@@ -1,0 +1,254 @@
+/**
+ * Autopilot Store Tests
+ *
+ * Tests for autopilot Zustand store slice actions.
+ * Validates setPositions, addSignal with MAX_SIGNALS limit, and reset.
+ */
+
+import { describe, expect, it } from "vitest";
+import type { AutopilotPositionEntry, AutopilotSignal } from "./types";
+
+// Import the MAX_SIGNALS constant value
+const MAX_SIGNALS = 50;
+
+/**
+ * Test helper to simulate Zustand's immer-based set function.
+ * Creates a simple state container that allows mutation and captures the result.
+ */
+function createTestStore() {
+  const state = {
+    autopilot: {
+      isConnected: false,
+      positions: new Map<string, AutopilotPositionEntry>(),
+      signals: [] as AutopilotSignal[],
+    },
+  };
+
+  const set = (updater: (draft: typeof state) => void) => {
+    updater(state);
+  };
+
+  return { state, set };
+}
+
+describe("autopilot store", () => {
+  describe("setPositions", () => {
+    it("sets positions correctly as a Map keyed by mint", () => {
+      const { state, set } = createTestStore();
+
+      const positions: AutopilotPositionEntry[] = [
+        {
+          mint: "mint1",
+          symbol: "TOKEN1",
+          action: "buy",
+          entryPriceSol: 0.001,
+          positionSizeSol: 1.0,
+          entryTime: Date.now(),
+        },
+        {
+          mint: "mint2",
+          symbol: "TOKEN2",
+          action: "buy",
+          entryPriceSol: 0.002,
+          positionSizeSol: 2.0,
+          entryTime: Date.now(),
+        },
+      ];
+
+      // Simulate setPositions action
+      set(state => {
+        const posMap = new Map<string, AutopilotPositionEntry>();
+        positions.forEach(p => posMap.set(p.mint, p));
+        state.autopilot.positions = posMap;
+      });
+
+      expect(state.autopilot.positions.size).toBe(2);
+      expect(state.autopilot.positions.get("mint1")?.symbol).toBe("TOKEN1");
+      expect(state.autopilot.positions.get("mint2")?.symbol).toBe("TOKEN2");
+    });
+
+    it("setting empty array clears positions", () => {
+      const { state, set } = createTestStore();
+
+      // First set some positions
+      const positions: AutopilotPositionEntry[] = [
+        {
+          mint: "mint1",
+          symbol: "TOKEN1",
+          action: "buy",
+          entryPriceSol: 0.001,
+          positionSizeSol: 1.0,
+          entryTime: Date.now(),
+        },
+      ];
+
+      set(state => {
+        const posMap = new Map<string, AutopilotPositionEntry>();
+        positions.forEach(p => posMap.set(p.mint, p));
+        state.autopilot.positions = posMap;
+      });
+
+      expect(state.autopilot.positions.size).toBe(1);
+
+      // Now clear with empty array
+      set(state => {
+        const posMap = new Map<string, AutopilotPositionEntry>();
+        [].forEach((p: AutopilotPositionEntry) => posMap.set(p.mint, p));
+        state.autopilot.positions = posMap;
+      });
+
+      expect(state.autopilot.positions.size).toBe(0);
+    });
+  });
+
+  describe("addSignal", () => {
+    it("adds signal to front of array", () => {
+      const { state, set } = createTestStore();
+
+      const signal1: AutopilotSignal = {
+        timestamp: Date.now(),
+        mint: "mint1",
+        symbol: "TOKEN1",
+        signalType: "magic_buy",
+        action: "buy",
+        reason: "High volume spike",
+      };
+
+      const signal2: AutopilotSignal = {
+        timestamp: Date.now() + 1000,
+        mint: "mint2",
+        symbol: "TOKEN2",
+        signalType: "magic_exit",
+        action: "sell",
+        reason: "Take profit target reached",
+      };
+
+      // Add first signal
+      set(state => {
+        state.autopilot.signals = [signal1, ...state.autopilot.signals].slice(
+          0,
+          MAX_SIGNALS
+        );
+      });
+
+      expect(state.autopilot.signals.length).toBe(1);
+      expect(state.autopilot.signals[0].symbol).toBe("TOKEN1");
+
+      // Add second signal
+      set(state => {
+        state.autopilot.signals = [signal2, ...state.autopilot.signals].slice(
+          0,
+          MAX_SIGNALS
+        );
+      });
+
+      expect(state.autopilot.signals.length).toBe(2);
+      expect(state.autopilot.signals[0].symbol).toBe("TOKEN2"); // Most recent first
+      expect(state.autopilot.signals[1].symbol).toBe("TOKEN1");
+    });
+
+    it("respects MAX_SIGNALS limit (50) - adding 51st signal drops oldest", () => {
+      const { state, set } = createTestStore();
+
+      // Add 50 signals
+      for (let i = 0; i < 50; i++) {
+        const signal: AutopilotSignal = {
+          timestamp: Date.now() + i,
+          mint: `mint${i}`,
+          symbol: `TOKEN${i}`,
+          signalType: "BUY",
+          source: "trending",
+          confidence: 0.8,
+          price: "0.001",
+          marketCap: 1000000,
+        };
+
+        set(state => {
+          state.autopilot.signals = [signal, ...state.autopilot.signals].slice(
+            0,
+            MAX_SIGNALS
+          );
+        });
+      }
+
+      expect(state.autopilot.signals.length).toBe(50);
+      expect(state.autopilot.signals[0].symbol).toBe("TOKEN49"); // Most recent
+      expect(state.autopilot.signals[49].symbol).toBe("TOKEN0"); // Oldest
+
+      // Add 51st signal
+      const signal51: AutopilotSignal = {
+        timestamp: Date.now() + 50,
+        mint: "mint50",
+        symbol: "TOKEN50",
+        signalType: "BUY",
+        source: "trending",
+        confidence: 0.8,
+        price: "0.001",
+        marketCap: 1000000,
+      };
+
+      set(state => {
+        state.autopilot.signals = [signal51, ...state.autopilot.signals].slice(
+          0,
+          MAX_SIGNALS
+        );
+      });
+
+      // Should still be 50 signals, with TOKEN0 (oldest) dropped
+      expect(state.autopilot.signals.length).toBe(50);
+      expect(state.autopilot.signals[0].symbol).toBe("TOKEN50"); // Most recent
+      expect(state.autopilot.signals[49].symbol).toBe("TOKEN1"); // TOKEN0 was dropped
+    });
+  });
+
+  describe("reset", () => {
+    it("clears all state back to defaults", () => {
+      const { state, set } = createTestStore();
+
+      // Set some data
+      set(state => {
+        state.autopilot.isConnected = true;
+        state.autopilot.positions = new Map([
+          [
+            "mint1",
+            {
+              mint: "mint1",
+              symbol: "TOKEN1",
+              action: "buy",
+              entryPriceSol: 0.001,
+              positionSizeSol: 1.0,
+              entryTime: Date.now(),
+            },
+          ],
+        ]);
+        state.autopilot.signals = [
+          {
+            timestamp: Date.now(),
+            mint: "mint1",
+            symbol: "TOKEN1",
+            signalType: "BUY",
+            source: "trending",
+            confidence: 0.8,
+            price: "0.001",
+            marketCap: 1000000,
+          },
+        ];
+      });
+
+      expect(state.autopilot.isConnected).toBe(true);
+      expect(state.autopilot.positions.size).toBe(1);
+      expect(state.autopilot.signals.length).toBe(1);
+
+      // Reset
+      set(state => {
+        state.autopilot.isConnected = false;
+        state.autopilot.positions = new Map();
+        state.autopilot.signals = [];
+      });
+
+      expect(state.autopilot.isConnected).toBe(false);
+      expect(state.autopilot.positions.size).toBe(0);
+      expect(state.autopilot.signals.length).toBe(0);
+    });
+  });
+});

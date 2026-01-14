@@ -1,0 +1,147 @@
+     1→# Roadmap: Autopilot Frontend Integration
+     2→
+     3→## Overview
+     4→
+     5→Bring the token-analysis-autopilot CLI's paper trading capabilities into the web-terminal dashboard widget. Starting with backend WebSocket protocol, then frontend connection, then controls and live P&L. Stretch goal: auto-start backend with dev server.
+     6→
+     7→## Milestones
+     8→
+     9→- ✅ **v1.0 Autopilot Frontend Integration** - Phases 1-4 (shipped 2026-01-08)
+    10→- 🚧 **v1.1 Autopilot Unit Tests** - Phase 5 (in progress)
+    11→
+    12→## Domain Expertise
+    13→
+    14→None
+    15→
+    16→## Cross-Cutting Concern: LOIS Documentation
+    17→
+    18→Every phase must advance LOIS integration readiness (per serene-prancing-platypus.md):
+    19→
+    20→- **Phase 1**: Add LOIS compatibility comments to data types and TriggerEvent
+    21→- **Phase 2**: Document integration points with `// LOIS INTEGRATION POINT` markers
+    22→- **Phase 3**: Note data format differences from LOIS conventions
+    23→- **Phase 4**: Consolidate into LOIS_INTEGRATION.md guide
+    24→
+    25→This is a **quality gate** — phases don't ship until LOIS documentation is updated.
+    26→
+    27→## Phases
+    28→
+    29→**Phase Numbering:**
+    30→
+    31→- Integer phases (1, 2, 3): Planned milestone work
+    32→- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+    33→
+    34→- [x] **Phase 1: Backend Protocol** - Define message types, wire autopilot backend to serve all CLI data via WebSocket
+    35→- [x] **Phase 2: Frontend Connection** - Add Vite proxy, connect widget to backend, display live data
+    36→- [x] **Phase 3: Controls & P&L** - Implement commands, integrate NATS for real-time P&L calculation
+    37→- [x] **Phase 4: Auto-Startup (Stretch)** - Auto-start autopilot backend alongside frontend dev server
+    38→
+    39→## Phase Details
+    40→
+    41→### Phase 1: Backend Protocol
+    42→
+    43→**Goal**: Complete WebSocket message protocol and wire autopilot backend to serve positions, signals, stats, config, and strategies
+    44→**Depends on**: Nothing (first phase)
+    45→**Research**: Unlikely (internal patterns, existing websocket-server.ts foundation)
+    46→**LOIS Gate**: TriggerEvent and data types have LOIS compatibility comments
+    47→**Plans**: TBD (likely 2-3 plans)
+    48→
+    49→Key work:
+    50→
+    51→- Define TypeScript message types for all backend→frontend data
+    52→- Wire autopilot's run loop to emit data over WebSocket
+    53→- Implement command handlers for frontend→backend messages
+    54→- Add LOIS compatibility documentation to types
+    55→
+    56→### Phase 2: Frontend Connection
+    57→
+    58→**Goal**: Connect widget to autopilot backend and display live positions, signals, stats
+    59→**Depends on**: Phase 1
+    60→**Research**: Unlikely (existing BaseWebsocket and Zustand patterns)
+    61→**LOIS Gate**: Integration points documented with markers
+    62→**Plans**: TBD (likely 2 plans)
+    63→
+    64→Key work:
+    65→
+    66→- Add Vite proxy config for autopilot WebSocket (like local-api pattern)
+    67→- Complete useAutopilotSubscription hook to parse messages and update store
+    68→- Wire AutopilotWidget to display real data from store
+    69→- Mark LOIS integration points in trigger.ts
+    70→
+    71→### Phase 3: Controls & P&L
+    72→
+    73→**Goal**: Full feature parity - all CLI controls work from widget, live P&L via NATS
+    74→**Depends on**: Phase 2
+    75→**Research**: Unlikely (existing NATS market_data subscription patterns)
+    76→**LOIS Gate**: Data format notes explain LOIS convention differences
+    77→**Plans**: TBD (likely 2-3 plans)
+    78→
+    79→Key work:
+    80→
+    81→- Implement all control commands (toggle strategies, sources, filter)
+    82→- Subscribe to NATS market_data for open position mints
+    83→- Calculate real-time unrealized P&L in frontend
+    84→- Document data format differences from LOIS conventions
+    85→
+    86→### Phase 4: Auto-Startup (Stretch)
+    87→
+    88→**Goal**: Auto-start autopilot backend alongside frontend dev server
+    89→**Depends on**: Phase 3
+    90→**Research**: Likely (Vite plugin patterns, process management)
+    91→**Research topics**: Vite plugin API, child process spawning, graceful shutdown
+    92→**LOIS Gate**: Consolidate all LOIS docs into LOIS_INTEGRATION.md
+    93→**Plans**: TBD (likely 1-2 plans)
+    94→
+    95→Key work:
+    96→
+    97→- Research Vite plugin or npm script approach
+    98→- Implement auto-start mechanism
+    99→- Handle graceful shutdown on dev server stop
+   100→- Create LOIS_INTEGRATION.md guide for PUM3 team
+   101→
+   102→---
+   103→
+   104→### ✅ v1.1 Autopilot Unit Tests (Complete)
+   105→
+   106→**Milestone Goal:** Essential test coverage for the autopilot integration - P&L calculation, store slice, and message parsing
+   107→
+   108→#### Phase 5: Unit Tests
+   109→
+   110→**Goal**: Unit tests for P&L calculation hook, store slice, and WebSocket message parsing
+   111→**Depends on**: Phase 4 (v1.0 complete)
+   112→**Research**: Unlikely (Vitest already in project, internal patterns)
+   113→**Plans**: 1/1 complete
+   114→
+   115→Key work:
+   116→
+   117→- P&L calculation tests: normal case, no market data, zero entry price edge case
+   118→- Store slice tests: setPositions, addSignal (respects MAX_SIGNALS), reset
+   119→- Message parsing tests: all event types, unknown events, malformed data handling
+   120→
+   121→Constraints:
+   122→
+   123→- Essential cases only (happy path + key edge cases)
+   124→- No mocking WebSocket connections or NATS subscriptions
+   125→- Tests should be fast and reliable
+   126→
+   127→Plans:
+   128→
+   129→- [x] 05-01: Unit tests (18 tests, 9min)
+   130→
+   131→## Progress
+   132→
+   133→**Execution Order:**
+   134→Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
+   135→
+   136→| Phase                     | Milestone | Plans Complete | Status   | Completed  |
+   137→| ------------------------- | --------- | -------------- | -------- | ---------- |
+   138→| 1. Backend Protocol       | v1.0      | 1/1            | Complete | 2026-01-08 |
+   139→| 2. Frontend Connection    | v1.0      | 1/1            | Complete | 2026-01-08 |
+   140→| 3. Controls & P&L         | v1.0      | 1/1            | Complete | 2026-01-08 |
+   141→| 4. Auto-Startup (Stretch) | v1.0      | 1/1            | Complete | 2026-01-08 |
+   142→| 5. Unit Tests             | v1.1      | 1/1            | Complete | 2026-01-08 |
+   143→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

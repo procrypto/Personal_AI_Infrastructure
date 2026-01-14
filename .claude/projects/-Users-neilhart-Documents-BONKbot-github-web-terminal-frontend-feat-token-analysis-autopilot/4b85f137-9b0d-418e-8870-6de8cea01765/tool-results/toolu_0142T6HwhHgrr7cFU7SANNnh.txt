@@ -1,0 +1,134 @@
+     1→---
+     2→phase: 26-integration-testing
+     3→plan: 01
+     4→type: execute
+     5→domain: testing
+     6→---
+     7→
+     8→<objective>
+     9→Validate v2.0 data feed pipeline with unit tests for feed adapters and integration validation.
+    10→
+    11→Purpose: Ensure feed adapters correctly transform NATS data to backend format before CLI integration.
+    12→Output: Feed adapter tests passing, v2.0 frontend ready for CLI backend connection.
+    13→</objective>
+    14→
+    15→<execution_context>
+    16→~/.claude/get-shit-done/workflows/execute-phase.md
+    17→./26-01-SUMMARY.md
+    18→</execution_context>
+    19→
+    20→<context>
+    21→@.planning/PROJECT.md
+    22→@.planning/ROADMAP.md
+    23→@.planning/STATE.md
+    24→
+    25→# Prior phase summaries (v2.0 backend integration):
+    26→
+    27→@.planning/phases/23-websocket-client-refactor/23-01-SUMMARY.md
+    28→@.planning/phases/24-data-feed-implementation/24-01-SUMMARY.md
+    29→@.planning/phases/25-command-event-protocol/25-01-SUMMARY.md
+    30→
+    31→# Key files for this phase:
+    32→
+    33→@apps/web-terminal/src/websocket/autopilot/feedAdapters.ts
+    34→@apps/web-terminal/src/websocket/autopilot/eventParser.ts
+    35→@apps/web-terminal/src/websocket/autopilot/messageParser.test.ts
+    36→
+    37→**Tech stack available:** vitest, jsdom, React Testing Library
+    38→**Established patterns:** Pure function extraction for testability (Phase 25)
+    39→**Constraining decisions:**
+    40→
+    41→- Phase 24: Feed types use 'type' field (not 'feed') per backend protocol
+    42→- Phase 24: CVDData interface matches backend spec exactly
+    43→- Phase 25: Parser validates 9 event types
+    44→
+    45→**Issues being addressed:** None
+    46→</context>
+    47→
+    48→<tasks>
+    49→
+    50→<task type="auto">
+    51→  <name>Task 1: Create feed adapter unit tests</name>
+    52→  <files>apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts</files>
+    53→  <action>
+    54→Create comprehensive tests for all feed adapter functions:
+    55→
+    56→1. toMarketDataFeed - Verify wraps MarketDataMessage with type: 'market_data_feed'
+    57→2. toOhlcvFeed - Verify OHLCV conversion (string→number, wraps in array)
+    58→3. toTradeFeed - Verify trade conversion with price calculation
+    59→4. toCvdFeed - Verify CVD calculation from trading_stats_1h, returns null when missing
+    60→
+    61→Use existing messageParser.test.ts as pattern reference. Mock minimal MarketDataMessage, OHLCVMessage, TradeMessage objects with required fields only.
+    62→
+    63→Avoid: Testing React hooks (useAutopilotDataForwarder) - hooks require more complex setup and the adapters are the critical logic.
+    64→</action>
+    65→<verify>vitest run apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts --reporter=verbose</verify>
+    66→<done>All 4 feed adapter functions have passing tests covering happy path and edge cases</done>
+    67→</task>
+    68→
+    69→<task type="auto">
+    70→  <name>Task 2: Run full autopilot test suite</name>
+    71→  <files>apps/web-terminal/src/websocket/autopilot/</files>
+    72→  <action>
+    73→Run all autopilot WebSocket tests to validate v2.0 pipeline integrity:
+    74→- messageParser.test.ts (event parsing)
+    75→- feedAdapters.test.ts (data transformation)
+    76→
+    77→Ensure no regressions introduced.
+    78→</action>
+    79→<verify>vitest run apps/web-terminal/src/websocket/autopilot/ --reporter=verbose</verify>
+    80→<done>All autopilot WebSocket tests pass (messageParser + feedAdapters)</done>
+    81→</task>
+    82→
+    83→</tasks>
+    84→
+    85→<verification>
+    86→Before declaring phase complete:
+    87→- [ ] `vitest run apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts` passes
+    88→- [ ] `vitest run apps/web-terminal/src/websocket/autopilot/` passes all tests
+    89→- [ ] No TypeScript errors in test files
+    90→- [ ] Test coverage includes: toMarketDataFeed, toOhlcvFeed, toTradeFeed, toCvdFeed
+    91→</verification>
+    92→
+    93→<success_criteria>
+    94→
+    95→- All tasks completed
+    96→- All verification checks pass
+    97→- Feed adapter tests provide confidence for CLI integration
+    98→- v2.0 frontend data pipeline validated
+    99→  </success_criteria>
+   100→
+   101→<output>
+   102→After completion, create `.planning/phases/26-integration-testing/26-01-SUMMARY.md`:
+   103→
+   104→# Phase 26 Plan 01: Feed Adapter Testing Summary
+   105→
+   106→**[Substantive one-liner about what was validated]**
+   107→
+   108→## Accomplishments
+   109→
+   110→- [Test counts and coverage]
+   111→
+   112→## Files Created/Modified
+   113→
+   114→- `apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts` - New test file
+   115→
+   116→## Decisions Made
+   117→
+   118→[Any test design decisions, or "None"]
+   119→
+   120→## Issues Encountered
+   121→
+   122→[Problems and resolutions, or "None"]
+   123→
+   124→## Next Phase Readiness
+   125→
+   126→- v2.0 Backend Integration milestone complete
+   127→- Frontend ready for CLI backend connection
+   128→- All data transformation logic validated
+   129→  </output>
+   130→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

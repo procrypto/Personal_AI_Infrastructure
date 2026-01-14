@@ -1,0 +1,382 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import type { ComponentType, ReactNode } from "react";
+import {
+  PortfolioWidget,
+  PortfolioWidgetHeaderControls,
+  WatchlistWidget,
+  MiniTradeWidget,
+  PvpSpectatorWidget,
+  XRayBubbleWidget,
+  XRayBubbleWidgetHeaderControls,
+  KolsWidget,
+  KolsWidgetHeaderControls,
+  AutopilotWidget,
+  // TradingDnaWidget, // PUNTED
+  // PUNTED FOR FRIDAY:
+  // WalletTrackerWidget,
+  // WhaleMovesWidget,
+  // DiscoveryWidget,
+  // XRayWidget,
+  // XRayAboutToGraduateWidget,
+  // XRayGraduatedWidget,
+  // LaunchpadVolumeWidget,
+  // LaunchesGraduationsWidget,
+  // LiveTradesWidget,
+} from "./widgets";
+import PvPIcon from "@/assets/icons/pvp/mdi_pen-remove.svg";
+import {
+  LineChart,
+  PieChart,
+  Star,
+  Scan,
+  Users,
+  Bot,
+  // Dna, // PUNTED
+  // PUNTED FOR FRIDAY:
+  // Rocket,
+  // GraduationCap,
+  // Flame,
+  // Waves,
+  // BarChart2,
+  // Activity,
+  // TrendingUp,
+} from "lucide-react";
+
+export type WidgetType =
+  | "portfolio"
+  | "watchlist"
+  | "xray-bubble"
+  | "mini-trade"
+  | "pvp-spectator"
+  | "kols"
+  | "autopilot";
+// PUNTED FOR FRIDAY:
+// | "whale-moves"
+// | "discovery"
+// | "xray"
+// | "xray-about-to-graduate"
+// | "xray-graduated"
+// | "launchpad-volume"
+// | "launches-graduations"
+// | "live-trades"
+
+export type WidgetSize = { w: number; h: number };
+
+export type WidgetSizePreset = {
+  size: WidgetSize;
+  label: "S" | "M" | "L" | "XL";
+};
+
+export type WidgetCatalogItem = {
+  type: WidgetType;
+  title: string;
+  description: string;
+  icon: string | ReactNode;
+  component: ComponentType<{ widgetId?: string }>;
+  defaultSize: WidgetSize;
+  minSize: WidgetSize;
+  maxSize: WidgetSize; // Maximum allowed size
+  sizePresets?: WidgetSizePreset[]; // Optional S/M/L presets for quick resize
+  category: "trading" | "analytics" | "social";
+  hideHeader?: boolean;
+  multiInstance?: boolean; // Allows adding multiple instances of this widget
+  maxInstances?: number; // Maximum number of instances allowed (only for multiInstance widgets)
+  renderHeaderControls?: ComponentType<{ widgetId?: string }>; // Optional header controls (tabs, filters, etc.)
+  contentClassName?: string; // Custom classes for content area (e.g., for padding)
+};
+
+// Standardized preset sizes
+// S:  w: 4, h: 3.5 = 350px (fits 6 widgets on 16" Mac)
+// M:  w: 4, h: 5   = 500px
+// L:  w: 4, h: 8   = 800px
+// XL: w: 6, h: 8   = 800px (wide)
+const SIZE_S = { w: 4, h: 3.5 };
+const SIZE_M = { w: 4, h: 5 };
+const SIZE_L = { w: 4, h: 8 };
+const SIZE_XL = { w: 6, h: 8 };
+
+// Size constraints by widget type
+const MAX_SIZE = { w: 12, h: 8 };
+
+// Reusable preset arrays
+const PRESETS_S_M_L_XL: WidgetSizePreset[] = [
+  { size: SIZE_S, label: "S" },
+  { size: SIZE_M, label: "M" },
+  { size: SIZE_L, label: "L" },
+  { size: SIZE_XL, label: "XL" },
+];
+
+const PRESETS_S_M_L: WidgetSizePreset[] = [
+  { size: SIZE_S, label: "S" },
+  { size: SIZE_M, label: "M" },
+  { size: SIZE_L, label: "L" },
+];
+
+const PRESETS_M_L_XL: WidgetSizePreset[] = [
+  { size: SIZE_M, label: "M" },
+  { size: SIZE_L, label: "L" },
+  { size: SIZE_XL, label: "XL" },
+];
+
+export const widgetCatalog: Record<WidgetType, WidgetCatalogItem> = {
+  // discovery: {
+  //   type: "discovery",
+  //   title: "Discovery",
+  //   description: "Find trending tokens and new opportunities",
+  //   icon: "🔥",
+  //   component: DiscoveryWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L_XL,
+  //   category: "trading",
+  // },
+  portfolio: {
+    type: "portfolio",
+    title: "Portfolio",
+    description: "Track your holdings and performance",
+    icon: <PieChart className="size-5" />,
+    component: PortfolioWidget,
+    renderHeaderControls: PortfolioWidgetHeaderControls,
+    defaultSize: SIZE_XL,
+    minSize: SIZE_S,
+    maxSize: MAX_SIZE,
+    sizePresets: PRESETS_S_M_L_XL,
+    category: "trading",
+  },
+  watchlist: {
+    type: "watchlist",
+    title: "Watchlist",
+    description: "Monitor your favorite tokens",
+    icon: <Star className="size-5" />,
+    component: WatchlistWidget,
+    defaultSize: SIZE_S,
+    minSize: SIZE_S,
+    maxSize: MAX_SIZE,
+    sizePresets: PRESETS_S_M_L_XL,
+    category: "trading",
+  },
+  kols: {
+    type: "kols",
+    title: "KOL Leaderboard",
+    description: "Challenge top traders and KOLs to PvP battles",
+    icon: <Users className="size-5" />,
+    component: KolsWidget,
+    renderHeaderControls: KolsWidgetHeaderControls,
+    defaultSize: SIZE_S,
+    minSize: SIZE_S,
+    maxSize: SIZE_L,
+    sizePresets: PRESETS_S_M_L,
+    category: "social",
+  },
+  // PUNTED FOR FRIDAY - will be better with Lists feature
+  // "whale-moves": {
+  //   type: "whale-moves",
+  //   title: "Whale Moves",
+  //   description: "Track large wallet activity",
+  //   icon: <Waves className="size-5" />,
+  //   component: WhaleMovesWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: SIZE_L,
+  //   sizePresets: PRESETS_S_M_L,
+  //   category: "analytics",
+  // },
+  // PUNTED FOR FRIDAY
+  // discovery: {
+  //   type: "discovery",
+  //   title: "Discovery",
+  //   description: "Find trending tokens and new opportunities",
+  //   icon: <Flame className="size-5" />,
+  //   component: DiscoveryWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L_XL,
+  //   category: "trading",
+  // },
+  // PUNTED - Wallet Tracker (will be better with Lists feature)
+  // "wallet-tracker": {
+  //   type: "wallet-tracker",
+  //   title: "Wallet Tracker",
+  //   description: "Follow top traders and KOLs",
+  //   icon: <Users className="size-5" />,
+  //   component: WalletTrackerWidget,
+  //   defaultSize: SIZE_S,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L_XL,
+  //   category: "social",
+  // },
+  // "trading-dna": {
+  //   type: "trading-dna",
+  //   title: "Your Trading DNA",
+  //   description: "Personal trading analytics and insights",
+  //   icon: <Dna className="size-5" />,
+  //   component: TradingDnaWidget,
+  //   defaultSize: SIZE_S,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L_XL,
+  //   category: "analytics",
+  // },
+  // PUNTED FOR FRIDAY - X-Ray tables (keeping only xray-bubble)
+  // xray: {
+  //   type: "xray",
+  //   title: "X-Ray: New Pairs",
+  //   description: "Scan newly launched token pairs",
+  //   icon: <Scan className="size-5" />,
+  //   component: XRayWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L,
+  //   category: "analytics",
+  // },
+  // "xray-about-to-graduate": {
+  //   type: "xray-about-to-graduate",
+  //   title: "X-Ray: About to Graduate",
+  //   description: "Tokens nearing graduation threshold",
+  //   icon: <Rocket className="size-5" />,
+  //   component: XRayAboutToGraduateWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L,
+  //   category: "analytics",
+  // },
+  // "xray-graduated": {
+  //   type: "xray-graduated",
+  //   title: "X-Ray: Graduated",
+  //   description: "Recently graduated tokens",
+  //   icon: <GraduationCap className="size-5" />,
+  //   component: XRayGraduatedWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L,
+  //   category: "analytics",
+  // },
+  "xray-bubble": {
+    type: "xray-bubble",
+    title: "X-Ray Bubbles",
+    description:
+      "Interactive bubble chart showing new pairs and graduated tokens",
+    icon: <Scan className="size-5" />,
+    component: XRayBubbleWidget,
+    renderHeaderControls: XRayBubbleWidgetHeaderControls,
+    defaultSize: SIZE_XL,
+    minSize: SIZE_M,
+    maxSize: MAX_SIZE,
+    sizePresets: PRESETS_M_L_XL,
+    category: "analytics",
+  },
+  // PUNTED FOR FRIDAY - Launchpad
+  // "launchpad-volume": {
+  //   type: "launchpad-volume",
+  //   title: "Launchpad Volume",
+  //   description: "SOL launchpad trading volume trends",
+  //   icon: <BarChart2 className="size-5" />,
+  //   component: LaunchpadVolumeWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L,
+  //   category: "analytics",
+  //   hideHeader: true,
+  // },
+  // PUNTED FOR FRIDAY - Launchpad
+  // "launches-graduations": {
+  //   type: "launches-graduations",
+  //   title: "Launches & Graduations",
+  //   description: "Track new token launches and graduations",
+  //   icon: <Activity className="size-5" />,
+  //   component: LaunchesGraduationsWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L,
+  //   category: "analytics",
+  //   hideHeader: true,
+  // },
+  // PUNTED FOR FRIDAY - Live Trades
+  // "live-trades": {
+  //   type: "live-trades",
+  //   title: "Live Trades",
+  //   description: "Real-time trade feed for any token",
+  //   icon: <TrendingUp className="size-5" />,
+  //   component: LiveTradesWidget,
+  //   defaultSize: SIZE_M,
+  //   minSize: SIZE_S,
+  //   maxSize: MAX_SIZE,
+  //   sizePresets: PRESETS_S_M_L_XL,
+  //   category: "trading",
+  //   multiInstance: true,
+  // },
+  "mini-trade": {
+    type: "mini-trade",
+    title: "Live Chart",
+    description: "Chart and quick trade for any token",
+    icon: <LineChart className="size-5" />,
+    component: MiniTradeWidget,
+    defaultSize: SIZE_S,
+    minSize: SIZE_S,
+    maxSize: MAX_SIZE,
+    sizePresets: PRESETS_S_M_L_XL,
+    category: "trading",
+    multiInstance: true,
+    maxInstances: 6,
+    contentClassName: "p-0",
+  },
+  "pvp-spectator": {
+    type: "pvp-spectator",
+    title: "PvP Spectator",
+    description: "Watch live PvP battles with dynamic visualizations",
+    icon: <PvPIcon className="size-6" />,
+    component: PvpSpectatorWidget,
+    defaultSize: SIZE_S,
+    minSize: SIZE_S,
+    maxSize: MAX_SIZE,
+    sizePresets: PRESETS_S_M_L_XL,
+    category: "social",
+  },
+  autopilot: {
+    type: "autopilot",
+    title: "AAT Autonomous Anomaly Terminal",
+    description: "Autonomous anomaly detection with magic buy/exit signals",
+    icon: <Bot className="size-5" />,
+    component: AutopilotWidget,
+    defaultSize: SIZE_L,
+    minSize: SIZE_M,
+    maxSize: MAX_SIZE,
+    sizePresets: PRESETS_M_L_XL,
+    category: "trading",
+  },
+};
+
+// Helper to get widget type from widget instance ID (e.g., "mini-trade-1" -> "mini-trade")
+export const getWidgetTypeFromId = (widgetId: string): WidgetType | null => {
+  // Check if it's a direct match first
+  if (widgetId in widgetCatalog) {
+    return widgetId as WidgetType;
+  }
+
+  // Check for multi-instance widget (e.g., "mini-trade-123")
+  for (const type of Object.keys(widgetCatalog) as WidgetType[]) {
+    if (widgetId.startsWith(`${type}-`)) {
+      return type;
+    }
+  }
+
+  return null;
+};
+
+export const getWidgetsByCategory = (
+  category: WidgetCatalogItem["category"]
+) => {
+  return Object.values(widgetCatalog).filter(w => w.category === category);
+};
+
+export const getAllCategories = () => {
+  return ["trading", "analytics", "social"] as const;
+};

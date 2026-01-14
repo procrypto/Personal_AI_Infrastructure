@@ -1,0 +1,54 @@
+   485→    const exitsToExecute = this.checkAllTrades(marketDataMap, candleDataMap);
+   486→
+   487→    for (const { trade, exit } of exitsToExecute) {
+   488→      const marketData = marketDataMap.get(trade.mint);
+   489→      if (!marketData) continue;
+   490→
+   491→      // Close the paper trade
+   492→      const closed = paperTracker.closeTrade(
+   493→        trade.id,
+   494→        exit.exitPrice,
+   495→        marketData.price_usd
+   496→      );
+   497→
+   498→      if (closed) {
+   499→        closedTrades.push(closed);
+   500→
+   501→        // Log the exit (unless quiet mode)
+   502→        if (!quiet) {
+   503→          const reasonLabel = this.getReasonLabel(exit.reason);
+   504→          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+   505→          console.log(
+   506→            `\n[MAGIC ${reasonLabel}] ${closed.symbol} | ${pnlSign}${closed.pnlPercent?.toFixed(2)}%`
+   507→          );
+   508→          if (exit.details) {
+   509→            console.log(`  ${exit.details}`);
+   510→          }
+   511→        }
+   512→      }
+   513→    }
+   514→
+   515→    // Persist closed trades
+   516→    if (closedTrades.length > 0) {
+   517→      await paperTracker.save();
+   518→    }
+   519→
+   520→    return closedTrades;
+   521→  }
+   522→
+   523→  /**
+   524→   * Get human-readable label for exit reason.
+   525→   * Used in logging and UI display.
+   526→   */
+   527→  private getReasonLabel(reason: ExitCheck['reason']): string {
+   528→    switch (reason) {
+   529→      case 'tp_resistance':
+   530→        return 'TP'; // Take Profit
+   531→      case 'sl_support_break':
+   532→        return 'SL'; // Stop Loss
+   533→      case 'tsl_fractal':
+   534→        return 'TSL'; // Trailing Stop Loss
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

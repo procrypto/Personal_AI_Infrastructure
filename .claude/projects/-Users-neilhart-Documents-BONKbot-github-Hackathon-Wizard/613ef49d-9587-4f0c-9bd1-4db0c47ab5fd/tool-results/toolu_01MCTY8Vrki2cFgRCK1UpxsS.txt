@@ -1,0 +1,54 @@
+   438→            } else {
+   439→              // Scan result (not an open trade)
+   440→              if (result.action === 'hold') {
+   441→                scanResults.push(`[${src}]${sym}:-`);
+   442→              } else {
+   443→                const marketData = await localApi.getMarketData(token.mint);
+   444→                const conf = (result.confidence * 100).toFixed(0);
+   445→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   446→                const reset = '\x1b[0m';
+   447→                scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   448→
+   449→                await trigger.trigger({
+   450→                  mint: token.mint,
+   451→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   452→                  action: result.action,
+   453→                  priceSol: marketData.price_sol,
+   454→                  priceUsd: marketData.price_usd,
+   455→                  ruleSetId: ruleSets[0].id,
+   456→                  signals: result.signals,
+   457→                  confidence: result.confidence,
+   458→                });
+   459→                await paperTracker.save();
+   460→              }
+   461→            }
+   462→          } catch {
+   463→            const sym = token.symbol || token.mint.slice(0, 6);
+   464→            const src = sourceLabel(token.source);
+   465→            if (isOpenTrade) {
+   466→              tradeResults.push(`[${src}]${sym}:ERR`);
+   467→            } else {
+   468→              scanResults.push(`[${src}]${sym}:ERR`);
+   469→            }
+   470→          }
+   471→        }
+   472→
+   473→        // Output
+   474→        let line = `[${time}] #${scanCount}`;
+   475→        if (scanResults.length > 0) line += `  |  Scan: ${scanResults.slice(0, 10).join(' ')}`;
+   476→        if (scanResults.length > 10) line += ` +${scanResults.length - 10}`;
+   477→        if (tradeResults.length > 0) line += `  |  Trades: ${tradeResults.join(' ')}`;
+   478→        if (scanResults.length === 0 && tradeResults.length === 0) line += '  (nothing to scan)';
+   479→        console.log(line);
+   480→      };
+   481→
+   482→      // Run immediately, then on interval
+   483→      await runLoop();
+   484→      setInterval(runLoop, config.pollIntervalMs);
+   485→      break;
+   486→    }
+   487→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

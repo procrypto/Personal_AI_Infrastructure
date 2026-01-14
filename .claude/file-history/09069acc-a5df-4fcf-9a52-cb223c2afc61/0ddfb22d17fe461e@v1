@@ -1,0 +1,207 @@
+# Codebase Structure
+
+**Analysis Date:** 2025-01-07
+
+## Directory Layout
+
+```
+qa-tools/
+├── src/                            # TypeScript source code
+│   ├── core/                       # Shared core utilities
+│   │   ├── types.ts               # Core interfaces and type definitions
+│   │   ├── config.ts              # Configuration loader
+│   │   ├── utils.ts               # Test utilities and assertions
+│   │   ├── reporter.ts            # Output formatting
+│   │   └── index.ts               # Public API exports
+│   │
+│   ├── systems/                    # System-specific test modules
+│   │   ├── web-api/               # Web API system tests
+│   │   │   ├── run.ts             # System orchestrator
+│   │   │   └── scripts/           # Individual test suites
+│   │   │       ├── health-check.ts
+│   │   │       ├── auth-check.ts
+│   │   │       ├── user-api-check.ts
+│   │   │       ├── trading-api-check.ts
+│   │   │       ├── dependency-check.ts
+│   │   │       └── websocket-check.ts
+│   │   │
+│   │   ├── telegram/              # Telegram bot tests
+│   │   │   ├── run.ts
+│   │   │   └── scripts/
+│   │   │       └── tg-canary-check.ts
+│   │   │
+│   │   ├── pum3/                  # PUM3 system (placeholder)
+│   │   │   └── run.ts
+│   │   │
+│   │   ├── frontend/              # Frontend system (placeholder)
+│   │   │   └── run.ts
+│   │   │
+│   │   ├── data-infra/            # Data infrastructure (placeholder)
+│   │   │   └── run.ts
+│   │   │
+│   │   └── infrastructure/        # Infrastructure systems (placeholder)
+│   │       └── run.ts
+│   │
+│   └── run-all.ts                 # Master orchestrator
+│
+├── config/                         # Configuration files
+│   ├── environments/              # Environment-specific configs
+│   │   ├── prod.env
+│   │   ├── staging.env
+│   │   └── beta.env
+│   │
+│   └── systems/                   # System-specific configs
+│       ├── web-api.env
+│       ├── telegram.env
+│       ├── pum3.env
+│       └── frontend.env
+│
+├── docs/                          # Documentation
+│   ├── runbooks/                  # Manual verification procedures
+│   │   ├── WEB_API_RUNBOOK.md
+│   │   ├── TG_BOT_RUNBOOK.md
+│   │   ├── FRONTEND_RUNBOOK.md
+│   │   ├── PUM3_RUNBOOK.md
+│   │   └── DATA_INFRA_RUNBOOK.md
+│   ├── MONITORING_REFERENCE.md
+│   └── ESCALATION.md
+│
+├── .github/                       # GitHub configuration
+│   └── workflows/                 # CI/CD workflows
+│
+├── tsconfig.json                  # TypeScript configuration
+├── package.json                   # Project manifest
+├── package-lock.json              # Lock file
+└── README.md                      # Project documentation
+```
+
+## Directory Purposes
+
+**src/core/**
+- Purpose: Shared infrastructure for all systems
+- Contains: TypeScript interfaces, config loader, test utilities, reporter
+- Key files:
+  - `types.ts` - TestResult, TestSuiteResult, SystemConfig interfaces
+  - `config.ts` - Environment loading and validation
+  - `utils.ts` - runTest(), assertions, HTTP utilities
+  - `reporter.ts` - Console, JSON, GitHub output formatters
+- Subdirectories: None (flat structure)
+
+**src/systems/**
+- Purpose: System-specific test implementations
+- Contains: One folder per system with runner and test scripts
+- Key files: Each `run.ts` orchestrates that system's tests
+- Subdirectories: `scripts/` contains individual test suites
+
+**src/systems/web-api/scripts/**
+- Purpose: Web API test suites
+- Contains: 6 test files covering health, auth, user, trading, deps, websocket
+- Key files: `health-check.ts` (availability), `auth-check.ts` (authentication)
+
+**config/environments/**
+- Purpose: Environment-specific URLs and settings
+- Contains: .env files for prod, staging, beta
+- Key files: `prod.env` - Production endpoints and token addresses
+
+**config/systems/**
+- Purpose: System-specific secrets and tokens
+- Contains: .env files for each system
+- Key files: `telegram.env` - Bot tokens, `web-api.env` - Test tokens
+
+**docs/runbooks/**
+- Purpose: Manual testing procedures
+- Contains: Markdown runbooks for human verification
+- Key files: `WEB_API_RUNBOOK.md`, `TG_BOT_RUNBOOK.md`
+
+## Key File Locations
+
+**Entry Points:**
+- `src/run-all.ts` - Master orchestrator, runs all systems
+- `bin/qa-tools` - CLI entry point (defined in package.json)
+
+**Configuration:**
+- `tsconfig.json` - TypeScript compiler options (strict mode)
+- `package.json` - Dependencies, scripts, bin entry
+- `config/environments/*.env` - Environment URLs
+- `config/systems/*.env` - System tokens
+
+**Core Logic:**
+- `src/core/utils.ts` - Test execution utilities
+- `src/core/config.ts` - Configuration loading
+- `src/core/reporter.ts` - Report generation
+
+**Testing:**
+- `src/systems/web-api/scripts/*.ts` - Web API tests
+- `src/systems/telegram/scripts/*.ts` - Telegram tests
+
+**Documentation:**
+- `README.md` - Project overview and usage
+- `docs/runbooks/*.md` - Manual verification guides
+
+## Naming Conventions
+
+**Files:**
+- kebab-case for all source files: `health-check.ts`, `auth-check.ts`
+- `run.ts` for system orchestrators (consistent pattern)
+- `.env` suffix for environment files
+
+**Directories:**
+- kebab-case for all directories: `web-api`, `data-infra`
+- `scripts/` for test suite containers
+- Plural names for collections: `systems/`, `environments/`
+
+**Special Patterns:**
+- `index.ts` for barrel exports (`src/core/index.ts`)
+- Test IDs: `{SYSTEM}-{SUITE}-{NUMBER}` (e.g., `A-HEALTH-01`)
+
+## Where to Add New Code
+
+**New System:**
+- Create `src/systems/{system-name}/run.ts` (orchestrator)
+- Create `src/systems/{system-name}/scripts/` (test suites)
+- Add config loader in `src/core/config.ts`
+- Add system entry in `src/run-all.ts`
+- Add environment file in `config/systems/{system-name}.env`
+
+**New Test Suite:**
+- Create `src/systems/{system}/scripts/{feature}-check.ts`
+- Import and call from `src/systems/{system}/run.ts`
+- Follow existing test pattern with runTest()
+
+**New Assertion:**
+- Add to `src/core/utils.ts`
+- Export from `src/core/index.ts`
+
+**New Config:**
+- Add interface in `src/core/types.ts`
+- Add loader function in `src/core/config.ts`
+
+**New Report Format:**
+- Add generator function in `src/core/reporter.ts`
+
+## Special Directories
+
+**config/**
+- Purpose: Configuration files (not committed to git in full)
+- Source: Manual creation, .env.local for local dev
+- Committed: Yes, except `config/.env.local` (gitignored)
+
+**dist/**
+- Purpose: Compiled JavaScript output
+- Source: TypeScript compilation
+- Committed: No (gitignored)
+
+**node_modules/**
+- Purpose: npm dependencies
+- Source: npm install
+- Committed: No (gitignored)
+
+**.planning/**
+- Purpose: GSD planning documents
+- Source: Auto-generated by codebase mapping
+- Committed: Yes (tracking project state)
+
+---
+
+*Structure analysis: 2025-01-07*
+*Update when directory structure changes*

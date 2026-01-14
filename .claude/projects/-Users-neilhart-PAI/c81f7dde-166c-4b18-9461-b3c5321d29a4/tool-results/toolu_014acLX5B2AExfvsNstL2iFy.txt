@@ -1,0 +1,127 @@
+     1→# pum3 - Synthesized Context
+     2→
+     3→## Discovery Summary
+     4→- **First discovered**: 2025-01-10
+     5→- **Last updated**: 2025-01-10
+     6→- **Discovery depth**: Standard
+     7→- **Documentation quality**: Good (has README with architecture)
+     8→
+     9→---
+    10→
+    11→## System Identity
+    12→
+    13→**What it is**: Rust-based real-time Solana state cache and swap orchestration system.
+    14→
+    15→**What it does**:
+    16→- Ingests Geyser account updates (Yellowstone gRPC)
+    17→- Maintains DEX pool state for 17 protocols
+    18→- Publishes prices via NATS `pum3.pricing`
+    19→- Routes and constructs swap transactions
+    20→- Executes limit orders (LOIS system)
+    21→
+    22→**Key insight**: This is the BRIDGE between raw blockchain data and web-terminal. Without PUM3, there are no prices.
+    23→
+    24→---
+    25→
+    26→## Architecture Highlights
+    27→
+    28→### Workspace (26 crates)
+    29→```
+    30→nami/       → Core binary (API/Publisher/Writer)
+    31→lois/       → Limit Order Intent System
+    32→engine/     → State management
+    33→dexes/      → 17 DEX implementations
+    34→swap/       → Routing & construction
+    35→common/     → Shared types
+    36→```
+    37→
+    38→### Run Modes
+    39→| Mode | Purpose | Region |
+    40→|------|---------|--------|
+    41→| api | Full HTTP API | EU |
+    42→| publish | Price publishing | US, AP |
+    43→| writer | Redis cache | EU |
+    44→| dispatcher | Order matching | EU |
+    45→| evaluator | Order execution | EU |
+    46→
+    47→### Storage Pattern
+    48→```rust
+    49→pools_by_address: HashMap<Pubkey, Pool>
+    50→pools_by_token_pair: HashMap<TokenPair, HashSet<Pool>>
+    51→account_to_pools: HashMap<Pubkey, HashSet<Pool>>  // Geyser routing
+    52→```
+    53→
+    54→---
+    55→
+    56→## Key Capabilities
+    57→
+    58→### For Product/Growth
+    59→| Capability | User Impact |
+    60→|------------|-------------|
+    61→| Real-time prices | Live market data display |
+    62→| Swap routing | Best execution for trades |
+    63→| 17 DEXes | Broad liquidity access |
+    64→| Limit orders | Advanced trading |
+    65→| Low latency | Competitive trading |
+    66→
+    67→### NATS Topics
+    68→| Topic | Content |
+    69→|-------|---------|
+    70→| `pum3.pricing` | Pool prices → web-terminal |
+    71→| `lois.intent` | Limit order events |
+    72→| `pum3.execution-request.*` | Swap execution |
+    73→
+    74→---
+    75→
+    76→## Integration Map
+    77→
+    78→### Upstream
+    79→| Source | What We Get |
+    80→|--------|-------------|
+    81→| Geyser (Helius/Triton) | Account updates |
+    82→| Solana RPC | Tx submission |
+    83→| Jupiter | Routing fallback |
+    84→
+    85→### Downstream
+    86→| Consumer | What They Get |
+    87→|----------|---------------|
+    88→| web-terminal | Prices via NATS |
+    89→| bonkbot | Swap API |
+    90→| Materializers | Pool state |
+    91→
+    92→---
+    93→
+    94→## Working Here
+    95→
+    96→### Quick Start
+    97→```bash
+    98→cargo build
+    99→RUN_MODE=api cargo run --bin nami
+   100→```
+   101→
+   102→### Common Locations
+   103→| Task | Path |
+   104→|------|------|
+   105→| Add DEX | `dexes/src/` + `common/src/dexes.rs` |
+   106→| Modify prices | `common/src/web_terminal_price_data.rs` |
+   107→| API endpoints | `api/src/` |
+   108→| Routing | `swap/src/` |
+   109→| Limit orders | `lois/src/` |
+   110→
+   111→---
+   112→
+   113→## Session Notes
+   114→
+   115→*Accumulated learnings:*
+   116→
+   117→- PUM3 = Program Update Machine (3rd edition)
+   118→- Regional deployment: EU is primary (full services), US/AP are publishers only
+   119→- 17 DEXes supported - each has its own impl in `dexes/`
+   120→- LOIS = Limit Order Intent System (dispatcher matches, evaluator executes)
+   121→- Storage layer has 3 indexes for fast pool lookup
+   122→- `pum3.pricing` is THE topic that feeds all downstream price displays
+   123→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

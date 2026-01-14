@@ -1,0 +1,112 @@
+     1→/**
+     2→ * Test Script - Debug mode to see what data we're getting
+     3→ */
+     4→
+     5→import { localApi } from './api/client.js';
+     6→import { RuleEngine } from './rules/engine.js';
+     7→import { createPriceChangeRule } from './rules/price-change.js';
+     8→import { createVolumeSpikeRule } from './rules/volume-spike.js';
+     9→
+    10→async function test() {
+    11→  console.log('╔══════════════════════════════════════════════════════════════╗');
+    12→  console.log('║  TOKEN ANALYSIS AUTOPILOT - DEBUG TEST                       ║');
+    13→  console.log('╚══════════════════════════════════════════════════════════════╝\n');
+    14→
+    15→  const mint = process.argv[2] || 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'; // BONK
+    16→
+    17→  console.log(`Testing with token: ${mint}\n`);
+    18→
+    19→  // Fetch data directly to see what we're working with
+    20→  console.log('1. Fetching market data...');
+    21→  try {
+    22→    const marketData = await localApi.getMarketData(mint);
+    23→    console.log(`   Symbol: ${marketData.symbol}`);
+    24→    console.log(`   Price (SOL): ${marketData.price_sol}`);
+    25→    console.log(`   Price (USD): $${marketData.price_usd?.toFixed(6) ?? 'N/A'}`);
+    26→    console.log(`   Market Cap: $${(marketData.market_cap_usd ?? 0).toLocaleString()}`);
+    27→    console.log(`   Holders: ${marketData.holders?.toLocaleString() ?? 'N/A'}`);
+    28→
+    29→    // Price change data
+    30→    console.log('\n   Price Change Data:');
+    31→    console.log(`   - earliest_price_sol_5m: ${(marketData as any).earliest_price_sol_5m ?? 'N/A'}`);
+    32→    console.log(`   - earliest_price_sol_1h: ${(marketData as any).earliest_price_sol_1h ?? 'N/A'}`);
+    33→    console.log(`   - earliest_price_sol_6h: ${(marketData as any).earliest_price_sol_6h ?? 'N/A'}`);
+    34→    console.log(`   - earliest_price_sol_24h: ${(marketData as any).earliest_price_sol_24h ?? 'N/A'}`);
+    35→
+    36→    // Calculate actual price changes
+    37→    if ((marketData as any).earliest_price_sol_5m) {
+    38→      const pct5m = ((marketData.price_sol - (marketData as any).earliest_price_sol_5m) / (marketData as any).earliest_price_sol_5m) * 100;
+    39→      console.log(`   - 5m change: ${pct5m.toFixed(2)}%`);
+    40→    }
+    41→    if ((marketData as any).earliest_price_sol_1h) {
+    42→      const pct1h = ((marketData.price_sol - (marketData as any).earliest_price_sol_1h) / (marketData as any).earliest_price_sol_1h) * 100;
+    43→      console.log(`   - 1h change: ${pct1h.toFixed(2)}%`);
+    44→    }
+    45→
+    46→    // Volume data
+    47→    console.log('\n   Volume Data (SOL):');
+    48→    console.log(`   - volume_5m: ${(marketData as any).volume_sol_5m ?? 'N/A'}`);
+    49→    console.log(`   - volume_1h: ${(marketData as any).volume_sol_1h ?? 'N/A'}`);
+    50→    console.log(`   - volume_6h: ${(marketData as any).volume_sol_6h ?? 'N/A'}`);
+    51→    console.log(`   - volume_24h: ${(marketData as any).volume_sol_24h ?? 'N/A'}`);
+    52→
+    53→    // Buy/sell data
+    54→    console.log('\n   Buy/Sell Activity:');
+    55→    console.log(`   - buys_5m: ${(marketData as any).buys_5m ?? 'N/A'} | sells_5m: ${(marketData as any).sells_5m ?? 'N/A'}`);
+    56→    console.log(`   - buys_1h: ${(marketData as any).buys_1h ?? 'N/A'} | sells_1h: ${(marketData as any).sells_1h ?? 'N/A'}`);
+    57→  } catch (error) {
+    58→    console.error('   ✗ Failed to fetch market data:', error);
+    59→  }
+    60→
+    61→  // Now run analysis with lower thresholds
+    62→  console.log('\n\n2. Running analysis with LOWER thresholds...');
+    63→
+    64→  const engine = new RuleEngine({ api: localApi });
+    65→
+    66→  // Very sensitive rules for testing
+    67→  engine.addRule(createPriceChangeRule('price-any-5m', 'Any Price Move (5m)', {
+    68→    timeframe: '5m',
+    69→    threshold: 0.1, // 0.1% - very sensitive!
+    70→    direction: 'both',
+    71→    type: 'both',
+    72→  }));
+    73→
+    74→  engine.addRule(createPriceChangeRule('price-any-1h', 'Any Price Move (1h)', {
+    75→    timeframe: '1h',
+    76→    threshold: 0.5, // 0.5%
+    77→    direction: 'both',
+    78→    type: 'both',
+    79→  }));
+    80→
+    81→  engine.addRule(createVolumeSpikeRule('volume-any-5m', 'Any Volume (5m)', {
+    82→    timeframe: '5m',
+    83→    multiplier: 0.5, // Below average is fine for testing
+    84→    type: 'both',
+    85→  }));
+    86→
+    87→  const signals = await engine.analyzeToken(mint);
+    88→
+    89→  if (signals.length === 0) {
+    90→    console.log('   Still no signals (data might be missing price history fields)');
+    91→  } else {
+    92→    console.log(`   ${signals.length} signal(s):\n`);
+    93→    for (const signal of signals) {
+    94→      const emoji = signal.type === 'buy' ? '🟢' : signal.type === 'sell' ? '🔴' : '⚪';
+    95→      console.log(`   ${emoji} ${signal.ruleName}`);
+    96→      console.log(`      ${signal.reason}`);
+    97→      console.log(`      Data: ${JSON.stringify(signal.data, null, 2).split('\n').join('\n      ')}`);
+    98→      console.log('');
+    99→    }
+   100→  }
+   101→
+   102→  console.log('\n═══════════════════════════════════════════════════════════════');
+   103→  console.log('Test complete!');
+   104→  console.log('═══════════════════════════════════════════════════════════════\n');
+   105→}
+   106→
+   107→test().catch(console.error);
+   108→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

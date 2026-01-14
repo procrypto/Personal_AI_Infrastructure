@@ -1,0 +1,132 @@
+---
+phase: 08-typescript-fixes
+plan: 01
+subsystem: typescript
+tags: [typescript, type-safety, clickhouse]
+
+# Dependency graph
+requires:
+  - phase: 07-route-cleanup
+    provides: Clean routes, v1.0 complete
+provides:
+  - Clean TypeScript compilation (0 errors)
+  - Type-safe clickhouseQuery calls
+  - Proper union type narrowing
+affects: [ci-hardening, workflow-secrets]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [type-narrowing, type-exports]
+
+key-files:
+  created: []
+  modified:
+    - src/endpoints/generic/multi_wallet_families.ts
+    - src/endpoints/generic/search_token.ts
+    - src/extensions/catalog/search_token_details.ts
+
+key-decisions:
+  - "Exported TokenSearchResult type for reuse in extensions"
+  - "Used union type narrowing instead of type assertion"
+
+patterns-established:
+  - "Export types needed by extensions from base endpoints"
+  - "Narrow union types before accessing discriminated properties"
+
+issues-created: []
+
+# Metrics
+duration: 1 min
+completed: 2026-01-13
+
+# Debugging (if any occurred)
+debugging:
+  sessions: 0
+  time-spent: 0min
+  patterns: []
+---
+
+# Phase 8 Plan 1: TypeScript Fixes Summary
+
+**Fixed 6 pre-existing TypeScript errors in multi_wallet_families.ts and search_token_details.ts enabling clean `bun tsc --noEmit`**
+
+## Performance
+
+- **Duration:** 1 min
+- **Started:** 2026-01-13T22:38:18Z
+- **Completed:** 2026-01-13T22:39:37Z
+- **Tasks:** 2
+- **Files modified:** 3
+
+## Accomplishments
+
+- Removed unsupported timeout argument from clickhouseQuery call
+- Exported TokenSearchResult type for use in extensions
+- Added proper union type narrowing to search_token_details extension
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Fix clickhouseQuery timeout argument** - `1c4c8c6` (fix)
+2. **Task 2: Fix type narrowing in search_token_details.ts** - `85ff6d4` (fix)
+
+**Plan metadata:** (pending) (docs: complete plan)
+
+## Files Created/Modified
+
+- `src/endpoints/generic/multi_wallet_families.ts` - Removed unused QUERY_TIMEOUT_MS constant and unsupported second arg
+- `src/endpoints/generic/search_token.ts` - Exported TokenSearchResult type
+- `src/extensions/catalog/search_token_details.ts` - Added type parameter and union narrowing
+
+## Decisions Made
+
+- Exported TokenSearchResult rather than duplicating the type - keeps single source of truth
+- Used union narrowing (`if (!baseResponse.ok)`) rather than type assertion - safer approach
+
+## Deviations from Plan
+
+### Auto-fixed Issues
+
+**1. [Rule 2 - Missing Critical] Added type parameter to clickhouseQuery call**
+- **Found during:** Task 2 (search_token_details.ts)
+- **Issue:** Plan mentioned adding type parameter but didn't specify TokenSearchResult wasn't exported
+- **Fix:** Exported TokenSearchResult from search_token.ts, imported in search_token_details.ts
+- **Files modified:** src/endpoints/generic/search_token.ts, src/extensions/catalog/search_token_details.ts
+- **Verification:** bun tsc --noEmit passes
+- **Committed in:** 85ff6d4
+
+---
+
+**Total deviations:** 1 auto-fixed (missing export needed for type parameter)
+**Impact on plan:** Essential for Task 2 completion. No scope creep.
+
+## Issues Encountered
+
+None
+
+## Debugging Sessions
+
+None - all verifications passed on first attempt
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions
+
+**Notes:** Clean execution, TypeScript now passes with 0 errors.
+
+## Next Phase Readiness
+
+- TypeScript clean, ready for CI hardening
+- Phase 9 can add type checking to CI workflows
+
+---
+*Phase: 08-typescript-fixes*
+*Completed: 2026-01-13*

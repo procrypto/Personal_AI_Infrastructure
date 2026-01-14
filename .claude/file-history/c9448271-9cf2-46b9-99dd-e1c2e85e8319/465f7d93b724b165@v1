@@ -1,0 +1,103 @@
+/**
+ * useAutopilotTokensWithPrices
+ *
+ * Combines autopilot token lists with NATS market data to provide
+ * live price and change data. Follows the same pattern as useAutopilotPositions.
+ */
+
+import { useMemo } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type {
+  AutopilotWatchedToken,
+  AutopilotTokenList,
+} from "@/store/memoryStore/slices/autopilot-store/types";
+
+/**
+ * Token with enriched price data from NATS.
+ */
+export interface AutopilotTokenWithPrices extends AutopilotWatchedToken {
+  priceUsd: number | null;
+  change1h: number | null;
+}
+
+/**
+ * Token lists with enriched price data.
+ */
+export interface AutopilotTokenListWithPrices {
+  watchlist: AutopilotTokenWithPrices[];
+  trending: AutopilotTokenWithPrices[];
+  whales: AutopilotTokenWithPrices[];
+}
+
+/**
+ * Hook to get autopilot token lists with live price data from NATS market data.
+ */
+export const useAutopilotTokensWithPrices = (): AutopilotTokenListWithPrices => {
+  // Get token lists from autopilot store
+  const tokenList = useGlobalStore(
+    useShallow(state => state.autopilot.tokenList)
+  );
+
+  // Get market data map and SOL price for USD conversion
+  const marketDataMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.market_data.data)
+  );
+
+  const solPriceUsd = useGlobalStore(state => state.solanaPrice.usd);
+
+  // Enrich a single token with price data
+  const enrichToken = useMemo(() => {
+    return (token: AutopilotWatchedToken): AutopilotTokenWithPrices => {
+      const mintData = marketDataMap[token.mint];
+
+      if (!mintData || mintData.size === 0) {
+        return {
+          ...token,
+          priceUsd: null,
+          change1h: null,
+        };
+      }
+
+      // Get the latest market data
+      const latestMarketData = Array.from(mintData.values())[0];
+
+      if (!latestMarketData?.price_sol) {
+        return {
+          ...token,
+          priceUsd: null,
+          change1h: null,
+        };
+      }
+
+      // Parse price_sol and convert to USD
+      const priceSol = parseFloat(latestMarketData.price_sol);
+      const priceUsd =
+        !isNaN(priceSol) && solPriceUsd ? priceSol * solPriceUsd : null;
+
+      // Calculate 1h change from trading_stats_1h if available
+      let change1h: number | null = null;
+      const stats1h = latestMarketData.trading_stats_1h;
+      if (stats1h?.earliest_price_sol && !isNaN(priceSol)) {
+        const earliestPrice = parseFloat(stats1h.earliest_price_sol);
+        if (!isNaN(earliestPrice) && earliestPrice !== 0) {
+          change1h = ((priceSol - earliestPrice) / earliestPrice) * 100;
+        }
+      }
+
+      return {
+        ...token,
+        priceUsd,
+        change1h,
+      };
+    };
+  }, [marketDataMap, solPriceUsd]);
+
+  // Enrich all token lists
+  return useMemo(() => {
+    return {
+      watchlist: tokenList.watchlist.map(enrichToken),
+      trending: tokenList.trending.map(enrichToken),
+      whales: tokenList.whales.map(enrichToken),
+    };
+  }, [tokenList, enrichToken]);
+};

@@ -1,0 +1,134 @@
+---
+phase: 27-feed-forwarding
+plan: 01
+type: execute
+---
+
+<objective>
+Add missing feed adapters and wire trending/OHLCV feeds to autopilot backend.
+
+Purpose: Close the data feed gaps identified in backend v2.0 integration analysis.
+Output: Trending and OHLCV data flowing from frontend to backend via existing WebSocket.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./27-01-SUMMARY.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/STATE.md
+
+**Cross-repo context (from token-analysis-autopilot):**
+Backend expects these feed formats (from src/websocket-server.ts):
+
+```typescript
+// trending_feed
+{ type: 'trending_feed'; tokens: TrendingFeedItem[]; resolution: '5m' | '1h' | '6h' | '24h' }
+interface TrendingFeedItem {
+  mint: string;
+  symbol: string;
+  name: string;
+  rank: number;
+  volume_usd: number;
+}
+
+// ohlcv_update (already defined in AutopilotWebsocket.ts)
+{ type: 'ohlcv_update'; mint: string; ohlcv: OhlcvCandle[] }
+```
+
+**Gap analysis (from backend PROJECT.md):**
+- ohlcv_update: Adapter exists (toOhlcvFeed), NOT sent
+- trending_feed: NO adapter, need to create
+
+**Source files:**
+@apps/web-terminal/src/websocket/autopilot/feedAdapters.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts
+@apps/web-terminal/src/store/memoryStore/slices/websocket-messages-store/types.ts
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add trending_feed adapter to feedAdapters.ts</name>
+  <files>apps/web-terminal/src/websocket/autopilot/feedAdapters.ts</files>
+  <action>
+Add toTrendingFeed adapter function that converts DiscoveryTrendingListTokenData[] to backend format:
+
+```typescript
+import type { DiscoveryTrendingListTokenData } from "@/store/memoryStore/slices/websocket-messages-store/types";
+
+export function toTrendingFeed(
+  tokens: DiscoveryTrendingListTokenData[],
+  resolution: '5m' | '1h' | '6h' | '24h' = '1h'
+): TrendingFeed {
+  return {
+    type: 'trending_feed',
+    resolution,
+    tokens: tokens.map((token, index) => ({
+      mint: token.mint,
+      symbol: token.market_data.symbol,
+      name: token.market_data.name,
+      rank: index + 1,
+      volume_usd: parseFloat(token.market_data.volume_24h_usd || '0'),
+    })),
+  };
+}
+```
+
+Also add TrendingFeed type to AutopilotWebsocket.ts types if not present.
+  </action>
+  <verify>TypeScript compiles without errors: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+  <done>toTrendingFeed function exists, converts DiscoveryTrendingListTokenData[] to { type: 'trending_feed', tokens: TrendingFeedItem[], resolution }</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Wire trending and OHLCV feeds in useAutopilotDataForwarder</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts</files>
+  <action>
+Add subscriptions to forward trending and OHLCV data:
+
+1. **Trending feed subscription:**
+   - Subscribe to `state.websocketMessages.discovery_trending_list.itemsMap`
+   - On change, convert to array, call toTrendingFeed(), send via autopilotWebsocket.sendFeed()
+   - Throttle to once per 5 seconds (trending doesn't need sub-second updates)
+
+2. **OHLCV feed subscription:**
+   - Subscribe to `state.websocketMessages.ohlcv.data` (keyed by mint)
+   - On new candle data, call existing toOhlcvFeed(), send via autopilotWebsocket.sendFeed()
+   - Only send if autopilot has position in that mint (check via positions from useAutopilotPositions or similar)
+
+Import toTrendingFeed and toOhlcvFeed from feedAdapters.ts.
+  </action>
+  <verify>
+1. `cd apps/web-terminal && npx tsc --noEmit` passes
+2. Manual test: Open app, check Network tab for WebSocket messages containing "trending_feed"
+  </verify>
+  <done>
+- Trending feed: Sent when discovery_trending_list updates (throttled 5s)
+- OHLCV feed: Sent when ohlcv store updates for relevant mints
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `cd apps/web-terminal && npx tsc --noEmit` passes
+- [ ] toTrendingFeed adapter exists in feedAdapters.ts
+- [ ] useAutopilotDataForwarder subscribes to discovery_trending_list
+- [ ] No console errors when running dev server
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- TypeScript compiles without errors
+- trending_feed messages visible in WebSocket traffic when connected to backend
+- OHLCV feed forwarding wired (may not fire without active positions)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/27-feed-forwarding/27-01-SUMMARY.md`
+</output>

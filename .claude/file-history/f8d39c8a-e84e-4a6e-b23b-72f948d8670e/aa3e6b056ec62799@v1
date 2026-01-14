@@ -1,0 +1,78 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { useCallback } from "react";
+import { EyeOff } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Tooltip } from "@/components/tooltip";
+import { Button } from "@/components/button";
+import { usePersistentGlobalStore } from "@/store/persistentStore/usePersistentGlobalStore";
+import { useShallow } from "zustand/react/shallow";
+import { toast } from "sonner";
+
+type HideTokenButtonProps = {
+  mint: string;
+  symbol: string;
+  disableTooltip?: boolean;
+};
+
+export const HideTokenButton = ({
+  mint,
+  symbol,
+  disableTooltip,
+}: HideTokenButtonProps) => {
+  const { isBlacklisted, addToBlacklist, removeFromBlacklist } =
+    usePersistentGlobalStore(
+      useShallow((state) => ({
+        isBlacklisted: state.blacklist.isBlacklisted(mint),
+        addToBlacklist: state.blacklist.addToBlacklist,
+        removeFromBlacklist: state.blacklist.removeFromBlacklist,
+      }))
+    );
+
+  const handleToggle = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (isBlacklisted) {
+        removeFromBlacklist(mint);
+        toast.success(`${symbol} unhidden`);
+      } else {
+        addToBlacklist(mint);
+        toast.success(`${symbol} hidden for 7 days`);
+      }
+    },
+    [isBlacklisted, mint, symbol, addToBlacklist, removeFromBlacklist]
+  );
+
+  const buttonContent = (
+    <Button
+      variant="text"
+      onClick={handleToggle}
+      className={cn(
+        "[&_svg]:stroke-fg-secondary hover:[&_svg]:stroke-fg-primary flex size-4 items-center justify-center overflow-hidden",
+        isBlacklisted &&
+          "[&_svg]:stroke-text-error hover:[&_svg]:stroke-text-error"
+      )}
+    >
+      <EyeOff className="size-3.5 transition-colors" />
+    </Button>
+  );
+
+  if (disableTooltip) {
+    return buttonContent;
+  }
+
+  return (
+    <Tooltip
+      content={isBlacklisted ? `Unhide ${symbol}` : `Hide ${symbol}`}
+      side="right"
+      align="center"
+      className="px-2 py-1"
+      sideOffset={2}
+    >
+      {buttonContent}
+    </Tooltip>
+  );
+};
+
+export default HideTokenButton;

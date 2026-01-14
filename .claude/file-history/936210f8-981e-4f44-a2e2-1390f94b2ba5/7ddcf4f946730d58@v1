@@ -1,0 +1,166 @@
+---
+phase: 03-ci-cd-pipeline
+plan: 02
+type: execute
+---
+
+<objective>
+Create GitHub Actions workflow for production deployments on v* tag push.
+
+Purpose: Automate production deployments to data-backend-prod GCP project when version tags are pushed.
+Output: Working deploy-prod.yml that builds container and deploys to production Cloud Run.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior plan in this phase:
+@.planning/phases/03-ci-cd-pipeline/03-01-SUMMARY.md
+
+# Key source files:
+@Dockerfile
+@.github/workflows/deploy.yml
+
+**Established patterns:**
+- Beta workflow structure from 03-01
+- APP_ENV env var for environment detection
+- CLICKHOUSE_* vars for prod (injected via Secret Manager)
+- PORT=8080 default for Cloud Run
+- WIF authentication pattern
+
+**Deployment architecture (from PROJECT.md):**
+- Production trigger: Push `v*` tag (e.g., v1.0.0)
+- GCP Project: data-backend-prod
+- Container: GCP Artifact Registry
+- Runtime: GCP Cloud Run
+- Auth: Workload Identity Federation
+
+**Files to create:**
+- `.github/workflows/deploy-prod.yml`
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create production deployment workflow</name>
+  <files>.github/workflows/deploy-prod.yml</files>
+  <action>Create GitHub Actions workflow for production deployment, following beta pattern:
+
+**Workflow structure:**
+```yaml
+name: Deploy to Production
+on:
+  push:
+    tags: ['v*']
+
+env:
+  PROJECT_ID: data-backend-prod
+  REGION: us-central1
+  SERVICE: trenchbench-api
+  REPOSITORY: trenchbench-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for WIF
+
+    steps:
+      - Checkout code
+      - Authenticate to GCP (Workload Identity Federation)
+      - Configure Docker for Artifact Registry
+      - Build and push container image
+      - Deploy to Cloud Run with environment variables
+```
+
+**Key differences from beta:**
+- Trigger: `tags: ['v*']` instead of `branches: [main]`
+- PROJECT_ID: data-backend-prod
+- APP_ENV: prod (not beta)
+- Different WIF provider and service account for prod project
+- Tag images with both SHA and version tag for production traceability
+
+**Include:**
+- Extract version from tag for image tagging
+- Use `github.ref_name` to get the tag (e.g., v1.0.0)
+- Add TODO comments for prod-specific WIF configuration</action>
+  <verify>cat .github/workflows/deploy-prod.yml shows valid YAML with tag trigger and prod configuration</verify>
+  <done>deploy-prod.yml created with production deployment workflow</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Verify both workflows are consistent</name>
+  <files>N/A</files>
+  <action>Compare beta and prod workflows for consistency:
+
+1. Both use same authentication pattern (WIF)
+2. Both use same Cloud Run deployment action
+3. Both have matching structure (checkout → auth → build → deploy)
+4. Environment-specific values differ appropriately (PROJECT_ID, APP_ENV, tags)
+5. Both have clear TODO comments for user configuration
+
+List any inconsistencies and correct them.</action>
+  <verify>Both workflows follow same pattern with appropriate environment differences</verify>
+  <done>Both workflows validated for consistency, Phase 3 complete</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] .github/workflows/deploy-prod.yml exists
+- [ ] Workflow triggers on v* tag push
+- [ ] Uses Workload Identity Federation (matching beta pattern)
+- [ ] Deploys to data-backend-prod project
+- [ ] Sets APP_ENV=prod
+- [ ] Tags images with version tag
+- [ ] Consistent structure with beta workflow
+</verification>
+
+<success_criteria>
+- deploy-prod.yml created with complete workflow structure
+- Triggers on v* tags (semantic versioning)
+- Production GCP project configured
+- Consistent with beta workflow pattern
+- Phase 3 complete, ready for Phase 4 (GCP Integration)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-ci-cd-pipeline/03-02-SUMMARY.md`:
+
+# Phase 3 Plan 2: Production Deployment Workflow Summary
+
+**[One-liner describing the workflow created]**
+
+## Accomplishments
+- Created GitHub Actions workflow for production deployments
+- Configured v* tag trigger for semantic versioning
+- Matched beta workflow pattern for consistency
+
+## Files Created/Modified
+- `.github/workflows/deploy-prod.yml` - Production deployment workflow
+
+## Decisions Made
+[Key configuration choices]
+
+## Configuration Required
+[List of TODOs user needs to fill in for both workflows]
+
+## Issues Encountered
+[Any issues]
+
+## Phase 3 Complete
+Both CI/CD workflows created:
+- deploy.yml (main → beta)
+- deploy-prod.yml (v* → production)
+
+Ready for Phase 4: GCP Integration (Secret Manager, WIF configuration, deployment verification)
+</output>

@@ -1,0 +1,99 @@
+/**
+ * feedAdapters.ts - Pure functions to convert NATS data to backend feed format
+ *
+ * These adapters map data from the NATS WebSocket store to the format
+ * expected by the CLI backend.
+ */
+
+import type {
+  MarketDataMessage,
+  OHLCVMessage,
+  TradeMessage,
+  DiscoveryTrendingListTokenData,
+} from "@/store/memoryStore/slices/websocket-messages-store/types";
+import type {
+  MarketDataFeed,
+  OhlcvFeed,
+  TradeFeed,
+  CvdFeed,
+  TrendingFeed,
+  WhaleFeed,
+} from "./AutopilotWebsocket";
+import type { WhaleMoves } from "@/api/discovery/useWhaleMoves";
+
+/**
+ * Convert MarketDataMessage from NATS → MarketDataFeed for backend
+ */
+export function toMarketDataFeed(msg: MarketDataMessage): MarketDataFeed {
+  return {
+    type: "market_data_feed",
+    data: msg, // TokenMarketData is the full message
+  };
+}
+
+/**
+ * Convert OHLCVMessage from NATS → OhlcvFeed for backend
+ * Note: Backend expects array, so wrap single candle
+ */
+export function toOhlcvFeed(mint: string, msg: OHLCVMessage): OhlcvFeed {
+  return {
+    type: "ohlcv_update",
+    mint,
+    ohlcv: [
+      {
+        open: Number(msg.o_sol),
+        high: Number(msg.h_sol),
+        low: Number(msg.l_sol),
+        close: Number(msg.c_sol),
+        volume: Number(msg.v_sol),
+        timestamp: msg.timestamp_secs,
+      },
+    ],
+  };
+}
+
+/**
+ * Convert TradeMessage from NATS → TradeFeed for backend
+ */
+export function toTradeFeed(msg: TradeMessage): TradeFeed {
+  return {
+    type: "trade_feed",
+    trade: {
+      mint: msg.mint,
+      side: msg.type === "buy" ? "buy" : "sell",
+      price: Number(msg.sol_amount || 0) / Number(msg.token_amount || 1),
+      amount: Number(msg.token_amount),
+      timestamp: Number(msg.timestamp),
+    },
+  };
+}
+
+/**
+ * Calculate CVD from trading stats (1h period)
+ * Uses trading_stats_1h from MarketDataMessage
+ */
+export function toCvdFeed(
+  mint: string,
+  msg: MarketDataMessage
+): CvdFeed | null {
+  const stats = msg.trading_stats_1h;
+  if (!stats) return null;
+
+  const buyVolume = Number(stats.buy_volume_sol || 0);
+  const sellVolume = Number(stats.sell_volume_sol || 0);
+  const netDelta = buyVolume - sellVolume;
+
+  return {
+    type: "cvd_update",
+    data: {
+      mint,
+      timestamp: Date.now(),
+      cvd: netDelta, // Simplified: use net delta as CVD
+      cvdChange: netDelta, // Change equals current for single period
+      buyVolume,
+      sellVolume,
+      netDelta,
+      periodMs: 3600000, // 1 hour
+    },
+  };
+}

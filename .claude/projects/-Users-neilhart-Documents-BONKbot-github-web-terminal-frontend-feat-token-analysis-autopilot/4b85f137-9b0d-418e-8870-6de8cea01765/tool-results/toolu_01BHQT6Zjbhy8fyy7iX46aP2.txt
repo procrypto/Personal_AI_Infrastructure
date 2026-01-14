@@ -1,0 +1,78 @@
+     1→/**
+     2→ * useAutopilotDataForwarder
+     3→ *
+     4→ * Subscribes to NATS market data in store and forwards to CLI backend.
+     5→ * Only forwards data for mints that are in positions or screener token list.
+     6→ */
+     7→
+     8→import { useEffect, useRef } from "react";
+     9→import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+    10→import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+    11→import {
+    12→  toMarketDataFeed,
+    13→  toCvdFeed,
+    14→} from "@/websocket/autopilot/feedAdapters";
+    15→import type { MarketDataMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+    16→
+    17→export function useAutopilotDataForwarder() {
+    18→  // Track which mints we care about (positions + screener tokens)
+    19→  const positionMints = useGlobalStore(
+    20→    useShallow(state => Array.from(state.autopilot.positions.keys()))
+    21→  );
+    22→
+    23→  // Get token list mints from autopilot store
+    24→  const tokenListMints = useGlobalStore(
+    25→    useShallow(state => {
+    26→      const tokenList = state.autopilot.tokenList;
+    27→      const mints = new Set<string>();
+    28→      tokenList.watchlist.forEach(t => mints.add(t.mint));
+    29→      tokenList.trending.forEach(t => mints.add(t.mint));
+    30→      tokenList.whales.forEach(t => mints.add(t.mint));
+    31→      return Array.from(mints);
+    32→    })
+    33→  );
+    34→
+    35→  // Combine all relevant mints
+    36→  const relevantMints = useRef(new Set<string>());
+    37→  useEffect(() => {
+    38→    relevantMints.current = new Set([...positionMints, ...tokenListMints]);
+    39→  }, [positionMints, tokenListMints]);
+    40→
+    41→  // Subscribe to market_data store changes and forward
+    42→  useEffect(() => {
+    43→    const unsubscribe = useGlobalStore.subscribe(
+    44→      state => state.websocketMessages.market_data.data,
+    45→      marketDataMap => {
+    46→        // Forward data for relevant mints only
+    47→        for (const [mint, dataMap] of Object.entries(marketDataMap)) {
+    48→          if (!relevantMints.current.has(mint)) continue;
+    49→          if (!dataMap) continue;
+    50→
+    51→          // Get most recent market data
+    52→          const entries = Array.from(dataMap.values());
+    53→          const latest = entries[entries.length - 1] as
+    54→            | MarketDataMessage
+    55→            | undefined;
+    56→          if (!latest) continue;
+    57→
+    58→          // Forward market data
+    59→          autopilotWebsocket.sendFeed(toMarketDataFeed(latest));
+    60→
+    61→          // Forward CVD if we have trading stats
+    62→          const cvdFeed = toCvdFeed(mint, latest);
+    63→          if (cvdFeed) {
+    64→            autopilotWebsocket.sendFeed(cvdFeed);
+    65→          }
+    66→        }
+    67→      },
+    68→      { equalityFn: (a, b) => a === b } // Reference equality for performance
+    69→    );
+    70→
+    71→    return unsubscribe;
+    72→  }, []);
+    73→}
+    74→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

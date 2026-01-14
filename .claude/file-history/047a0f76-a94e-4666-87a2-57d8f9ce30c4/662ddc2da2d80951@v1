@@ -1,0 +1,293 @@
+/**
+ * Trades Endpoint
+ *
+ * Fetches trade history for a specific token mint.
+ *
+ * ⚠️  This fetches PRODUCTION data. Strict limits are enforced.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, buildInList, escapeString, isSolanaPubkey, clamp } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants — Strict Limits
+// =============================================================================
+
+const MAX_LIMIT = 200;
+const DEFAULT_LIMIT = 30;
+const MAX_OFFSET = 10000;
+const MAX_TRADERS = 50;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type SortBy =
+    | "timestamp_asc"
+    | "timestamp_desc"
+    | "amount_usd_asc"
+    | "amount_usd_desc"
+    | "token_asc"
+    | "token_desc"
+    | "market_cap_usd_asc"
+    | "market_cap_usd_desc";
+
+type TradesRequest = {
+    traders?: string;
+    amount_usd_min?: string;
+    amount_usd_max?: string;
+    amount_sol_min?: string;
+    amount_sol_max?: string;
+    start_date?: string;
+    end_date?: string;
+    sort_by?: SortBy;
+    limit?: string;
+    offset?: string;
+};
+
+type TradeRow = {
+    pool: string;
+    mint: string;
+    direction: string;
+    maker: string;
+    sol_amount: string;
+    token_amount: string;
+    sol_amount_usd: string;
+    is_dev: boolean;
+    is_insider: boolean;
+    is_sniper: boolean;
+    is_traders_first_buy: boolean;
+    is_bundler: boolean;
+    is_hard_bundler: boolean;
+    platform: string;
+    signature: string;
+    timestamp: string;
+    slot: string;
+    slot_timestamp: string;
+    market_cap_sol: string;
+    market_cap_usd: string;
+    token_symbol: string;
+    exchange: string;
+    launchpad: string | null;
+    partner: string | null;
+    token_name: string;
+    token_image: string;
+    fee_percentage: string | null;
+    token_created: string | null;
+    token_graduated: string | null;
+};
+
+type TradesResponse =
+    | { ok: true; trades: TradeRow[]; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+const getSortClause = (sortBy: SortBy): string => {
+    switch (sortBy) {
+        case "timestamp_asc":
+            return "ORDER BY timestamp";
+        case "timestamp_desc":
+            return "ORDER BY timestamp DESC";
+        case "amount_usd_asc":
+            return "ORDER BY sol_amount_usd, timestamp DESC";
+        case "amount_usd_desc":
+            return "ORDER BY sol_amount_usd DESC, timestamp DESC";
+        case "token_asc":
+            return "ORDER BY token_amount, timestamp DESC";
+        case "token_desc":
+            return "ORDER BY token_amount DESC, timestamp DESC";
+        case "market_cap_usd_asc":
+            return "ORDER BY market_cap_usd, timestamp DESC";
+        case "market_cap_usd_desc":
+            return "ORDER BY market_cap_usd DESC, timestamp DESC";
+        default:
+            return "ORDER BY timestamp DESC";
+    }
+};
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerTradesRoutes = (app: Elysia) => {
+    app.get("/trades/:mint", async ({ params, query }) => {
+        const mint = params.mint;
+        const req = query as TradesRequest;
+
+        const validation = validateTradesRequest(mint, req);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildTradesSql(validation.filters, validation.sortClause, validation.pagination);
+
+        console.log(
+            `[trades] Querying trades for mint=${mint}, limit=${validation.pagination.limit}, offset=${validation.pagination.offset}`
+        );
+
+        const result = await clickhouseQuery<TradeRow>(sql);
+
+        return formatTradesResponse(result);
+    });
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+export const validateTradesRequest = (
+    mint: string,
+    req: TradesRequest
+):
+    | {
+          ok: true;
+          filters: string[];
+          sortClause: string;
+          pagination: { limit: number; offset: number };
+      }
+    | { ok: false; error: string } => {
+    if (!isSolanaPubkey(mint)) {
+        return {
+            ok: false,
+            error: "Invalid mint address",
+        };
+    }
+
+    const filters: string[] = [`mint = '${escapeString(mint)}'`];
+
+    if (req.traders) {
+        const traderList = req.traders.split(",").filter(isSolanaPubkey).slice(0, MAX_TRADERS);
+        if (traderList.length > 0) {
+            filters.push(`maker IN (${buildInList(traderList)})`);
+        }
+    }
+
+    if (req.amount_usd_min) {
+        const val = parseFloat(req.amount_usd_min);
+        if (!isNaN(val)) {
+            filters.push(`sol_amount_usd >= ${val}`);
+        }
+    }
+    if (req.amount_usd_max) {
+        const val = parseFloat(req.amount_usd_max);
+        if (!isNaN(val)) {
+            filters.push(`sol_amount_usd <= ${val}`);
+        }
+    }
+    if (req.amount_sol_min) {
+        const val = parseFloat(req.amount_sol_min);
+        if (!isNaN(val)) {
+            filters.push(`sol_amount >= ${val}`);
+        }
+    }
+    if (req.amount_sol_max) {
+        const val = parseFloat(req.amount_sol_max);
+        if (!isNaN(val)) {
+            filters.push(`sol_amount <= ${val}`);
+        }
+    }
+
+    if (req.start_date) {
+        const val = parseInt(req.start_date, 10);
+        if (!isNaN(val)) {
+            filters.push(`timestamp >= ${val}`);
+        }
+    }
+    if (req.end_date) {
+        const val = parseInt(req.end_date, 10);
+        if (!isNaN(val)) {
+            filters.push(`timestamp <= ${val}`);
+        }
+    }
+
+    const limit = clamp(
+        req.limit ? parseInt(req.limit, 10) : DEFAULT_LIMIT,
+        1,
+        MAX_LIMIT
+    );
+    const offset = clamp(
+        req.offset ? parseInt(req.offset, 10) : 0,
+        0,
+        MAX_OFFSET
+    );
+
+    const sortBy = req.sort_by ?? "timestamp_desc";
+    const sortClause = getSortClause(sortBy);
+
+    return {
+        ok: true,
+        filters,
+        sortClause,
+        pagination: { limit, offset },
+    };
+};
+
+export const buildTradesSql = (
+    filters: string[],
+    sortClause: string,
+    pagination: { limit: number; offset: number }
+): string => {
+    const whereClause = filters.join(" AND ");
+
+    return `
+        SELECT
+            pool,
+            mint,
+            direction,
+            maker,
+            sol_amount,
+            token_amount,
+            sol_amount_usd,
+            is_dev,
+            is_insider,
+            is_sniper,
+            is_traders_first_buy,
+            is_bundler,
+            is_hard_bundler,
+            platform,
+            signature,
+            timestamp,
+            slot,
+            slot_timestamp,
+            market_cap_sol,
+            market_cap_usd,
+            token_symbol,
+            exchange,
+            launchpad,
+            partner,
+            token_name,
+            token_image,
+            fee_percentage,
+            token_created,
+            token_graduated
+        FROM materializer_trades
+        WHERE ${whereClause}
+        ${sortClause}
+        LIMIT ${pagination.limit}
+        OFFSET ${pagination.offset}
+    `;
+};
+
+export const formatTradesResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<TradeRow>>>
+): TradesResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    console.log(`[trades] Returned ${result.data.length} trades`);
+
+    return {
+        ok: true,
+        trades: result.data,
+        count: result.data.length,
+    };
+};
+
+

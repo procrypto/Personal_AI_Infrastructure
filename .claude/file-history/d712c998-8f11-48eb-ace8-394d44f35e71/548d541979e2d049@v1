@@ -1,0 +1,125 @@
+# Backend Task: Add Position Close Commands
+
+**For:** token-analysis-autopilot repo agent
+**Context:** Frontend widget has Close All and per-position close buttons that send WebSocket commands, but backend doesn't handle them yet.
+
+## What Needs to Be Done
+
+Add two new WebSocket commands to close paper trading positions:
+
+1. `close_all_positions` - Closes all open positions
+2. `close_position` - Closes a single position by mint address
+
+## Files to Modify
+
+1. `src/websocket-server.ts` - Add commands to type union
+2. `src/cli.ts` - Add command handlers
+
+## Implementation Details
+
+### 1. websocket-server.ts
+
+Add to the `AutopilotCommand` union (around line 49, after `toggle_strategy`):
+
+```typescript
+| { command: 'close_all_positions' }
+| { command: 'close_position'; mint: string }
+```
+
+### 2. cli.ts
+
+Add command handlers in the `wsServer.onCommand()` switch statement (after the `toggle_strategy` case, around line 532):
+
+```typescript
+case 'close_all_positions': {
+  const openTrades = paperTracker.getOpenTrades();
+  if (openTrades.length === 0) {
+    console.log('[WS] No open positions to close');
+    break;
+  }
+  console.log(`[WS] Closing all ${openTrades.length} positions...`);
+  for (const trade of openTrades) {
+    // Get current price from market data or use entry price as fallback
+    const marketData = wsServer.getMarketData(trade.mint);
+    const exitPriceSol = marketData?.price_sol ?? trade.entryPriceSol;
+    const exitPriceUsd = marketData?.price_usd ?? trade.entryPriceUsd;
+    paperTracker.closeTrade(trade.id, exitPriceSol, exitPriceUsd);
+    // Broadcast exit signal
+    wsServer.broadcastSignal({
+      timestamp: Date.now(),
+      mint: trade.mint,
+      symbol: trade.symbol,
+      signalType: 'magic_exit',
+      action: 'close',
+      reason: 'Manual close all',
+      pnlPercent: trade.pnlPercent,
+    });
+  }
+  await paperTracker.save();
+  // Broadcast updated positions (now empty)
+  wsServer.broadcastPositions([]);
+  wsServer.broadcastStats(paperTracker.getStats());
+  console.log('[WS] All positions closed');
+  break;
+}
+
+case 'close_position': {
+  const trade = paperTracker.getOpenTradeForMint(cmd.mint);
+  if (!trade) {
+    console.log(`[WS] No open position for mint ${cmd.mint}`);
+    break;
+  }
+  const marketData = wsServer.getMarketData(cmd.mint);
+  const exitPriceSol = marketData?.price_sol ?? trade.entryPriceSol;
+  const exitPriceUsd = marketData?.price_usd ?? trade.entryPriceUsd;
+  const closed = paperTracker.closeTrade(trade.id, exitPriceSol, exitPriceUsd);
+  if (closed) {
+    wsServer.broadcastSignal({
+      timestamp: Date.now(),
+      mint: trade.mint,
+      symbol: trade.symbol,
+      signalType: 'magic_exit',
+      action: 'close',
+      reason: 'Manual close',
+      pnlPercent: closed.pnlPercent,
+    });
+    await paperTracker.save();
+    // Broadcast updated positions
+    const positions = paperTracker.getOpenTrades().map(t => ({
+      mint: t.mint,
+      symbol: t.symbol,
+      action: t.action,
+      entryPriceSol: t.entryPriceSol,
+      positionSizeSol: t.positionSizeSol,
+      entryTime: t.timestamp,
+    }));
+    wsServer.broadcastPositions(positions);
+    wsServer.broadcastStats(paperTracker.getStats());
+    console.log(`[WS] Position closed: ${trade.symbol}`);
+  }
+  break;
+}
+```
+
+## Existing Patterns Used
+
+- `paperTracker.getOpenTrades()` - Returns array of open PaperTrade objects
+- `paperTracker.getOpenTradeForMint(mint)` - Returns single trade or null
+- `paperTracker.closeTrade(tradeId, exitPriceSol, exitPriceUsd)` - Closes trade with P&L calculation
+- `wsServer.getMarketData(mint)` - Gets current market data for exit price
+- `wsServer.broadcastPositions([])` - Updates frontend with position list
+- `wsServer.broadcastStats(stats)` - Updates frontend with trading stats
+- `wsServer.broadcastSignal(signal)` - Sends signal event to frontend
+
+## Verification
+
+```bash
+npx tsc --noEmit
+```
+
+## Done When
+
+- [ ] AutopilotCommand union includes both new commands
+- [ ] Command handlers implemented in cli.ts switch statement
+- [ ] TypeScript compiles without errors
+- [ ] Commit with message: `feat(ws): add close_all_positions and close_position commands`

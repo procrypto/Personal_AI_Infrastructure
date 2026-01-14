@@ -1,0 +1,150 @@
+/**
+ * Connect Autopilot WebSocket
+ *
+ * Orchestrates connection to autopilot backend and message handling.
+ * Populates the Zustand store with incoming data.
+ */
+
+import { autopilotWebsocket } from "./autopilotWebsocketInstance";
+import { parseAutopilotEvent } from "./eventParser";
+import type { AutopilotPositionEntry } from "@/store/memoryStore/slices/autopilot-store/types";
+
+// INTEGRATION TEST: Log to file for Claude to read
+const integrationLog = (message: string) => {
+  console.log(message);
+  fetch("/api/integration-log", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  }).catch(() => {}); // Ignore errors
+};
+
+/**
+ * LOIS INTEGRATION POINTS
+ * =======================
+ * This file contains the WebSocket message handlers that would route to LOIS
+ * for live trading. Currently paper-only.
+ *
+ * Integration points marked with: // LOIS INTEGRATION POINT: [description]
+ */
+
+/**
+ * Connect to autopilot WebSocket and set up message handling.
+ * Returns a cleanup function to disconnect and reset state.
+ */
+export async function connectAutopilotWebsocket() {
+  const store = autopilotWebsocket.store.getState();
+
+  try {
+    // Reset store state before connecting
+    store.autopilot.reset();
+
+    // Connect and wait for ready
+    await autopilotWebsocket.connect();
+    await autopilotWebsocket.ready();
+
+    // Mark as connected
+    store.autopilot.setIsConnected(true);
+    integrationLog("[Autopilot] WebSocket connected and ready");
+
+    // Subscribe to data and populate store
+    const cleanup = autopilotWebsocket.subscribeToData((data: unknown) => {
+      // Parse and validate event using extracted parser
+      const event = parseAutopilotEvent(data);
+      if (!event) {
+        // Skip pong messages and unknown event types (already logged in parser)
+        return;
+      }
+
+      try {
+        switch (event.type) {
+          case "position_update": {
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] position_update event: ${event.positions.length} positions`);
+            // LOIS INTEGRATION POINT: Position entries would include txSignature, fillStatus for live trades
+            // Convert to entry-only format (no current price)
+            const entries: AutopilotPositionEntry[] = event.positions.map(
+              p => ({
+                mint: p.mint,
+                symbol: p.symbol,
+                action: p.action,
+                entryPriceSol: p.entryPriceSol,
+                positionSizeSol: p.positionSizeSol,
+                entryTime: p.entryTime,
+              })
+            );
+            store.autopilot.setPositions(entries);
+            break;
+          }
+
+          case "signal":
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] signal event: ${event.signal.signalType} ${event.signal.symbol}`);
+            // LOIS INTEGRATION POINT: Signals would trigger TriggerEvent dispatch to LOIS execution engine
+            store.autopilot.addSignal(event.signal);
+            break;
+
+          case "market_status":
+            // LOIS INTEGRATION POINT: DUMP state would trigger emergency exit via LOIS
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] market_status event: ${JSON.stringify(event.status)}`);
+            store.autopilot.setMarketStatus(event.status);
+            break;
+
+          case "stats_update":
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] stats_update event: ${JSON.stringify(event.stats)}`);
+            store.autopilot.setStats(event.stats);
+            break;
+
+          case "scan_tick":
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] scan_tick event: ${event.tick.tokensAnalyzed} tokens analyzed`);
+            store.autopilot.setScanTick(event.tick);
+            break;
+
+          case "token_list":
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] token_list event: ${event.tokens.watchlist.length} watchlist, ${event.tokens.trending.length} trending, ${event.tokens.whales.length} whales`);
+            store.autopilot.setTokenList(event.tokens);
+            break;
+
+          case "config":
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] config event: ${event.config.mode} mode`);
+            // LOIS INTEGRATION POINT: mode="live" would enable LOIS execution pipeline
+            store.autopilot.setConfig(event.config);
+            break;
+
+          case "strategies":
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] strategies event: ${event.strategies.available.length} available, ${event.strategies.active.length} active`);
+            store.autopilot.setStrategies(event.strategies);
+            break;
+
+          case "last_analysis":
+            // INTEGRATION TEST LOG
+            integrationLog(`[Autopilot] last_analysis event: ${event.analysis.symbol}`);
+            store.autopilot.setLastAnalysis(event.analysis);
+            break;
+
+          default:
+            // Unknown event type - log for debugging
+            integrationLog(`[Autopilot] Unknown event type: ${(event as { type?: string }).type}`);
+        }
+      } catch (error) {
+        console.error("[Autopilot] Error processing message:", error, event);
+      }
+    });
+
+    // Return cleanup function
+    return () => {
+      cleanup?.();
+      store.autopilot.setIsConnected(false);
+      autopilotWebsocket.disconnect();
+    };
+  } catch (error) {
+    console.error("[Autopilot] Error connecting:", error);
+    throw error;
+  }
+}

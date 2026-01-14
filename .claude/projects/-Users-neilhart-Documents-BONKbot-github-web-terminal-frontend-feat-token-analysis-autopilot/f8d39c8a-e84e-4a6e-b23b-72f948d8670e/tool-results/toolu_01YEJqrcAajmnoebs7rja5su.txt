@@ -1,0 +1,103 @@
+     1→import React from "react";
+     2→import type { CellContext } from "@tanstack/react-table";
+     3→import { TokenImage } from "@/components/token-image";
+     4→import { getBonkbotImageUrl } from "@/utils/asset-mappers";
+     5→import { ChartPreviewTooltip } from "@/components/TradingViewChart";
+     6→import { WatchlistToggle } from "@/components/watchlist-toggle/watchlist-toggle.tsx";
+     7→import { WatchlistTokenData } from "@/store/memoryStore/slices/websocket-messages-store/types";
+     8→import { useLiveStreamBadge } from "@/components/live-stream-badge";
+     9→import type { ChartPreviewLocation } from "@/store/persistentStore/slices/chart-preview-store/types";
+    10→import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+    11→import { cn } from "@/lib/utils";
+    12→
+    13→type SymbolCellComponentProps<R extends WatchlistTokenData> = CellContext<
+    14→  R,
+    15→  string
+    16→> & {
+    17→  showWatchlistToggle?: boolean;
+    18→  chartPreviewLocation: ChartPreviewLocation;
+    19→};
+    20→
+    21→type SymbolCellComponent = <R extends WatchlistTokenData>(
+    22→  props: SymbolCellComponentProps<R>
+    23→) => React.ReactElement;
+    24→
+    25→const SymbolCellComponent: SymbolCellComponent = ({
+    26→  getValue,
+    27→  cell,
+    28→  showWatchlistToggle,
+    29→  chartPreviewLocation,
+    30→}) => {
+    31→  const { imgSrc, isCrossOrigin } = getBonkbotImageUrl(cell.row.original.mint);
+    32→
+    33→  const {
+    34→    mint,
+    35→    market_data: { symbol },
+    36→  } = cell.row.original;
+    37→
+    38→  const chartPreviewOpenLocation = useGlobalStore(
+    39→    state => state.chartPreview.openLocation
+    40→  );
+    41→
+    42→  const isChartPreviewOpen = chartPreviewOpenLocation === chartPreviewLocation;
+    43→
+    44→  const { component: liveStreamBadge, isLive } = useLiveStreamBadge({
+    45→    mint,
+    46→    symbol,
+    47→    className: `px-1 py-0.5 text-[10px]`,
+    48→  });
+    49→
+    50→  return (
+    51→    <div className="flex items-center gap-3">
+    52→      {showWatchlistToggle && (
+    53→        <WatchlistToggle
+    54→          mint={mint}
+    55→          ticker={symbol}
+    56→        />
+    57→      )}
+    58→
+    59→      <div className="flex items-center justify-center gap-1.5 overflow-hidden">
+    60→        <ChartPreviewTooltip
+    61→          mint={mint}
+    62→          location={chartPreviewLocation}
+    63→          tokenSymbol={cell.row.original.market_data.symbol}
+    64→          tokenName={cell.row.original.market_data.name}
+    65→          side="right"
+    66→          align="start"
+    67→          sideOffset={isLive ? 40 : 8}
+    68→        >
+    69→          <div className="flex items-center gap-1.5">
+    70→            <TokenImage
+    71→              symbol={symbol}
+    72→              imgSrc={imgSrc}
+    73→              isCrossOrigin={isCrossOrigin}
+    74→              alt=""
+    75→              className="size-3.5 min-w-3.5 rounded"
+    76→            />
+    77→            <p className="text-text-primary truncate text-sm font-medium">
+    78→              {getValue() || cell.row.original.market_data?.name}
+    79→            </p>
+    80→          </div>
+    81→        </ChartPreviewTooltip>
+    82→        <div className={cn(isChartPreviewOpen && "pointer-events-none")}>
+    83→          {liveStreamBadge}
+    84→        </div>
+    85→      </div>
+    86→    </div>
+    87→  );
+    88→};
+    89→
+    90→export const SymbolCell = React.memo(
+    91→  SymbolCellComponent,
+    92→  (prevProps, nextProps) =>
+    93→    prevProps.getValue() === nextProps.getValue() &&
+    94→    prevProps.cell.row.original.market_data.image ===
+    95→      nextProps.cell.row.original.market_data.image &&
+    96→    prevProps.showWatchlistToggle === nextProps.showWatchlistToggle &&
+    97→    prevProps.chartPreviewLocation === nextProps.chartPreviewLocation
+    98→) as SymbolCellComponent;
+    99→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

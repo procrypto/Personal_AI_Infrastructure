@@ -1,0 +1,184 @@
+/**
+ * Paper Trading Tracker
+ *
+ * Tracks simulated trades and calculates P&L.
+ */
+
+import { readFile, writeFile, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import type { PaperTrade, TradingStats, TriggerEvent } from './types.js';
+
+const DATA_DIR = join(process.cwd(), '.autopilot');
+const TRADES_FILE = join(DATA_DIR, 'trades.json');
+const EVENTS_FILE = join(DATA_DIR, 'events.json');
+
+export class PaperTracker {
+  private trades: PaperTrade[] = [];
+  private events: TriggerEvent[] = [];
+
+  async load(): Promise<void> {
+    try {
+      if (existsSync(TRADES_FILE)) {
+        const data = await readFile(TRADES_FILE, 'utf-8');
+        this.trades = JSON.parse(data);
+      }
+      if (existsSync(EVENTS_FILE)) {
+        const data = await readFile(EVENTS_FILE, 'utf-8');
+        this.events = JSON.parse(data);
+      }
+    } catch (error) {
+      console.warn('Failed to load trading data:', error);
+    }
+  }
+
+  async save(): Promise<void> {
+    try {
+      if (!existsSync(DATA_DIR)) {
+        await mkdir(DATA_DIR, { recursive: true });
+      }
+      await writeFile(TRADES_FILE, JSON.stringify(this.trades, null, 2));
+      await writeFile(EVENTS_FILE, JSON.stringify(this.events, null, 2));
+    } catch (error) {
+      console.error('Failed to save trading data:', error);
+    }
+  }
+
+  generateTradeId(): string {
+    return `trade_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  recordEvent(event: TriggerEvent): void {
+    this.events.push(event);
+    // Keep last 1000 events
+    if (this.events.length > 1000) {
+      this.events = this.events.slice(-1000);
+    }
+  }
+
+  openTrade(params: {
+    mint: string;
+    symbol: string;
+    action: 'buy' | 'sell';
+    priceSol: number;
+    priceUsd: number;
+    positionSizeSol: number;
+    ruleSetId: string;
+    signalStrength: number;
+    reason: string;
+  }): PaperTrade {
+    const tokenAmount = params.positionSizeSol / params.priceSol;
+
+    const trade: PaperTrade = {
+      id: this.generateTradeId(),
+      timestamp: Date.now(),
+      mint: params.mint,
+      symbol: params.symbol,
+      action: params.action,
+      entryPriceSol: params.priceSol,
+      entryPriceUsd: params.priceUsd,
+      positionSizeSol: params.positionSizeSol,
+      tokenAmount,
+      ruleSetId: params.ruleSetId,
+      signalStrength: params.signalStrength,
+      reason: params.reason,
+      status: 'open',
+    };
+
+    this.trades.push(trade);
+    return trade;
+  }
+
+  closeTrade(tradeId: string, exitPriceSol: number, exitPriceUsd: number): PaperTrade | null {
+    const trade = this.trades.find(t => t.id === tradeId);
+    if (!trade || trade.status === 'closed') return null;
+
+    trade.exitPriceSol = exitPriceSol;
+    trade.exitPriceUsd = exitPriceUsd;
+    trade.exitTimestamp = Date.now();
+    trade.status = 'closed';
+
+    // Calculate P&L based on trade direction
+    if (trade.action === 'buy') {
+      // Buy low, sell high
+      trade.pnlSol = (exitPriceSol - trade.entryPriceSol) * trade.tokenAmount;
+      trade.pnlUsd = (exitPriceUsd - trade.entryPriceUsd) * trade.tokenAmount;
+      trade.pnlPercent = ((exitPriceSol - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+    } else {
+      // Short: sell high, buy low
+      trade.pnlSol = (trade.entryPriceSol - exitPriceSol) * trade.tokenAmount;
+      trade.pnlUsd = (trade.entryPriceUsd - exitPriceUsd) * trade.tokenAmount;
+      trade.pnlPercent = ((trade.entryPriceSol - exitPriceSol) / trade.entryPriceSol) * 100;
+    }
+
+    return trade;
+  }
+
+  getOpenTrades(): PaperTrade[] {
+    return this.trades.filter(t => t.status === 'open');
+  }
+
+  getOpenTradeForMint(mint: string): PaperTrade | null {
+    return this.trades.find(t => t.mint === mint && t.status === 'open') || null;
+  }
+
+  getClosedTrades(): PaperTrade[] {
+    return this.trades.filter(t => t.status === 'closed');
+  }
+
+  getAllTrades(): PaperTrade[] {
+    return [...this.trades];
+  }
+
+  getRecentEvents(limit = 50): TriggerEvent[] {
+    return this.events.slice(-limit);
+  }
+
+  getStats(): TradingStats {
+    const closed = this.getClosedTrades();
+    const open = this.getOpenTrades();
+
+    const wins = closed.filter(t => (t.pnlSol ?? 0) > 0);
+    const losses = closed.filter(t => (t.pnlSol ?? 0) <= 0);
+
+    const totalPnlSol = closed.reduce((sum, t) => sum + (t.pnlSol ?? 0), 0);
+    const totalPnlUsd = closed.reduce((sum, t) => sum + (t.pnlUsd ?? 0), 0);
+    const avgPnlPercent = closed.length > 0
+      ? closed.reduce((sum, t) => sum + (t.pnlPercent ?? 0), 0) / closed.length
+      : 0;
+
+    // Find best and worst trades
+    let bestTrade: PaperTrade | null = null;
+    let worstTrade: PaperTrade | null = null;
+    for (const trade of closed) {
+      if (!bestTrade || (trade.pnlPercent ?? 0) > (bestTrade.pnlPercent ?? 0)) {
+        bestTrade = trade;
+      }
+      if (!worstTrade || (trade.pnlPercent ?? 0) < (worstTrade.pnlPercent ?? 0)) {
+        worstTrade = trade;
+      }
+    }
+
+    return {
+      totalTrades: this.trades.length,
+      openTrades: open.length,
+      closedTrades: closed.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: closed.length > 0 ? wins.length / closed.length : 0,
+      totalPnlSol,
+      totalPnlUsd,
+      avgPnlPercent,
+      bestTrade,
+      worstTrade,
+    };
+  }
+
+  clearAll(): void {
+    this.trades = [];
+    this.events = [];
+  }
+}
+
+// Singleton instance
+export const paperTracker = new PaperTracker();

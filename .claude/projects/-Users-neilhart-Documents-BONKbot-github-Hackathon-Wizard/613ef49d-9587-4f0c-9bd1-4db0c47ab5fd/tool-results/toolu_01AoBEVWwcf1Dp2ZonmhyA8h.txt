@@ -1,0 +1,104 @@
+     1→/**
+     2→ * Rule Engine
+     3→ *
+     4→ * Orchestrates running analysis rules against token data.
+     5→ * Aggregates signals and determines final action.
+     6→ */
+     7→
+     8→import type { ApiClient } from '../api/client.js';
+     9→import type { Signal, Rule, RuleSet, AnalysisContext, AnyRuleConfig } from './types.js';
+    10→import { PriceChangeRule } from './price-change.js';
+    11→import { VolumeSpikeRule } from './volume-spike.js';
+    12→import { BuySellRatioRule } from './buy-sell-ratio.js';
+    13→import { TraderCountRule } from './trader-count.js';
+    14→
+    15→export interface EngineConfig {
+    16→  api: ApiClient;
+    17→  defaultOhlcvResolution?: '1m' | '5m' | '15m';
+    18→  defaultOhlcvCountback?: number;
+    19→  defaultTradesLimit?: number;
+    20→}
+    21→
+    22→export class RuleEngine {
+    23→  private api: ApiClient;
+    24→  private rules: Rule[] = [];
+    25→  private ohlcvResolution: '1m' | '5m' | '15m';
+    26→  private ohlcvCountback: number;
+    27→  private tradesLimit: number;
+    28→
+    29→  constructor(config: EngineConfig) {
+    30→    this.api = config.api;
+    31→    this.ohlcvResolution = config.defaultOhlcvResolution ?? '5m';
+    32→    this.ohlcvCountback = config.defaultOhlcvCountback ?? 100;
+    33→    this.tradesLimit = config.defaultTradesLimit ?? 50;
+    34→  }
+    35→
+    36→  /**
+    37→   * Add a rule to the engine
+    38→   */
+    39→  addRule(rule: Rule): void {
+    40→    this.rules.push(rule);
+    41→  }
+    42→
+    43→  /**
+    44→   * Add rules from a config array
+    45→   */
+    46→  addRulesFromConfig(configs: AnyRuleConfig[]): void {
+    47→    for (const config of configs) {
+    48→      const rule = this.createRuleFromConfig(config);
+    49→      if (rule) this.rules.push(rule);
+    50→    }
+    51→  }
+    52→
+    53→  /**
+    54→   * Create a Rule instance from config
+    55→   */
+    56→  private createRuleFromConfig(config: AnyRuleConfig): Rule | null {
+    57→    switch (config.ruleType) {
+    58→      case 'price_change':
+    59→        return new PriceChangeRule(config);
+    60→      case 'volume_spike':
+    61→        return new VolumeSpikeRule(config);
+    62→      case 'buy_sell_ratio':
+    63→        return new BuySellRatioRule(config);
+    64→      case 'trader_count':
+    65→        return new TraderCountRule(config);
+    66→      default:
+    67→        console.warn(`Unknown rule type: ${(config as any).ruleType}`);
+    68→        return null;
+    69→    }
+    70→  }
+    71→
+    72→  /**
+    73→   * Clear all rules
+    74→   */
+    75→  clearRules(): void {
+    76→    this.rules = [];
+    77→  }
+    78→
+    79→  /**
+    80→   * Get current rules
+    81→   */
+    82→  getRules(): Rule[] {
+    83→    return [...this.rules];
+    84→  }
+    85→
+    86→  /**
+    87→   * Analyze a single token
+    88→   */
+    89→  async analyzeToken(mint: string): Promise<Signal[]> {
+    90→    try {
+    91→      // Fetch all required data in parallel
+    92→      const [token, ohlcv, trades] = await Promise.all([
+    93→        this.api.getMarketData(mint),
+    94→        this.api.getOHLCV(mint, this.ohlcvResolution, { countback: this.ohlcvCountback }),
+    95→        this.api.getTrades(mint, this.tradesLimit),
+    96→      ]);
+    97→
+    98→      const context: AnalysisContext = { token, ohlcv, trades };
+    99→
+   100→      // Run all rules
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

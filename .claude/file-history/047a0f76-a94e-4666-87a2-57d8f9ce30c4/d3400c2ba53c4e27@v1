@@ -1,0 +1,191 @@
+/**
+ * Holders Stats Endpoint
+ *
+ * Fetches top 100 holders (by remaining tokens) for a specific token mint.
+ *
+ * ⚠️  This fetches PRODUCTION data. Strict limits are enforced.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, buildInList, escapeString, isSolanaPubkey } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const LIMIT = 100;
+const MAX_ADDRESS_FILTER = 20;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type HoldersStatsRequest = {
+    address?: string;
+};
+
+type HolderRow = {
+    address: string;
+    mint: string;
+    remaining_tokens: string;
+    portfolio_value_sol: string;
+    portfolio_value_usd: string;
+    invested_total_usd: string;
+    invested_total_sol: string;
+    invested_tokens: string;
+    last_buy: string;
+    buy_transactions: string;
+    sold_total_usd: string;
+    sold_total_sol: string;
+    sold_tokens: string;
+    last_sell: string;
+    sell_transactions: string;
+    pnl_total_sol: string;
+    pnl_total_usd: string;
+    average_entry_price_sol: string;
+    average_entry_price_usd: string;
+    average_entry_mc_sol: string;
+    average_entry_mc_usd: string;
+    average_exit_price_sol: string;
+    average_exit_price_usd: string;
+    average_exit_mc_sol: string;
+    average_exit_mc_usd: string;
+    is_dev: boolean;
+    is_insider: boolean;
+    is_sniper: boolean;
+    is_bundler: boolean;
+    is_hard_bundler: boolean;
+    is_top_10_holder: boolean;
+    holder_status: string;
+    holder_since: string;
+    last_trade: string;
+    timestamp: string;
+};
+
+type HoldersStatsResponse =
+    | { ok: true; holders: HolderRow[]; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerHoldersStatsRoutes = (app: Elysia) => {
+    app.get("/holders-stats/:mint", async ({ params, query }) => {
+        const mint = params.mint;
+        const req = query as HoldersStatsRequest;
+
+        const validation = validateHoldersStatsRequest(mint, req);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildHoldersStatsSql(validation.mint, validation.addressFilter);
+
+        console.log(`[holders_stats] Querying top ${LIMIT} holders for mint=${mint}`);
+
+        const result = await clickhouseQuery<HolderRow>(sql);
+
+        return formatHoldersStatsResponse(result);
+    });
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+export const validateHoldersStatsRequest = (
+    mint: string,
+    req: HoldersStatsRequest
+):
+    | { ok: true; mint: string; addressFilter: string }
+    | { ok: false; error: string } => {
+    if (!isSolanaPubkey(mint)) {
+        return {
+            ok: false,
+            error: "Invalid mint address",
+        };
+    }
+
+    let addressFilter = "";
+    if (req.address) {
+        const addresses = req.address.split(",").filter(isSolanaPubkey).slice(0, MAX_ADDRESS_FILTER);
+        if (addresses.length > 0) {
+            addressFilter = ` AND address IN (${buildInList(addresses)})`;
+        }
+    }
+
+    return { ok: true, mint, addressFilter };
+};
+
+export const buildHoldersStatsSql = (mint: string, addressFilter: string): string => {
+    return `
+        SELECT
+            address,
+            mint,
+            remaining_tokens,
+            portfolio_value_sol,
+            portfolio_value_usd,
+            invested_total_usd,
+            invested_total_sol,
+            invested_tokens,
+            last_buy,
+            buy_transactions,
+            sold_total_usd,
+            sold_total_sol,
+            sold_tokens,
+            last_sell,
+            sell_transactions,
+            pnl_total_sol,
+            pnl_total_usd,
+            average_entry_price_sol,
+            average_entry_price_usd,
+            average_entry_mc_sol,
+            average_entry_mc_usd,
+            average_exit_price_sol,
+            average_exit_price_usd,
+            average_exit_mc_sol,
+            average_exit_mc_usd,
+            is_dev,
+            is_insider,
+            is_sniper,
+            is_bundler,
+            is_hard_bundler,
+            is_top_10_holder,
+            holder_status,
+            holder_since,
+            last_trade,
+            timestamp
+        FROM materializer_holder_mint_latest
+        PREWHERE mint = '${escapeString(mint)}'
+        WHERE (address, mint, timestamp) IN (
+            SELECT address, mint, max(timestamp)
+            FROM materializer_holder_mint_latest
+            WHERE mint = '${escapeString(mint)}'${addressFilter}
+            GROUP BY address, mint
+        )
+        ORDER BY remaining_tokens DESC
+        LIMIT ${LIMIT}
+    `;
+};
+
+export const formatHoldersStatsResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<HolderRow>>>
+): HoldersStatsResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    console.log(`[holders_stats] Returned ${result.data.length} holders`);
+
+    return {
+        ok: true,
+        holders: result.data,
+        count: result.data.length,
+    };
+};
+
+

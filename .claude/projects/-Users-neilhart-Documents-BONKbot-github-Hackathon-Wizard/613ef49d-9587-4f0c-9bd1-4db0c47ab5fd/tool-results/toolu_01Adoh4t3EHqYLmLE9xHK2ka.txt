@@ -1,0 +1,49 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/rotations.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   241→  constructor(config: RotationsRuleConfig) {
+   242→    this.config = config;
+   243→  }
+   244→
+   245→  analyze(context: AnalysisContext): Signal | null {
+   246→    const { token, ohlcv } = context;
+   247→
+   248→    let levels: RotationLevels | null = null;
+   249→    let currentHigh: number;
+   250→    let currentLow: number;
+   251→
+   252→    // Try OHLCV-based calculation first
+   253→    if (ohlcv && ohlcv.length >= 10) {
+   254→      levels = calculateRotations(ohlcv);
+   255→      const latestBar = ohlcv[ohlcv.length - 1];
+   256→      currentHigh = latestBar?.high ?? token.price_sol;
+   257→      currentLow = latestBar?.low ?? token.price_sol;
+   258→    } else {
+   259→      // Fallback: estimate rotation from market data price changes
+   260→      levels = estimateRotationFromMarketData(token);
+   261→      // Use price with small buffer for high/low estimation
+   262→      currentHigh = token.price_sol * 1.001;
+   263→      currentLow = token.price_sol * 0.999;
+   264→    }
+   265→
+   266→    if (!levels) return null;
+   267→
+   268→    // Get current price info
+   269→    const currentPrice = token.price_sol;
+   270→
+   271→    // Update state and get analysis
+   272→    const analysis = updateRotationState(
+   273→      token.mint,
+   274→      levels,
+   275→      currentPrice,
+   276→      currentHigh,
+   277→      currentLow,
+   278→      undefined, // HTF levels would come from separate OHLCV fetch
+   279→      this.config.levelBuffer
+   280→    );
+   281→
+   282→    // Generate signals based on config
+   283→    return this.generateSignal(token.mint, token.symbol, analysis);
+   284→  }
+   285→
+   286→  private generateSignal(
+   287→    mint: string,
+   288→    symbol: string,

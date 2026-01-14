@@ -1,0 +1,152 @@
+# Context for Local API
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Local API is a self-contained HTTP service that provides ClickHouse-backed REST endpoints for development. It mirrors production API behavior while enabling local testing with real production data via the ClickHouse Cloud Queries API.
+
+**Critical constraint:** This fetches PRODUCTION data. Treat all responses as sensitive. Never paste outputs into public channels or commit fetched data.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Runtime | Bun | Modern JS runtime with native TypeScript |
+| Framework | Elysia v1.0.0 | Lightweight HTTP framework (Bun-native) |
+| Database | ClickHouse Cloud | Production data via Queries API |
+| Language | TypeScript 5.3+ | Strict mode enabled |
+
+### Key Directories
+
+```
+local-api/
+├── src/
+│   ├── server.ts              # Entry point, route registration
+│   ├── config.ts              # Environment config + validation
+│   ├── clickhouse/
+│   │   └── client.ts          # ClickHouse Cloud Queries API client
+│   ├── endpoints/
+│   │   ├── generic/           # Production-mirror endpoints (16 files)
+│   │   ├── custom/            # User-defined local endpoints
+│   │   └── _template.ts       # Endpoint template
+│   └── extensions/            # Local-only augmentation layer
+│       ├── types.ts           # Extension metadata types
+│       ├── registry.ts        # Extension registry endpoint
+│       ├── register.ts        # Extension route registration
+│       └── catalog/           # Extension implementations
+├── public/
+│   └── smoke.html             # Browser testing dashboard
+├── env.example                # Credentials template
+└── README.md                  # Comprehensive documentation
+```
+
+## Capabilities
+
+### Data Sources
+
+| Source | Type | Access Pattern |
+|--------|------|----------------|
+| ClickHouse Cloud | Database | HTTP POST to Queries API with Basic Auth |
+
+**Tables accessed:**
+- `materializer_trades`, `materializer_trades_recent_1d` - Trade history
+- `materializer_token_market_data_latest` - Token metadata and pricing
+- `materializer_holder_mint_latest` - Holder statistics
+- `discovery_trending_token_stats_ts` - Trending calculations
+- Various `materializer_*` and `discovery_*` tables
+
+### APIs / Interfaces
+
+| Interface | Type | Purpose |
+|-----------|------|---------|
+| `/health` | REST GET | Health check |
+| `/local-api/trades/:mint` | REST GET | Trade history for token |
+| `/local-api/search/:mint` | REST GET | Token lookup by mint |
+| `/local-api/ohlcv/pool/:pool/:range` | REST GET | Candlestick data |
+| `/local-api/holders_stats/:mint` | REST GET | Top 100 holders |
+| `/local-api/discovery/trending` | REST GET | Trending tokens list |
+| `/local-api/discovery/whale_moves` | REST GET | Whale activity (24h) |
+| `/local-api/wallet_tracker/*` | REST GET | Wallet tracking endpoints |
+| `/local-api/labs/wallet_trades_snapshot` | REST POST | Bounded wallet trades (local-only) |
+| `/local-api/labs/holders_stats_batch` | REST POST | Batch holder lookup (local-only) |
+| `/local-api/ext/registry` | REST GET | Extension metadata (always on) |
+| `/local-api/ext/search/:mint` | REST GET | Extended token lookup |
+
+### Extension Points
+
+- **Custom endpoints**: Copy `_template.ts` to `endpoints/custom/`, register in `server.ts`
+- **Extensions system**: Add to `extensions/catalog/`, implement `ExtensionDefinition` interface
+- **Environment flags**: `LOCAL_API_ENABLE_EXTENSIONS=true` enables extension routes
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- All endpoints live under `/local-api/*` prefix (for Vite proxy compatibility)
+- Labs endpoints (local-only) use `POST` method and `/local-api/labs/*` prefix
+- Generic endpoints mirror production API shapes exactly
+- SQL queries use parameterized limits with `clamp()` for safety
+- All responses follow `{ ok: boolean, ... }` pattern
+
+### Common Tasks
+
+#### Local Development
+
+```bash
+bun install          # Install dependencies
+cp env.example .env  # Create config (fill in credentials)
+bun dev              # Start with watch mode (localhost:8787)
+```
+
+#### Adding a New Endpoint
+
+```bash
+cp src/endpoints/_template.ts src/endpoints/generic/my_endpoint.ts
+# Edit the file: rename function, change route, add SQL
+# Register in src/server.ts: import and call register function
+```
+
+#### Finding Code
+
+- Endpoint handlers: `src/endpoints/generic/*.ts`
+- ClickHouse queries: SQL strings within each endpoint file
+- Extension metadata: `src/extensions/types.ts`
+- Config validation: `src/config.ts`
+
+### Things to Avoid
+
+- Exposing on public internet (localhost-only by design)
+- Committing `.env` files or fetched data
+- Removing limit caps on queries (prevent expensive ClickHouse calls)
+- Modifying generic endpoints to diverge from production API shapes
+
+## Related Documentation
+
+- [README.md](README.md) - Comprehensive setup, endpoint docs, deployment guides
+- [src/endpoints/custom/README.md](src/endpoints/custom/README.md) - Custom endpoint guide
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| ClickHouse Cloud | Production trading data, token metadata, holder stats |
+| TrenchBench | Credential source (same ClickHouse service) |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| web-terminal-frontend | REST API endpoints via Vite proxy |
+| Smoke page | Browser-based endpoint testing |
+
+### Integration Pattern
+
+Frontend configures Vite to proxy `/local-api/*` and `/health` to `localhost:8787`. LocalStorage overrides (`localApi.override.*`) let developers switch between production and dev data sources per endpoint.
+
+---
+*Verified: 2026-01-13*

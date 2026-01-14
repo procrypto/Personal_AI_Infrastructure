@@ -1,0 +1,128 @@
+---
+phase: 02-dual-path-engine
+plan: 03
+type: execute
+---
+
+<objective>
+Wire SignalProcessor to WebSocket data feeds and emit signals.
+
+Purpose: Complete the dual-path engine by connecting data reception to signal processing and output.
+Output: Incoming market data and OHLCV updates automatically trigger rule evaluation and signal broadcast.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior plans in this phase:
+@.planning/phases/02-dual-path-engine/02-01-PLAN.md
+@.planning/phases/02-dual-path-engine/02-02-PLAN.md
+
+# Key source files:
+@src/signal/processor.ts
+@src/websocket-server.ts
+@src/rules/engine.ts
+
+**Tech stack available:** TypeScript, vitest, ws
+**Established patterns:**
+- wsServer.onDataFeed(handler) for data feed callbacks
+- wsServer.broadcastSignal(signal) for signal output
+- DataFeedMessage union type for routing
+
+**Constraining decisions:**
+- Phase 1: Data feed handler registered via onDataFeed()
+- Phase 1: Market data stored in Maps, accessible via getters
+- 02-01/02-02: SignalProcessor has processMarketData and processOHLCV methods
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create signal processor integration module</name>
+  <files>src/signal/integration.ts, src/signal/index.ts</files>
+  <action>
+Create integration module that wires SignalProcessor to WebSocket server:
+
+1. Create `createSignalPipeline(engine: RuleEngine)` function that:
+   - Creates SignalProcessor with marketDataProvider pointing to wsServer.getAllMarketData
+   - Returns object with:
+     - `processor`: the SignalProcessor instance
+     - `handleDataFeed(message: DataFeedMessage)`: routes messages to appropriate processor method
+     - `getSignals()`: method to retrieve accumulated signals (for batch processing)
+
+2. handleDataFeed implementation:
+   - market_data_feed → processor.processMarketData(message.data)
+   - ohlcv_update → processor.processOHLCV(message.mint, message.ohlcv)
+   - trade_feed → ignore for now (no trade-only rules yet)
+
+3. Export from index.ts barrel
+
+Keep signal emission separate (next task) - this task just routes data to processing.
+  </action>
+  <verify>TypeScript compiles: `npx tsc --noEmit`</verify>
+  <done>createSignalPipeline function exists, routes data feed messages to processor</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add signal emission and aggregation</name>
+  <files>src/signal/integration.ts</files>
+  <action>
+Add signal emission to the pipeline:
+
+1. Add `onSignal(callback: (signal: Signal) => void)` to pipeline for real-time emission
+2. In handleDataFeed, after processing:
+   - Get signals from processor call
+   - For each signal, call the onSignal callback if registered
+3. Add `aggregateSignals(signals: Signal[], mode: 'all' | 'any')` helper that wraps engine.aggregateSignals
+
+Usage pattern (will be wired in CLI later):
+```typescript
+const pipeline = createSignalPipeline(engine);
+pipeline.onSignal((signal) => {
+  wsServer.broadcastSignal({
+    timestamp: signal.timestamp,
+    mint: signal.mint,
+    symbol: signal.symbol,
+    signalType: 'rule_signal',
+    action: signal.type === 'alert' ? 'buy' : signal.type,
+    reason: signal.reason,
+  });
+});
+wsServer.onDataFeed(pipeline.handleDataFeed);
+```
+  </action>
+  <verify>TypeScript compiles: `npx tsc --noEmit` and `npm test` passes</verify>
+  <done>Pipeline emits signals via callback, can be wired to WebSocket broadcast</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` succeeds
+- [ ] `npm test` passes
+- [ ] createSignalPipeline function creates working pipeline
+- [ ] Pipeline routes market_data_feed to processMarketData
+- [ ] Pipeline routes ohlcv_update to processOHLCV
+- [ ] onSignal callback enables signal emission
+</verification>
+
+<success_criteria>
+- Signal pipeline integrates SignalProcessor with WebSocket data feeds
+- Signals emitted via callback for flexible output
+- All existing tests pass
+- Phase 2 complete: dual-path engine operational
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-dual-path-engine/02-03-SUMMARY.md` with:
+- Phase 2 completion status
+- Ready for Phase 3: Interface Cleanup & Cutover
+</output>

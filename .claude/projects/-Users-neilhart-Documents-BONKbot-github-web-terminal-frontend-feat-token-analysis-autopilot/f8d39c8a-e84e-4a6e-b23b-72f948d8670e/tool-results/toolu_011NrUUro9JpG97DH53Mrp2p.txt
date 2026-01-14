@@ -1,0 +1,204 @@
+   235→}
+   236→
+   237→// Token Row Component with signal background indicators
+   238→// Background color based on confluence count using brand palette
+   239→const TokenRow = ({
+   240→  token,
+   241→  signalStrength,
+   242→}: {
+   243→  token: AutopilotTokenWithPrices;
+   244→  signalStrength?: SignalStrength;
+   245→}) => {
+   246→  const change = token.change1h ?? 0;
+   247→  const isPositive = change >= 0;
+   248→
+   249→  // Track flash state - when true, show brighter background
+   250→  const [isFlashing, setIsFlashing] = useState(false);
+   251→
+   252→  // Time since last signal
+   253→  const timeAgo = useTimeAgo(signalStrength?.latestTimestamp);
+   254→
+   255→  // Trigger flash when new signal arrives
+   256→  useEffect(() => {
+   257→    if (signalStrength?.isNew && signalStrength.type !== "none") {
+   258→      setIsFlashing(true);
+   259→      const timer = setTimeout(() => {
+   260→        setIsFlashing(false);
+   261→      }, FLASH_DURATION_MS);
+   262→      return () => clearTimeout(timer);
+   263→    }
+   264→  }, [
+   265→    signalStrength?.isNew,
+   266→    signalStrength?.latestTimestamp,
+   267→    signalStrength?.type,
+   268→  ]);
+   269→
+   270→  // Calculate background style using brand colors
+   271→  // Success (buy): --success-950 rgb(180, 229, 89)
+   272→  // Error (sell): --error-950 (using standard error red)
+   273→  const signalStyle = useMemo(() => {
+   274→    if (!signalStrength || signalStrength.type === "none") {
+   275→      return undefined;
+   276→    }
+   277→
+   278→    const opacity = getSignalOpacity(
+   279→      signalStrength.confluenceCount,
+   280→      isFlashing
+   281→    );
+   282→
+   283→    if (signalStrength.type === "buy") {
+   284→      // Use success color from brand palette
+   285→      return {
+   286→        backgroundColor: `rgba(180, 229, 89, ${opacity})`,
+   287→      };
+   288→    } else {
+   289→      // Use error color from brand palette
+   290→      return {
+   291→        backgroundColor: `rgba(239, 68, 68, ${opacity})`,
+   292→      };
+   293→    }
+   294→  }, [signalStrength, isFlashing]);
+   295→
+   296→  // Determine if we have a signal background (affects base styling)
+   297→  const hasSignalBg = signalStrength && signalStrength.type !== "none";
+   298→
+   299→  return (
+   300→    <div
+   301→      className={cn(
+   302→        "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+   303→        // Smooth transition for background changes
+   304→        "transition-colors duration-200",
+   305→        // Only apply default bg if no signal and no position
+   306→        !hasSignalBg && !token.hasPosition && "bg-bg-tertiary/30",
+   307→        // Position styling takes precedence over signal
+   308→        token.hasPosition &&
+   309→          "border-border-turbo-primary bg-bg-turbo-primary border"
+   310→      )}
+   311→      style={!token.hasPosition ? signalStyle : undefined}
+   312→    >
+   313→      <div className="flex items-center gap-2">
+   314→        <span className="text-text-primary font-medium">${token.symbol}</span>
+   315→        {token.hasPosition && (
+   316→          <span className="text-text-turbo text-[8px] font-semibold">OPEN</span>
+   317→        )}
+   318→        {/* Signal stats: direction, count, time */}
+   319→        {hasSignalBg && signalStrength && (
+   320→          <span
+   321→            className={cn(
+   322→              "flex items-center gap-1 text-[9px]",
+   323→              signalStrength.type === "buy"
+   324→                ? "text-text-success"
+   325→                : "text-text-error"
+   326→            )}
+   327→          >
+   328→            {signalStrength.type === "buy" ? "▲" : "▼"}
+   329→            <span className="font-semibold">
+   330→              {signalStrength.confluenceCount}
+   331→            </span>
+   332→            <span className="text-text-tertiary">{timeAgo}</span>
+   333→          </span>
+   334→        )}
+   335→      </div>
+   336→      <div className="flex items-center gap-3">
+   337→        <span className="text-text-secondary">
+   338→          {formatMarketCap(token.marketCapUsd)}
+   339→        </span>
+   340→        <span
+   341→          className={cn(
+   342→            "font-medium",
+   343→            isPositive ? "text-text-success" : "text-text-error"
+   344→          )}
+   345→        >
+   346→          {isPositive ? "+" : ""}
+   347→          {change.toFixed(1)}%
+   348→        </span>
+   349→      </div>
+   350→    </div>
+   351→  );
+   352→};
+   353→
+   354→// Token List Column Component - for three-column layout
+   355→const TokenListColumn = ({
+   356→  title,
+   357→  icon: Icon,
+   358→  tokens,
+   359→  iconColor,
+   360→  signalStrengthMap,
+   361→}: {
+   362→  title: string;
+   363→  icon: React.ElementType;
+   364→  tokens: AutopilotTokenWithPrices[];
+   365→  iconColor: string;
+   366→  signalStrengthMap: Map<string, SignalStrength>;
+   367→}) => {
+   368→  // Sort tokens: buy signals (green) first, sell signals (red) second, then rest
+   369→  const sortedTokens = useMemo(() => {
+   370→    return [...tokens].sort((a, b) => {
+   371→      const sigA = signalStrengthMap.get(a.mint);
+   372→      const sigB = signalStrengthMap.get(b.mint);
+   373→
+   374→      const typeA = sigA?.type ?? "none";
+   375→      const typeB = sigB?.type ?? "none";
+   376→
+   377→      // Priority: buy (0) > sell (1) > none (2)
+   378→      const priorityA = typeA === "buy" ? 0 : typeA === "sell" ? 1 : 2;
+   379→      const priorityB = typeB === "buy" ? 0 : typeB === "sell" ? 1 : 2;
+   380→
+   381→      // Sort by signal type priority first
+   382→      if (priorityA !== priorityB) return priorityA - priorityB;
+   383→
+   384→      // Within same type, sort by confluence count (higher first)
+   385→      if (typeA !== "none" && typeB !== "none") {
+   386→        const countA = sigA?.confluenceCount ?? 0;
+   387→        const countB = sigB?.confluenceCount ?? 0;
+   388→        if (countA !== countB) return countB - countA;
+   389→      }
+   390→
+   391→      // For no-signal tokens, sort by hasPosition
+   392→      if (a.hasPosition && !b.hasPosition) return -1;
+   393→      if (!a.hasPosition && b.hasPosition) return 1;
+   394→
+   395→      return 0;
+   396→    });
+   397→  }, [tokens, signalStrengthMap]);
+   398→
+   399→  return (
+   400→    <div className="flex min-h-0 flex-1 flex-col">
+   401→      <div className="text-text-secondary mb-1.5 flex items-center gap-1.5 text-[10px] font-medium">
+   402→        <Icon className={cn("h-3 w-3", iconColor)} />
+   403→        {title} ({tokens.length})
+   404→      </div>
+   405→      {tokens.length === 0 ? (
+   406→        <div className="text-text-tertiary border-border-primary/30 rounded border border-dashed p-2 text-center text-[10px]">
+   407→          No tokens
+   408→        </div>
+   409→      ) : (
+   410→        <div className="min-h-0 flex-1 space-y-1 overflow-auto">
+   411→          {sortedTokens.map(token => (
+   412→            <TokenRow
+   413→              key={token.mint}
+   414→              token={token}
+   415→              signalStrength={signalStrengthMap.get(token.mint)}
+   416→            />
+   417→          ))}
+   418→        </div>
+   419→      )}
+   420→    </div>
+   421→  );
+   422→};
+   423→
+   424→// Draggable Hook for Settings Panel
+   425→const useDraggable = () => {
+   426→  const [position, setPosition] = useState<{ x: number; y: number } | null>(
+   427→    null
+   428→  );
+   429→  const [isDragging, setIsDragging] = useState(false);
+   430→  const dragStartRef = useRef({ x: 0, y: 0 });
+   431→  const positionStartRef = useRef({ x: 0, y: 0 });
+   432→  const elementRef = useRef<HTMLDivElement>(null);
+   433→
+   434→  const handleMouseDown = useCallback(
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

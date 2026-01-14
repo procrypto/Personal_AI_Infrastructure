@@ -1,0 +1,84 @@
+# QA Coordination Hub
+
+## What This Is
+
+A QA coordination system that transforms qa-tools into the human coordination layer for QA at BONKbot. Two modes: Pre-release QA (triggered by Linear view additions, responds in threads to Linear's native Slack messages) and Ceremony QA (deployment smoke tests). qa-tools is the source of truth; Slack is just a control surface.
+
+## Core Value
+
+**Visibility & tracking** - Everyone knows what's in queue, who's working what, and nothing falls through the cracks. If a ticket sits untouched, the system escalates. If someone claims it, everyone sees.
+
+## Requirements
+
+### Validated
+
+(None yet — ship to validate)
+
+### Active
+
+**Core Infrastructure:**
+- [ ] Data model for QATicket, TesterProfile, LinearMessage mapping
+- [ ] Vercel KV store with schemas for all entities
+- [ ] Event bus for surface notifications
+
+**Pre-release QA (Linear → Slack threads):**
+- [ ] Linear webhook handler for "QA:Mods" view-add events
+- [ ] Slack listener to capture Linear's native messages
+- [ ] Message-to-ticket ID mapping store
+- [ ] Thread reply Block Kit messages with claim/pass/blocked buttons
+- [ ] Assignment engine with smart scoring (expertise, workload, history, priority)
+- [ ] Tester profile sync from Linear users
+- [ ] Button action handlers (claim, pass, blocked)
+- [ ] Slash commands (/qa-queue, /qa-claim, /qa-my-tickets, etc.)
+- [ ] Escalation checker (24h, 48h stale warnings in threads)
+- [ ] Morning routine summary post
+
+**Ceremony QA (Deployment coordination):**
+- [ ] Ceremony Tracker webhook receiver
+- [ ] Session management for ceremony QA runs
+- [ ] Checklist posting to ceremony channel
+- [ ] Completion callback to Ceremony Tracker
+
+**Documentation:**
+- [ ] Automation opportunity docs for QA engineers (what they should build in Playwright)
+
+### Out of Scope
+
+- **Custom UI/dashboard** — Slack-only for v1, no separate web interface
+- **Playwright integration** — QA engineers own automation separately; we document gaps
+- **Metrics/analytics dashboards** — No tester performance reports or cycle time analytics in v1
+- **Replace Linear's Slack app** — We reply in threads, don't replace the native integration
+- **Automated test execution** — We coordinate humans, not run tests ourselves
+
+## Context
+
+**Existing codebase:** qa-tools currently has API smoke tests and manual runbooks. The smoke test infrastructure remains but is secondary to the coordination features.
+
+**Related systems:**
+- **Linear** — Source of QA tickets, uses "QA:Mods" view to trigger notifications
+- **Linear's Slack app** — Posts native messages to #qa-mods channel when issues added to view
+- **Ceremony Tracker** — Deployment coordination tool, will call qa-tools for QA steps
+- **web-terminal-frontend-tests** — QA engineers' Playwright repo (separate, they own it)
+
+**Current pain point:** When Linear posts to Slack, it's a free-for-all. Testers don't know who should take what, tickets sit unclaimed, and there's no visibility into queue health.
+
+**Thread reply pattern:** QA bot finds Linear's native message by issue ID, replies in thread with assignment info and action buttons. Keeps context together, doesn't duplicate messages.
+
+## Constraints
+
+- **TypeScript** — Consistent with existing codebase
+- **Vercel KV** — Storage layer (plan specifies this)
+- **Linear View trigger** — Uses existing "QA:Mods" view pattern, not status changes
+- **Slack as surface only** — qa-tools is source of truth, Slack is control surface
+
+## Key Decisions
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Thread reply to Linear messages | Keeps context together, doesn't duplicate | — Pending |
+| Vercel KV for storage | Serverless-friendly, matches deployment model | — Pending |
+| Event bus for notifications | Decouples core from surfaces, enables future UI | — Pending |
+| Smart assignment algorithm | Reduces manual coordination, fair distribution | — Pending |
+
+---
+*Last updated: 2025-01-07 after initialization*

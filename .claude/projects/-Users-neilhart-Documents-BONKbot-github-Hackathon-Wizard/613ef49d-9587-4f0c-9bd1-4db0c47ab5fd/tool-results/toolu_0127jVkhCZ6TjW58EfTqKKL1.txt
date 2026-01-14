@@ -1,0 +1,206 @@
+     1→///////////////////
+     2→// ENV VARIABLES
+     3→///////////////////
+     4→export const AUTHBOT_URL = import.meta.env.VITE_AUTHBOT_URL;
+     5→
+     6→// API URLs
+     7→export const IMG_PROXY_URL = import.meta.env.VITE_GUILD_NAVIGATOR_URL;
+     8→export const BONKBOT_IMAGES_URL = import.meta.env.VITE_BONKBOT_IMAGES_URL;
+     9→export const METADATA_API_URL = import.meta.env.VITE_METADATA_API_URL;
+    10→export const STREAMFLOW_DASHBOARD_BASE_URL =
+    11→  import.meta.env.VITE_STREAMFLOW_DASHBOARD_BASE_URL ||
+    12→  "https://app.streamflow.finance/token-dashboard/solana/mainnet";
+    13→export const JUPITER_DASHBOARD_BASE_URL =
+    14→  import.meta.env.VITE_JUPITER_DASHBOARD_BASE_URL ||
+    15→  "https://lock.jup.ag/escrow";
+    16→export const APP_ENV = import.meta.env.VITE_APP_ENV;
+    17→
+    18→// External services
+    19→export const BUBBLE_MAP_BASE_URL = import.meta.env.VITE_BUBBLE_MAP_BASE_URL;
+    20→export const BUBBLE_MAP_EMBED_ID = import.meta.env.VITE_BUBBLE_MAP_EMBED_ID;
+    21→
+    22→export const IS_PRODUCTION_ENV = APP_ENV === "prod";
+    23→export const IS_STAGING_ENV = APP_ENV === "staging";
+    24→
+    25→export const IS_POSTHOG_ENABLED = IS_PRODUCTION_ENV || IS_STAGING_ENV;
+    26→
+    27→export const DISABLE_LIMIT_ORDERS = false;
+    28→
+    29→export const SKIP_API_PROXY = import.meta.env.VITE_SKIP_API_PROXY === "true";
+    30→export const IS_LOCAL_ENV = APP_ENV === "local";
+    31→
+    32→declare const __SERVER_SESSION_ID__: string;
+    33→
+    34→type LocalApiOverrides = Record<string, boolean>;
+    35→
+    36→// Optional, gitignored local overrides file:
+    37→// Place a file at apps/web-terminal/.local/local-api.overrides.ts exporting:
+    38→//   export default { trades: true, wallet_tracker: true, search: true };
+    39→// It is only loaded in local env; missing files are ignored.
+    40→const localOverrideModules: Record<string, { default?: LocalApiOverrides }> =
+    41→  IS_LOCAL_ENV
+    42→    ? import.meta.glob("../.local/local-api.overrides.{ts,js}", { eager: true })
+    43→    : {};
+    44→
+    45→const LOCAL_API_FILE_OVERRIDES: LocalApiOverrides = Object.values(
+    46→  localOverrideModules
+    47→).reduce((acc, mod) => {
+    48→  if (mod?.default && typeof mod.default === "object") {
+    49→    Object.entries(mod.default).forEach(([key, value]) => {
+    50→      if (typeof value === "boolean") acc[key] = value;
+    51→    });
+    52→  }
+    53→  return acc;
+    54→}, {} as LocalApiOverrides);
+    55→
+    56→const STORAGE_SESSION_KEY = "localApi.override._serverSession";
+    57→
+    58→const syncFileOverridesToStorage = (): void => {
+    59→  if (!IS_LOCAL_ENV) return;
+    60→
+    61→  try {
+    62→    const storedSession = localStorage.getItem(STORAGE_SESSION_KEY);
+    63→    if (storedSession === __SERVER_SESSION_ID__) return;
+    64→
+    65→    Object.entries(LOCAL_API_FILE_OVERRIDES).forEach(([key, value]) => {
+    66→      localStorage.setItem(`localApi.override.${key}`, String(value));
+    67→    });
+    68→    localStorage.setItem(STORAGE_SESSION_KEY, __SERVER_SESSION_ID__);
+    69→  } catch {
+    70→    // localStorage unavailable
+    71→  }
+    72→};
+    73→
+    74→syncFileOverridesToStorage();
+    75→
+    76→// Local-only override for routing requests to /local-api proxy in dev.
+    77→export const useLocalApiFor = (endpoint: string): boolean => {
+    78→  if (!IS_LOCAL_ENV) return false;
+    79→  try {
+    80→    return localStorage.getItem(`localApi.override.${endpoint}`) === "true";
+    81→  } catch {
+    82→    return false;
+    83→  }
+    84→};
+    85→
+    86→///////////////////////
+    87→// API & SIGNER config
+    88→///////////////////////
+    89→
+    90→// Custom API environment headers (only for non-prod), check cloudflare previews-redirects worker
+    91→export const CUSTOM_WEB_API = !IS_PRODUCTION_ENV
+    92→  ? import.meta.env.VITE_CUSTOM_WEB_API
+    93→  : undefined;
+    94→export const CUSTOM_DATA_API = !IS_PRODUCTION_ENV
+    95→  ? import.meta.env.VITE_CUSTOM_DATA_API
+    96→  : undefined;
+    97→
+    98→export const SIGNER_URL =
+    99→  !IS_PRODUCTION_ENV && window.CUSTOM_SIGNER_URL
+   100→    ? window.CUSTOM_SIGNER_URL
+   101→    : import.meta.env.VITE_SIGNER_URL;
+   102→
+   103→const BOT_NAME =
+   104→  !IS_PRODUCTION_ENV && window.CUSTOM_BOT_NAME
+   105→    ? window.CUSTOM_BOT_NAME
+   106→    : import.meta.env.VITE_BOT_NAME;
+   107→
+   108→export const SIGNER_URL_WITH_BOT_NAME = SIGNER_URL + "/" + BOT_NAME;
+   109→
+   110→export const WEBSOCKET_URL = SKIP_API_PROXY
+   111→  ? import.meta.env.VITE_DATA_API_URL
+   112→  : IS_LOCAL_ENV
+   113→    ? `wss://${window.location.hostname}:${window.location.port || 3000}/data`
+   114→    : `wss://${window.location.hostname}/data`;
+   115→
+   116→// Socket.IO Server URL
+   117→export const SENTINEL_SOCKET_IO_URL = import.meta.env
+   118→  .VITE_SENTINEL_SOCKET_IO_URL;
+   119→
+   120→// PVP URLS
+   121→export const PVP_API_URL = import.meta.env.VITE_PVP_API_URL;
+   122→
+   123→///////////////////////
+   124→
+   125→// required only on localhost, as our domains are whitelisted
+   126→export const PINATA_GATEWAY_TOKEN = import.meta.env.VITE_PINATA_GATEWAY_TOKEN;
+   127→export const PINATA_GATEWAY_URL =
+   128→  IS_PRODUCTION_ENV || IS_STAGING_ENV
+   129→    ? "https://images.telemetry-cdn.io"
+   130→    : "https://images-beta.telemetry-cdn.io";
+   131→
+   132→// SENTRY CONFIG
+   133→export const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN;
+   134→export const ENABLE_REACT_SCAN =
+   135→  import.meta.env.VITE_ENABLE_REACT_SCAN === "true";
+   136→export const ENABLE_ERUDA = import.meta.env.VITE_ENABLE_ERUDA === "true";
+   137→
+   138→///////////////////
+   139→// UI related config
+   140→///////////////////
+   141→export const DEFAULT_ROUTE_DESKTOP = "/dashboard";
+   142→export const DEFAULT_ROUTE_MOBILE = "/x-ray";
+   143→
+   144→export const MIN_SLIPPAGE_WARNING = 50;
+   145→export const MIN_PRIORITY_FEE_WARNING = 5;
+   146→
+   147→export const MAXIMUM_AUTO_STRATS = 3;
+   148→export const MAXIMUM_AUTO_STRAT_ORDERS = 4;
+   149→export const FALLBACK_MCAP_TRIGGER_VALUE = "1";
+   150→export const MAX_MCAP = 1e14;
+   151→export const MAX_RANGE_FILTER = 1e14;
+   152→
+   153→export const TOKEN_EVENTS_FETCH_LIMIT = 10000;
+   154→
+   155→export const IS_DEVELOP = import.meta.env.DEV === true;
+   156→
+   157→// Enable sentry on staging, prod, and any preview urls
+   158→export const IS_SENTRY_ENABLED =
+   159→  IS_PRODUCTION_ENV ||
+   160→  IS_STAGING_ENV ||
+   161→  window.location.origin.includes("pr.bonkbot.io") ||
+   162→  window.location.origin.includes("guild-navigator.bonkbot.io");
+   163→
+   164→export const DISCORD_URL = "https://discord.gg/qy5ukGRs5M";
+   165→export const X_URL = "https://x.com/bonkbot_io";
+   166→export const TG_SUPPORT_URL = "https://t.me/BONKbotChat";
+   167→export const DOCS_URL = "https://docs.bonkbot.io";
+   168→export const CHART_BRANDING = "TELEMETRY";
+   169→export const TOS_URL = "https://telemetry.io/terms-of-use";
+   170→export const PRIVACY_POLICY_URL = "https://telemetry.io/privacy-policy";
+   171→export const MIN_SWAP_DURATION_BEFORE_SHOWING_DESCRIPTION = 1000 * 5; // 5sec
+   172→export const TRANSACTION_FAILURE_TIMESTAMP_THRESHOLD = 1000 * 60 * 5; // 5 minutes
+   173→
+   174→///////////////////
+   175→// Refetching config
+   176→///////////////////
+   177→export const RQUERY_REFETCH_INTERVAL = 10000; // 10sec
+   178→export const RQUERY_EXPECTED_PROFIT_REFETCH_INTERVAL = 2500; // 5sec
+   179→export const RQUERY_POSITIONS_REFETCH_INTERVAL = 5000; // 5secs
+   180→export const RQUERY_STALE_TIME_INFINITY = Infinity;
+   181→export const RQUERY_PNL_V2_REFETCH_INTERVAL = 180000; // 3 minutes
+   182→
+   183→export const RQUERY_TOTAL_BALANCE_REFETCH_INTERVAL = 5000;
+   184→export const RQUERY_ACTIVE_WALLETS_TABLE_REFETCH_INTERVAL = 5000;
+   185→
+   186→// UI config
+   187→export const TABLE_ROW_HEIGHT_SMALL = 36;
+   188→
+   189→// websocket per env
+   190→export const WS_TOPIC_ENV =
+   191→  IS_PRODUCTION_ENV || IS_STAGING_ENV ? "prod" : "beta";
+   192→
+   193→export const TRADINGVIEW_IFRAME_ID = "tradingview-iframe";
+   194→
+   195→// Withdrawal fees (in lamports)
+   196→export const WITHDRAWAL_BASE_FEE_IN_LAMPORTS = 5000;
+   197→export const WITHDRAWAL_PRIORITY_FEE_IN_LAMPORTS = 200;
+   198→export const WITHDRAWAL_TOTAL_FEE_IN_LAMPORTS =
+   199→  WITHDRAWAL_BASE_FEE_IN_LAMPORTS + WITHDRAWAL_PRIORITY_FEE_IN_LAMPORTS;
+   200→
+   201→export const DEFAULT_LOGIN_PAGE_URL = "/sign-up";
+   202→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

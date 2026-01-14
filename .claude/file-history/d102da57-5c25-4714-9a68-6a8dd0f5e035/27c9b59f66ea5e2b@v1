@@ -1,0 +1,114 @@
+# External Integrations
+
+**Analysis Date:** 2026-01-09
+
+## APIs & External Services
+
+**BONKbot Web Terminal API (Primary Data Source):**
+- Purpose: Token market data, OHLCV, trades, whale tracking
+- SDK/Client: Custom `ApiClient` class in `src/api/client.ts`
+- Base URLs:
+  - Local: `http://localhost:8787` (development)
+  - Beta: `https://beta-data.bonkbot.io/data` (fallback)
+- Timeout: 30 seconds (configurable)
+- Auth: None (internal service)
+
+**Endpoints Used:**
+- `GET /local-api/market_data/{mint}` - Single token market data
+- `GET /local-api/market_data_batch?mint=...` - Batch market data
+- `GET /local-api/ohlcv/token/{mint}/{resolution}` - Candlestick data
+- `GET /local-api/trades/{mint}` - Recent trades
+- `GET /local-api/holders_stats/{mint}` - Holder statistics
+- `GET /local-api/discovery/whale_moves` - Whale activity
+- `GET /local-api/discovery/trending` - Trending tokens
+- `GET /local-api/search?text=...` - Token search
+- `GET /health` - Health check
+
+## Data Storage
+
+**Databases:**
+- None - File-based storage only
+
+**File Storage:**
+- Config: `.autopilot/config.json` - `src/config/store.ts`
+- Trades: `.autopilot/trades.json` - `src/trading/paper-tracker.ts`
+- Location: Project root `.autopilot/` directory (gitignored)
+
+**Caching:**
+- In-memory rotation cache per token - `src/rules/rotations.ts`
+- No persistent cache
+
+## Authentication & Identity
+
+**Auth Provider:**
+- None - Local CLI tool, no user auth
+
+**OAuth Integrations:**
+- None
+
+## Monitoring & Observability
+
+**Error Tracking:**
+- Console.error for errors
+- No external error tracking service
+
+**Analytics:**
+- None
+
+**Logs:**
+- Console output only
+- Bracketed module prefixes: `[WS]`, `[API]`
+
+## CI/CD & Deployment
+
+**Hosting:**
+- Local execution only (CLI tool)
+- No cloud deployment
+
+**CI Pipeline:**
+- None configured
+
+## Environment Configuration
+
+**Development:**
+- Required env vars: None (config is file-based)
+- Config location: `.autopilot/config.json`
+- API fallback: localhost:8787 → beta-data.bonkbot.io
+
+**Staging:**
+- Not applicable (local tool)
+
+**Production:**
+- Same as development
+- WebSocket server on port 8765
+
+## Webhooks & Callbacks
+
+**Incoming:**
+- None
+
+**Outgoing:**
+- None
+
+## Future Integrations
+
+**LOIS (Live Order Intelligent System):**
+- Status: Architecture designed, not implemented
+- Purpose: Live trade execution on Solana
+- Integration points prepared in:
+  - `src/rules/lois-types.ts` - Type definitions
+  - `src/rules/dispatcher.ts` - Signal routing
+  - `src/websocket-server.ts` - LOIS compatibility markers
+- Mode flag: `mode: 'paper' | 'live'` in `src/config/types.ts`
+
+**Frontend Connection:**
+- WebSocket server for real-time updates
+- Port: 8765 (configurable)
+- Events: position_update, signal, market_status, stats_update, scan_tick, token_list, config, strategies
+- Commands: toggle_sources, set_mode, set_position_size, manage_strategies
+- Frontend path: `/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot`
+
+---
+
+*Integration audit: 2026-01-09*
+*Update when adding/removing external services*

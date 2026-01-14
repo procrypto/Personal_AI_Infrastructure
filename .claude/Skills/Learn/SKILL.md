@@ -1,0 +1,230 @@
+---
+name: Learn
+description: PAI Self-Learning System. View detected patterns, metrics, and learnings from analytics. USE WHEN user says "show patterns", "view metrics", "what have you learned", "analytics", OR wants to see improvement trends, failure modes, or success rates.
+---
+
+# Learn - PAI Self-Learning System
+
+**Access to PAI's pattern learning and analytics system.**
+
+The Learn skill provides visibility into PAI's self-learning capabilities - patterns detected from session history, performance metrics, and improvement trends.
+
+## Commands
+
+### /learn patterns [--skill X] [--type Y]
+
+View detected patterns from analytics.
+
+**Options:**
+- `--skill <name>` - Filter by skill (Research, Engineer, etc.)
+- `--type <type>` - Filter by type (success, failure, behavioral)
+- `--limit <n>` - Number of patterns to show (default: 20)
+
+**Example:**
+```
+/learn patterns
+/learn patterns --type failure
+/learn patterns --skill Research
+```
+
+### /learn metrics [--days N]
+
+View success/failure rates and performance metrics.
+
+**Options:**
+- `--days <n>` - Lookback period (default: 30)
+
+**Shows:**
+- Tool usage statistics and error rates
+- Session duration averages
+- Agent performance by type
+- Judge verdict distribution
+
+### /learn judge [--skill X]
+
+View Judge evaluation statistics.
+
+**Options:**
+- `--skill <name>` - Filter by skill
+
+**Shows:**
+- Pass/Revise/Reject rates
+- Failure mode distribution (FM1-FM7)
+- Iteration counts
+- Quality trends
+
+### /learn trends [--weeks N]
+
+View improvement trends over time.
+
+**Options:**
+- `--weeks <n>` - Number of weeks to analyze (default: 12)
+
+**Shows:**
+- Pass rate trends
+- Tool error rate trends
+- Session efficiency trends
+
+### /learn analyze [--session ID | --today | --days N]
+
+Run or re-run analytics on session data.
+
+**Options:**
+- `--session <id>` - Analyze specific session
+- `--today` - Analyze today's sessions
+- `--days <n>` - Re-run ETL for last N days
+
+**Example:**
+```
+/learn analyze --today
+/learn analyze --days 7
+```
+
+### /learn recall [topic]
+
+Search past learnings for relevant context.
+
+**Example:**
+```
+/learn recall "API integration"
+/learn recall "test failures"
+```
+
+## Examples
+
+**Example 1: View detected patterns**
+```
+User: "Show me what patterns you've learned"
+→ Invokes /learn patterns
+→ Queries analytics database for detected patterns
+→ Displays failure patterns (to avoid), success patterns (recommended), behavioral patterns (context)
+```
+
+**Example 2: Check performance metrics**
+```
+User: "How are my tools performing?"
+→ Invokes /learn metrics
+→ Shows tool usage statistics, session data, agent performance
+→ Highlights error rates and success percentages
+```
+
+**Example 3: Analyze Judge verdicts**
+```
+User: "Show me Judge statistics"
+→ Invokes /learn judge
+→ Displays PASS/REVISE/REJECT rates
+→ Shows failure mode distribution (FM1-FM7)
+```
+
+## Workflow
+
+When `/learn` is invoked:
+
+1. Parse command and options
+2. Query analytics database (`~/.claude/Analytics/analytics.db`)
+3. Format results for display
+4. Present findings to user
+
+## Example Outputs
+
+### Patterns Output
+
+```
+Detected Patterns (56 total):
+
+FAILURE PATTERNS (to avoid):
+[ERR-001] Bash Error Rate
+  → Bash has 5.2% error rate - verify inputs carefully
+  Confidence: 92% | Sample: 2235
+
+SUCCESS PATTERNS (recommended):
+[SEQ-001] Tool Sequence: Read → Read → Read
+  → Common pattern: Read → Read → Read
+  Confidence: 98% | Sample: 598
+
+BEHAVIORAL PATTERNS (context):
+[PRJ-001] Project: PAI
+  → PAI: Complex project - expect context compactions
+  Confidence: 89% | Sample: 45
+```
+
+### Metrics Output
+
+```
+PAI Analytics Metrics (Last 30 days):
+
+TOOL USAGE:
+  Bash:  2,235 calls | 94.8% success
+  Read:  2,164 calls | 100% success
+  Edit:  1,362 calls | 100% success
+  Grep:    444 calls | 100% success
+
+SESSIONS:
+  Total: 117 sessions
+  Avg Duration: 42 minutes
+  Compaction Rate: 0.3/session
+
+AGENTS:
+  Explore:  156 spawns
+  Plan:      89 spawns
+  Engineer:  67 spawns
+```
+
+### Judge Output
+
+```
+Judge Statistics (Last 30 days):
+
+VERDICTS:
+  PASS:   45 (60%)
+  REVISE: 22 (29%)
+  REJECT:  8 (11%)
+
+FAILURE MODES:
+  FM7 (Confidence Games): 15 occurrences
+  FM2 (Assertion Without Demo): 12 occurrences
+  FM4 (Calibration Failures): 8 occurrences
+
+SKILLS:
+  Research: 40% pass rate
+  StoryExplanation: 75% pass rate
+```
+
+## Data Sources
+
+The Learn skill queries:
+
+1. **Analytics Database** (`~/.claude/Analytics/analytics.db`)
+   - Sessions, tool usage, agent spawns
+   - Judge verdicts and failure modes
+   - Detected patterns
+
+2. **Pattern Files** (`~/.claude/Analytics/patterns/`)
+   - JSON files for each detected pattern
+   - Human-readable, git-trackable
+
+3. **JSONL History** (`~/.claude/History/Raw-Outputs/`)
+   - Source data for ETL processing
+   - Daily event logs
+
+## Integration
+
+The Learn skill works with:
+
+- **SessionStart Hook** - Auto-primes context with relevant patterns
+- **Stop Hook** - Captures Judge verdicts
+- **ETL Pipeline** - Processes JSONL into structured analytics
+- **Pattern Detector** - Identifies success/failure patterns
+
+## Running Analytics Manually
+
+```bash
+# Run ETL for last 7 days
+bun ~/.claude/Analytics/etl-pipeline.ts run 7
+
+# Detect patterns from current data
+bun ~/.claude/Analytics/pattern-detector.ts detect
+
+# View database statistics
+bun ~/.claude/Analytics/etl-pipeline.ts stats
+```

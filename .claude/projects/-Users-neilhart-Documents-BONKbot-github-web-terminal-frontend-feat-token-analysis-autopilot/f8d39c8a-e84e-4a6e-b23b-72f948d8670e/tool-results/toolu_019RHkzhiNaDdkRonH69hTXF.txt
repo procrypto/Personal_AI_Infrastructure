@@ -1,0 +1,676 @@
+     1→import { TableEmpty } from "@/components/table/table-empty";
+     2→import { TablePagination } from "@/components/table/table-pagination";
+     3→import { usePauseOnHover } from "@/hooks/usePauseOnHover";
+     4→import { useTableAutoLoad } from "@/hooks/useTableAutoLoad";
+     5→import { cn } from "@/lib/utils";
+     6→import { TableExternalStoreKey } from "@/store/persistentStore/slices/tables-store/types";
+     7→import { usePersistentGlobalStore } from "@/store/persistentStore/usePersistentGlobalStore";
+     8→import { useOptionalDragState } from "@/ui/multiwallet/components/drag-and-drop/dnd-provider";
+     9→import {
+    10→  ColumnDef,
+    11→  ColumnFiltersState,
+    12→  ColumnOrderState,
+    13→  CoreOptions,
+    14→  getCoreRowModel,
+    15→  getExpandedRowModel,
+    16→  getFilteredRowModel,
+    17→  getPaginationRowModel,
+    18→  getSortedRowModel,
+    19→  OnChangeFn,
+    20→  PaginationState,
+    21→  Row,
+    22→  SortingState,
+    23→  Updater,
+    24→  useReactTable,
+    25→  VisibilityState,
+    26→  Header,
+    27→  Cell,
+    28→  type Table as ReactTable,
+    29→} from "@tanstack/react-table";
+    30→import { useVirtualizer } from "@tanstack/react-virtual";
+    31→import React, {
+    32→  useCallback,
+    33→  useEffect,
+    34→  useMemo,
+    35→  useRef,
+    36→  useState,
+    37→} from "react";
+    38→import {
+    39→  DndContext,
+    40→  DragEndEvent,
+    41→  PointerSensor,
+    42→  TouchSensor,
+    43→  closestCenter,
+    44→  useSensor,
+    45→  useSensors,
+    46→} from "@dnd-kit/core";
+    47→import {
+    48→  SortableContext,
+    49→  verticalListSortingStrategy,
+    50→} from "@dnd-kit/sortable";
+    51→import {
+    52→  restrictToParentElement,
+    53→  restrictToVerticalAxis,
+    54→} from "@dnd-kit/modifiers";
+    55→import { t } from "@lingui/core/macro";
+    56→import { useShallow } from "zustand/react/shallow";
+    57→import type { TopBarTableMeta } from "@/components/table/types";
+    58→import { useMediaQuery, useResizeObserver } from "usehooks-ts";
+    59→import { MOBILE_BREAKPOINT } from "@/utils/breakpoints.ts";
+    60→import { LoadingSpinner } from "@/components/loading-spinner";
+    61→import { DraggableTableRow } from "@/components/table/components/draggable-table-row";
+    62→import { VirtualizedTableRow } from "@/components/table/components/virtualized-table-row";
+    63→import { MemoizedTableHead } from "@/components/table/components/table-head-cell";
+    64→import { MemoizedTableCell } from "@/components/table/components/table-body-cell";
+    65→import { SquareSlash } from "lucide-react";
+    66→import { ListFilterButton } from "@/ui/base/ListFilterButton.tsx";
+    67→
+    68→type WithExternalStore = {
+    69→  storeKey: TableExternalStoreKey;
+    70→};
+    71→
+    72→type WithoutExternalStore = {
+    73→  storeKey?: undefined;
+    74→};
+    75→
+    76→type ExternalStore = WithExternalStore | WithoutExternalStore;
+    77→
+    78→export type TableProps<TData = unknown> = {
+    79→  /* eslint-disable  @typescript-eslint/no-explicit-any */
+    80→  columns: ColumnDef<TData, any>[];
+    81→  data: TData[];
+    82→  estimateRowSize: number;
+    83→  tableHeadClassName?: React.ComponentProps<"thead">["className"];
+    84→  tableCellClassName?: string;
+    85→  tableRowClassName?: ((row: Row<TData>) => string) | string;
+    86→  emptyTableWrapperClassName?: string;
+    87→  enablePagination?: boolean;
+    88→  paginationPageSize?: number;
+    89→  paginationPageIndex?: number;
+    90→  /**
+    91→   * Icon to show when there's no data in the table.
+    92→   */
+    93→  noDataIcon?: React.ReactNode;
+    94→  /**
+    95→   * Description to show when there's no data in the table.
+    96→   */
+    97→  noDataDescription?: React.ReactNode;
+    98→  /**
+    99→   * Action to show below the
+   100→   * {@linkcode TableProps.noDataDescription noDataDescription} when there's
+   101→   * no data in the table.
+   102→   */
+   103→  noDataAction?: React.ReactNode;
+   104→  /**
+   105→   * Icon to show when there *is* data in the table, but no rows match the
+   106→   * active filters.
+   107→   */
+   108→  noFilteredDataIcon?: React.ReactNode;
+   109→  /**
+   110→   * Description to show when there *is* data in the table, but no rows match
+   111→   * the active filters.
+   112→   */
+   113→  noFilteredDataDescription?: React.ReactNode;
+   114→  /**
+   115→   * Action to show below the
+   116→   * {@linkcode TableProps.noFilteredDataDescription noFilteredDataDescription}
+   117→   * when there *is* data in the table, but no rows match the active filters.
+   118→   */
+   119→  noFilteredDataAction?: React.ReactNode;
+   120→  isLoading?: boolean;
+   121→  className?: React.ComponentProps<"div">["className"];
+   122→  onRowClick?: (
+   123→    row: Row<TData>,
+   124→    e: React.MouseEvent<HTMLTableRowElement, MouseEvent>
+   125→  ) => void;
+   126→  enablePause?: boolean;
+   127→  hideHeaderOnNoData?: boolean;
+   128→  onScrollEnd?: () => void;
+   129→  getSubRows?: CoreOptions<TData>["getSubRows"];
+   130→  getRowId?: CoreOptions<TData>["getRowId"];
+   131→  rowHeight?: "small" | "medium";
+   132→  onRowHover?: (rowIndex: number | null) => void;
+   133→  highlightedIndex?: number | null;
+   134→  columnVisibility?: VisibilityState;
+   135→  onColumnVisibilityChange?: OnChangeFn<VisibilityState>;
+   136→  columnOrder?: ColumnOrderState;
+   137→  onColumnOrderChange?: OnChangeFn<ColumnOrderState>;
+   138→  getRowUrl?: (row: Row<TData>) => string;
+   139→  overscan?: number;
+   140→  topBar?: (params: {
+   141→    meta: TopBarTableMeta<TData>;
+   142→    isPaused?: boolean;
+   143→  }) => React.ReactNode;
+   144→  onRowRightClick?: (row: Row<TData>) => void;
+   145→  initialSorting?: SortingState;
+   146→  tableHeadRowClassName?: string;
+   147→  tableHeadCellClassName?: string;
+   148→  showPauseIconOnly?: boolean;
+   149→  hidePauseIndicator?: boolean;
+   150→  isNextPageLoading?: boolean;
+   151→  dataVersionKey?: string | number;
+   152→  manualFiltering?: boolean;
+   153→  manualSorting?: boolean;
+   154→  hasMoreData?: boolean;
+   155→  customRowRenderer?: (props: {
+   156→    row: Row<TData>;
+   157→    virtualRow: { index: number; start: number; size: number };
+   158→    cells: React.ReactNode[];
+   159→    rowClassName: string;
+   160→    rowStyle: React.CSSProperties;
+   161→    onMouseEnter: () => void;
+   162→    onMouseLeave: () => void;
+   163→    onContextMenu: (e: React.MouseEvent) => void;
+   164→    onClick: (e: React.MouseEvent<HTMLTableRowElement, MouseEvent>) => void;
+   165→  }) => React.ReactNode;
+   166→  dndRows?: {
+   167→    onDragEnd(event: DragEndEvent): void;
+   168→    disableDragging?: boolean;
+   169→    draggableColumnId?: string;
+   170→  };
+   171→  onTableInstance?: (table: ReactTable<TData>) => void;
+   172→  "data-testid"?: string;
+   173→  rowGap?: number;
+   174→} & ExternalStore;
+   175→
+   176→const emptyFilters: ColumnFiltersState = [];
+   177→const emptySorting: SortingState = [];
+   178→
+   179→export const Table = <TData,>({
+   180→  columns,
+   181→  data,
+   182→  estimateRowSize,
+   183→  tableHeadClassName,
+   184→  tableRowClassName,
+   185→  tableCellClassName,
+   186→  emptyTableWrapperClassName,
+   187→  enablePagination = false,
+   188→  paginationPageSize = 10,
+   189→  paginationPageIndex = 0,
+   190→  noDataIcon = <SquareSlash />,
+   191→  noDataDescription,
+   192→  noDataAction,
+   193→  noFilteredDataIcon = noDataIcon,
+   194→  noFilteredDataDescription = noDataDescription,
+   195→  noFilteredDataAction,
+   196→  isLoading = false,
+   197→  className,
+   198→  onRowClick,
+   199→  enablePause = false,
+   200→  hideHeaderOnNoData = false,
+   201→  onScrollEnd,
+   202→  getSubRows,
+   203→  getRowId,
+   204→  rowHeight = "medium",
+   205→  onRowHover,
+   206→  highlightedIndex = null,
+   207→  columnOrder,
+   208→  onColumnOrderChange,
+   209→  columnVisibility,
+   210→  onColumnVisibilityChange,
+   211→  getRowUrl,
+   212→  topBar,
+   213→  overscan = 5,
+   214→  onRowRightClick,
+   215→  tableHeadRowClassName,
+   216→  tableHeadCellClassName,
+   217→  showPauseIconOnly,
+   218→  hidePauseIndicator,
+   219→  isNextPageLoading = false,
+   220→  dataVersionKey,
+   221→  hasMoreData = false,
+   222→  customRowRenderer,
+   223→  dndRows,
+   224→  storeKey,
+   225→  initialSorting,
+   226→  manualFiltering,
+   227→  manualSorting,
+   228→  onTableInstance,
+   229→  "data-testid": dataTestId,
+   230→  rowGap,
+   231→}: TableProps<TData>) => {
+   232→  const isMobileScreen = useMediaQuery(MOBILE_BREAKPOINT);
+   233→
+   234→  const dragState = useOptionalDragState();
+   235→  const isDragging = dragState?.isDragging ?? false;
+   236→
+   237→  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+   238→  const [sorting, setSorting] = useState<SortingState>(
+   239→    (storeKey === undefined && initialSorting) || []
+   240→  );
+   241→  const [pagination, setPagination] = useState<PaginationState>({
+   242→    pageIndex: paginationPageIndex ?? 0,
+   243→    pageSize: paginationPageSize ?? 10,
+   244→  });
+   245→  const { externalColumnFilters, externalSorting, setTableFilter } =
+   246→    usePersistentGlobalStore(
+   247→      useShallow(state => {
+   248→        let filters = emptyFilters;
+   249→        let sorting = emptySorting;
+   250→
+   251→        if (storeKey) {
+   252→          filters = state.tables[storeKey].columnFilters;
+   253→          sorting = state.tables[storeKey].sorting;
+   254→        }
+   255→
+   256→        return {
+   257→          externalColumnFilters: filters,
+   258→          externalSorting: sorting,
+   259→          setTableFilter: state.tables.setTableFilter,
+   260→        };
+   261→      })
+   262→    );
+   263→
+   264→  const {
+   265→    isPaused,
+   266→    data: tableData,
+   267→    onMouseEnter,
+   268→    onMouseLeave,
+   269→    syncToLatest,
+   270→  } = usePauseOnHover({
+   271→    liveData: data,
+   272→  });
+   273→
+   274→  const onColumnFiltersChange = useCallback(
+   275→    (updater: Updater<ColumnFiltersState>) => {
+   276→      if (storeKey) {
+   277→        const result =
+   278→          typeof updater === "function"
+   279→            ? updater(externalColumnFilters)
+   280→            : updater;
+   281→
+   282→        return setTableFilter(storeKey, "columnFilters", result);
+   283→      }
+   284→
+   285→      setColumnFilters(updater);
+   286→    },
+   287→    [storeKey, externalColumnFilters, setTableFilter, setColumnFilters]
+   288→  );
+   289→
+   290→  const onSortingChange = useCallback(
+   291→    (updater: Updater<SortingState>) => {
+   292→      if (storeKey) {
+   293→        const result =
+   294→          typeof updater === "function" ? updater(externalSorting) : updater;
+   295→
+   296→        return setTableFilter(storeKey, "sorting", result);
+   297→      }
+   298→
+   299→      setSorting(updater);
+   300→    },
+   301→    [storeKey, externalSorting, setTableFilter, setSorting]
+   302→  );
+   303→
+   304→  const normalizedColumns = useMemo(
+   305→    () => columns.map(col => ({ ...col, minSize: col.minSize ?? col.size })),
+   306→    [columns]
+   307→  );
+   308→
+   309→  const memoizedData = useMemo(
+   310→    () => (enablePause ? tableData : data),
+   311→    [data, enablePause, tableData]
+   312→  );
+   313→
+   314→  const table = useReactTable({
+   315→    data: tableData,
+   316→    columns: normalizedColumns,
+   317→    getCoreRowModel: getCoreRowModel(),
+   318→    getSortedRowModel: getSortedRowModel(),
+   319→    getFilteredRowModel: getFilteredRowModel(),
+   320→    getPaginationRowModel: enablePagination
+   321→      ? getPaginationRowModel()
+   322→      : undefined,
+   323→    getExpandedRowModel: getExpandedRowModel(),
+   324→    onPaginationChange: enablePagination ? setPagination : undefined,
+   325→    onColumnFiltersChange,
+   326→    onSortingChange,
+   327→    manualFiltering,
+   328→    manualSorting,
+   329→    state: {
+   330→      columnFilters: storeKey ? externalColumnFilters : columnFilters,
+   331→      pagination: enablePagination ? pagination : undefined,
+   332→      sorting: storeKey ? externalSorting : sorting,
+   333→      columnOrder,
+   334→      columnVisibility,
+   335→    },
+   336→    getRowId,
+   337→    debugTable: false,
+   338→    columnResizeMode: "onChange",
+   339→    enableColumnResizing: true,
+   340→    getSubRows,
+   341→    onColumnOrderChange,
+   342→    onColumnVisibilityChange,
+   343→  });
+   344→
+   345→  useEffect(() => onTableInstance?.(table), [onTableInstance, table]);
+   346→
+   347→  const { rows } = table.getRowModel();
+   348→  const tableState = table.getState();
+   349→  const isEmptyFromFilters =
+   350→    !!memoizedData.length && !!tableState.columnFilters.length && !rows.length;
+   351→
+   352→  const tableContainerRef = useRef<HTMLDivElement>(null);
+   353→
+   354→  const { width: tableContainerWidth } = useResizeObserver({
+   355→    ref: tableContainerRef,
+   356→  });
+   357→
+   358→  const estimateSize = useCallback(
+   359→    () => estimateRowSize + (rowGap ?? 0),
+   360→    [estimateRowSize, rowGap]
+   361→  );
+   362→
+   363→  const getScrollElement = useCallback(() => tableContainerRef.current, []);
+   364→
+   365→  const measureElement = useCallback(
+   366→    (node: HTMLElement) => {
+   367→      if (!node) return 0;
+   368→
+   369→      return estimateRowSize;
+   370→    },
+   371→    [estimateRowSize]
+   372→  );
+   373→
+   374→  const rowVirtualizer = useVirtualizer({
+   375→    count: dndRows ? 0 : rows.length,
+   376→    estimateSize,
+   377→    getScrollElement,
+   378→    overscan,
+   379→    measureElement,
+   380→  });
+   381→
+   382→  const { sentinelRef, effectiveIsLoading } = useTableAutoLoad({
+   383→    containerRef: tableContainerRef,
+   384→    rowsLength: rows.length,
+   385→    dataLength: tableData.length,
+   386→    hasMoreData,
+   387→    isLoading,
+   388→    nextPageLoading: isNextPageLoading,
+   389→    onScrollEnd,
+   390→    dataVersionKey,
+   391→    isPaused,
+   392→    syncToLatest,
+   393→  });
+   394→
+   395→  // If external data params changed while paused, refresh paused snapshot
+   396→  useEffect(() => {
+   397→    if (isPaused && dataVersionKey !== undefined) {
+   398→      syncToLatest();
+   399→    }
+   400→  }, [dataVersionKey, isPaused, syncToLatest]);
+   401→
+   402→  const tableMeta = useMemo(
+   403→    () => ({ getColumn: table.getColumn }),
+   404→    [table.getColumn]
+   405→  );
+   406→
+   407→  const dndSensors = useSensors(
+   408→    useSensor(TouchSensor),
+   409→    useSensor(PointerSensor)
+   410→  );
+   411→
+   412→  return (
+   413→    <>
+   414→      {topBar?.({ meta: tableMeta, isPaused })}
+   415→
+   416→      <div
+   417→        ref={tableContainerRef}
+   418→        className={cn(
+   419→          "bg-bg-primary-hover relative flex h-full w-full flex-col justify-between contain-[size_layout]",
+   420→          !isDragging && "overflow-auto",
+   421→          isDragging && "overflow-hidden",
+   422→          className
+   423→        )}
+   424→        data-testid={dataTestId}
+   425→      >
+   426→        <table
+   427→          className={cn(
+   428→            "table-fixed grid-rows-[auto_1fr]",
+   429→            (effectiveIsLoading || rows.length === 0) && "h-full",
+   430→            rows.length === 0 && isMobileScreen && "overflow-hidden"
+   431→          )}
+   432→        >
+   433→          <thead className={cn("sticky top-0 z-10 w-full", tableHeadClassName)}>
+   434→            {table.getHeaderGroups().map(headerGroup => (
+   435→              <tr
+   436→                key={headerGroup.id}
+   437→                className={cn(
+   438→                  "bg-bg-primary-hover border-b-border-primary flex w-full border-b",
+   439→                  hideHeaderOnNoData &&
+   440→                    (effectiveIsLoading ||
+   441→                      (columnFilters.length === 0 && rows.length === 0)) &&
+   442→                    "hidden",
+   443→                  tableHeadRowClassName
+   444→                )}
+   445→              >
+   446→                {headerGroup.headers.map((header, index) => {
+   447→                  return (
+   448→                    <MemoizedTableHead
+   449→                      key={header.id}
+   450→                      header={header as Header<unknown, unknown>}
+   451→                      rowHeight={rowHeight}
+   452→                      tableHeadCellClassName={tableHeadCellClassName}
+   453→                      filtersActive={header.column.getIsFiltered()}
+   454→                      sortDirection={header.column.getIsSorted()}
+   455→                      sortFn={header.column.getToggleSortingHandler()}
+   456→                      headerIndex={index}
+   457→                      headerCount={headerGroup.headers.length}
+   458→                      isPaused={isPaused}
+   459→                      enablePause={enablePause}
+   460→                      showPauseIconOnly={showPauseIconOnly}
+   461→                      hidePauseIndicator={hidePauseIndicator}
+   462→                    />
+   463→                  );
+   464→                })}
+   465→              </tr>
+   466→            ))}
+   467→          </thead>
+   468→          {rows.length === 0 ? (
+   469→            <TableEmpty
+   470→              isLoading={effectiveIsLoading}
+   471→              icon={isEmptyFromFilters ? noFilteredDataIcon : noDataIcon}
+   472→              description={
+   473→                <div className="flex flex-col items-center gap-3">
+   474→                  <span>
+   475→                    {isEmptyFromFilters
+   476→                      ? (noFilteredDataDescription ??
+   477→                        t`No items matching filters`)
+   478→                      : (noDataDescription ?? t`No data at the moment`)}
+   479→                  </span>
+   480→                  {isEmptyFromFilters
+   481→                    ? (noFilteredDataAction ?? (
+   482→                        <ListFilterButton
+   483→                          size="xs"
+   484→                          onClick={() => onColumnFiltersChange([])}
+   485→                        >
+   486→                          {t`Reset Filters`}
+   487→                        </ListFilterButton>
+   488→                      ))
+   489→                    : noDataAction}
+   490→                </div>
+   491→              }
+   492→              emptyTableWrapperClassName={emptyTableWrapperClassName}
+   493→              emptyTableWrapperStyle={
+   494→                tableContainerWidth !== undefined
+   495→                  ? { maxWidth: tableContainerWidth }
+   496→                  : undefined
+   497→              }
+   498→            />
+   499→          ) : dndRows ? (
+   500→            <DndContext
+   501→              sensors={dndSensors}
+   502→              collisionDetection={closestCenter}
+   503→              modifiers={[restrictToParentElement, restrictToVerticalAxis]}
+   504→              onDragEnd={dndRows.onDragEnd}
+   505→            >
+   506→              <SortableContext
+   507→                items={rows}
+   508→                strategy={verticalListSortingStrategy}
+   509→              >
+   510→                <tbody
+   511→                  onMouseEnter={enablePause ? onMouseEnter : undefined}
+   512→                  onMouseLeave={enablePause ? onMouseLeave : undefined}
+   513→                  style={{ width: "100%" }}
+   514→                >
+   515→                  {rows.map((row, index) => (
+   516→                    <DraggableTableRow
+   517→                      key={row.id}
+   518→                      index={index}
+   519→                      row={row}
+   520→                      estimateRowSize={estimateRowSize}
+   521→                      onRowHover={onRowHover}
+   522→                      highlightedIndex={highlightedIndex}
+   523→                      onRowRightClick={onRowRightClick}
+   524→                      onRowClick={onRowClick}
+   525→                      tableRowClassName={tableRowClassName}
+   526→                      getRowUrl={getRowUrl}
+   527→                      rowHeight={rowHeight}
+   528→                      tableCellClassName={tableCellClassName}
+   529→                      draggableColumnId={dndRows?.draggableColumnId}
+   530→                      disableDragging={dndRows?.disableDragging}
+   531→                    />
+   532→                  ))}
+   533→                </tbody>
+   534→              </SortableContext>
+   535→            </DndContext>
+   536→          ) : (
+   537→            <tbody
+   538→              onMouseEnter={enablePause ? onMouseEnter : undefined}
+   539→              onMouseLeave={enablePause ? onMouseLeave : undefined}
+   540→              style={{
+   541→                height: `${rowVirtualizer.getTotalSize()}px`,
+   542→                position: "relative",
+   543→                width: "100%",
+   544→              }}
+   545→            >
+   546→              {rowVirtualizer.getVirtualItems().map((virtualRow, index) => {
+   547→                const row = rows[virtualRow.index] as Row<TData>;
+   548→
+   549→                const rowClassName = cn(
+   550→                  "relative transition-colors",
+   551→                  virtualRow.index % 2 === 0
+   552→                    ? "bg-bg-tertiary"
+   553→                    : "bg-bg-primary-hover",
+   554→                  onRowClick && "cursor-pointer",
+   555→                  onRowClick &&
+   556→                    highlightedIndex === null &&
+   557→                    "hover:bg-bg-quartiary/50",
+   558→                  highlightedIndex === index && "bg-bg-quartiary!",
+   559→                  typeof tableRowClassName === "function"
+   560→                    ? tableRowClassName(row)
+   561→                    : tableRowClassName
+   562→                );
+   563→
+   564→                const rowStyle: React.CSSProperties = {
+   565→                  display: "flex",
+   566→                  position: "absolute",
+   567→                  transform: `translateY(${virtualRow.start}px)`,
+   568→                  width: "100%",
+   569→                  minHeight: `${estimateRowSize}px`,
+   570→                };
+   571→
+   572→                const cells = row.getVisibleCells().map(cell => {
+   573→                  const url = getRowUrl ? getRowUrl(row) : undefined;
+   574→
+   575→                  return (
+   576→                    <MemoizedTableCell
+   577→                      key={`${cell.id}${cell.column.id === "expander" ? cell.row.getIsExpanded() : ""}`}
+   578→                      cell={cell as Cell<unknown, unknown>}
+   579→                      rowHeight={rowHeight}
+   580→                      tableCellClassName={tableCellClassName}
+   581→                      url={url}
+   582→                      index={index}
+   583→                    />
+   584→                  );
+   585→                });
+   586→
+   587→                const handleMouseEnter = () => onRowHover?.(index);
+   588→                const handleMouseLeave = () => onRowHover?.(null);
+   589→                const handleContextMenu = (e: React.MouseEvent) => {
+   590→                  if (onRowRightClick) {
+   591→                    e.preventDefault(); // prevent default context menu only if we handle right click
+   592→                    onRowRightClick(row);
+   593→                  }
+   594→                };
+   595→                const handleClick = (
+   596→                  e: React.MouseEvent<HTMLTableRowElement, MouseEvent>
+   597→                ) => {
+   598→                  onRowClick?.(row, e);
+   599→                };
+   600→
+   601→                // custom row renderer if provided, if not use default
+   602→                if (customRowRenderer) {
+   603→                  return (
+   604→                    <div
+   605→                      key={virtualRow.index}
+   606→                      data-index={virtualRow.index}
+   607→                      ref={node => rowVirtualizer.measureElement(node)}
+   608→                    >
+   609→                      {customRowRenderer({
+   610→                        row,
+   611→                        virtualRow,
+   612→                        cells,
+   613→                        rowClassName,
+   614→                        rowStyle,
+   615→                        onMouseEnter: handleMouseEnter,
+   616→                        onMouseLeave: handleMouseLeave,
+   617→                        onContextMenu: handleContextMenu,
+   618→                        onClick: handleClick,
+   619→                      })}
+   620→                    </div>
+   621→                  );
+   622→                }
+   623→
+   624→                return (
+   625→                  <VirtualizedTableRow
+   626→                    key={row.id}
+   627→                    virtualRow={virtualRow}
+   628→                    index={index}
+   629→                    row={row}
+   630→                    estimateRowSize={estimateRowSize}
+   631→                    measureElement={rowVirtualizer!.measureElement}
+   632→                    onRowHover={onRowHover}
+   633→                    highlightedIndex={highlightedIndex}
+   634→                    onRowRightClick={onRowRightClick}
+   635→                    onRowClick={onRowClick}
+   636→                    tableRowClassName={tableRowClassName}
+   637→                    getRowUrl={getRowUrl}
+   638→                    rowHeight={rowHeight}
+   639→                    tableCellClassName={tableCellClassName}
+   640→                    rowGap={rowGap}
+   641→                  />
+   642→                );
+   643→              })}
+   644→            </tbody>
+   645→          )}
+   646→        </table>
+   647→
+   648→        {/* End-of-list sentinel for intersection observer */}
+   649→        {!isNextPageLoading && (
+   650→          <div
+   651→            ref={sentinelRef}
+   652→            className="h-px w-full"
+   653→          />
+   654→        )}
+   655→
+   656→        {/* Next page loading indicator */}
+   657→        {isNextPageLoading && rows.length > 0 && (
+   658→          <div className="border-text-disabled/30 bg-bg-primary-hover/95 sticky bottom-0 flex w-full items-center justify-center border-t py-3 backdrop-blur-sm">
+   659→            <div className="border-text-disabled/60 bg-bg-primary-hover/80 rounded-full border px-3 py-1 shadow-md backdrop-blur-sm">
+   660→              <LoadingSpinner size="sm" />
+   661→            </div>
+   662→          </div>
+   663→        )}
+   664→      </div>
+   665→
+   666→      {enablePagination && rows.length > 0 && !effectiveIsLoading && (
+   667→        <TablePagination table={table} />
+   668→      )}
+   669→    </>
+   670→  );
+   671→};
+   672→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

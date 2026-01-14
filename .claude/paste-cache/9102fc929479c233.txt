@@ -1,0 +1,36 @@
+⏺ Good question. Let me check if the new engine uses the data feed from frontend or still polls the API.
+
+⏺ Search(pattern: "new-engine|newEngine|NEW ENGINE", path: "src/cli.ts", output_mode: "content")
+  ⎿  Found 36 lines (ctrl+o to expand)
+  ⎿  Running PostToolUse hooks… (1/2 done)
+
+⏺ Search(pattern: "market_data_feed|handleDataFeed|onDataFeed", path: "src", output_mode: "content")
+  ⎿  Found 21 lines (ctrl+o to expand)
+  ⎿  Running PostToolUse hooks… (1/2 done)
+
+⏺ Read(src/cli.ts)
+  ⎿  Read 30 lines
+  ⎿  Running PostToolUse hooks… (1/2 done)
+
+⏺ Answer: HYBRID architecture
+  ┌───────────────────────────────┬────────────────────────┬───────────────────────────────────────────────┐
+  │           Data Type           │         Source         │                      How                      │
+  ├───────────────────────────────┼────────────────────────┼───────────────────────────────────────────────┤
+  │ Token list (trending, whales) │ API localhost:8787     │ autoSources.refreshIfNeeded() polls every 15m │
+  ├───────────────────────────────┼────────────────────────┼───────────────────────────────────────────────┤
+  │ Market data for signals       │ Frontend via WebSocket │ market_data_feed messages → signal pipeline   │
+  └───────────────────────────────┴────────────────────────┴───────────────────────────────────────────────┘
+  The new engine:
+  - Still discovers WHICH tokens to watch via API
+  - But processes market data reactively from frontend data feeds
+
+  The question is: Is the frontend actually SENDING market_data_feed messages?
+
+  Looking at your logs, I see events going OUT (backend → frontend):
+  [Autopilot] market_status event
+  [Autopilot] stats_update event
+
+  But I don't see data feeds coming IN (frontend → backend). The frontend Phase 24 adapters should be sending:
+  { type: 'market_data_feed', data: {...} }
+
+  Check: Is the frontend's data forwarder hook (useAutopilotDataForwarder) actually sending data to the backend WebSocket?

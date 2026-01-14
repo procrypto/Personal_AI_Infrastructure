@@ -1,0 +1,951 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { useState, useEffect } from "react";
+     3→import {
+     4→  Bot,
+     5→  AlertTriangle,
+     6→  TrendingUp,
+     7→  TrendingDown,
+     8→  Activity,
+     9→  Zap,
+    10→  Target,
+    11→  ShieldAlert,
+    12→  Clock,
+    13→  Eye,
+    14→  Flame,
+    15→  Wallet,
+    16→  Settings,
+    17→  RefreshCw,
+    18→  Power,
+    19→  Layers,
+    20→  CheckCircle2,
+    21→  Circle,
+    22→} from "lucide-react";
+    23→import { cn } from "@/lib/utils";
+    24→import { Switch } from "@/components/switch";
+    25→import { Tooltip } from "@/components/tooltip";
+    26→import { useAutopilotSubscription } from "@/hooks/useSubscriptions/useAutopilotSubscription";
+    27→import {
+    28→  useAutopilotData,
+    29→  useTimeAgo,
+    30→  type AutopilotPositionWithPnL,
+    31→} from "@/hooks/useAutopilot";
+    32→import type {
+    33→  AutopilotSignal,
+    34→  AutopilotMarketStatus,
+    35→  AutopilotConfig,
+    36→  AutopilotStrategies,
+    37→  AutopilotStats,
+    38→  WatchedToken,
+    39→} from "@/store/memoryStore/slices/autopilot-store/types";
+    40→import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+    41→
+    42→// Market Status Badge Component
+    43→const MarketStatusBadge = ({ status }: { status: AutopilotMarketStatus }) => {
+    44→  const stateConfig = {
+    45→    NORMAL: {
+    46→      color: "bg-green-500/20 text-green-400 border-green-500/30",
+    47→      icon: Activity,
+    48→      label: "NORMAL",
+    49→    },
+    50→    CAUTION: {
+    51→      color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+    52→      icon: AlertTriangle,
+    53→      label: "CAUTION",
+    54→    },
+    55→    DUMP: {
+    56→      color: "bg-red-500/20 text-red-400 border-red-500/30",
+    57→      icon: ShieldAlert,
+    58→      label: "DUMP",
+    59→    },
+    60→  };
+    61→
+    62→  const config = stateConfig[status.state];
+    63→  const Icon = config.icon;
+    64→
+    65→  return (
+    66→    <div
+    67→      className={cn(
+    68→        "flex items-center gap-2 rounded-lg border px-3 py-1.5",
+    69→        config.color
+    70→      )}
+    71→    >
+    72→      <Icon className="h-4 w-4" />
+    73→      <span className="text-xs font-semibold">{config.label}</span>
+    74→      <span className="text-xs opacity-75">
+    75→        SOL {status.solPriceChangePercent >= 0 ? "+" : ""}
+    76→        {status.solPriceChangePercent.toFixed(2)}%
+    77→      </span>
+    78→    </div>
+    79→  );
+    80→};
+    81→
+    82→// Scan Countdown Component - shows live countdown to next scan
+    83→const ScanCountdown = ({
+    84→  scanTimestamp,
+    85→  intervalMs,
+    86→}: {
+    87→  scanTimestamp: number | null;
+    88→  intervalMs: number;
+    89→}) => {
+    90→  const [countdown, setCountdown] = useState<number | null>(null);
+    91→
+    92→  useEffect(() => {
+    93→    if (scanTimestamp === null) {
+    94→      setCountdown(null);
+    95→      return;
+    96→    }
+    97→
+    98→    const calculateCountdown = () => {
+    99→      const nextScanTime = scanTimestamp + intervalMs;
+   100→      const remaining = Math.round((nextScanTime - Date.now()) / 1000);
+   101→      return remaining;
+   102→    };
+   103→
+   104→    // Initial calculation
+   105→    setCountdown(calculateCountdown());
+   106→
+   107→    // Update every second
+   108→    const intervalId = setInterval(() => {
+   109→      setCountdown(calculateCountdown());
+   110→    }, 1000);
+   111→
+   112→    return () => clearInterval(intervalId);
+   113→  }, [scanTimestamp, intervalMs]);
+   114→
+   115→  if (scanTimestamp === null) {
+   116→    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+   117→  }
+   118→
+   119→  if (countdown === null) {
+   120→    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+   121→  }
+   122→
+   123→  if (countdown <= 0) {
+   124→    return <span className="text-[10px] text-cyan-400">Scanning...</span>;
+   125→  }
+   126→
+   127→  return (
+   128→    <span className="text-text-secondary text-[10px]">Next: {countdown}s</span>
+   129→  );
+   130→};
+   131→
+   132→// Position Card Component - handles nullable P&L from NATS market data
+   133→const PositionCard = ({ position }: { position: AutopilotPositionWithPnL }) => {
+   134→  const isProfit = (position.pnlPercent ?? 0) >= 0;
+   135→  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+   136→  const hasMarketData = position.pnlPercent !== null;
+   137→
+   138→  return (
+   139→    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+   140→      <div className="flex items-center gap-3">
+   141→        <div
+   142→          className={cn(
+   143→            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+   144→            hasMarketData
+   145→              ? isProfit
+   146→                ? "bg-green-500/20 text-green-400"
+   147→                : "bg-red-500/20 text-red-400"
+   148→              : "bg-gray-500/20 text-gray-400"
+   149→          )}
+   150→        >
+   151→          {hasMarketData ? (
+   152→            isProfit ? (
+   153→              <TrendingUp className="h-4 w-4" />
+   154→            ) : (
+   155→              <TrendingDown className="h-4 w-4" />
+   156→            )
+   157→          ) : (
+   158→            <Activity className="h-4 w-4 animate-pulse" />
+   159→          )}
+   160→        </div>
+   161→        <div>
+   162→          <span className="text-text-primary text-sm font-medium">
+   163→            ${position.symbol}
+   164→          </span>
+   165→          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+   166→            <Clock className="h-3 w-3" />
+   167→            {holdTime}m
+   168→          </div>
+   169→        </div>
+   170→      </div>
+   171→      <div className="text-right">
+   172→        {hasMarketData ? (
+   173→          <>
+   174→            <div
+   175→              className={cn(
+   176→                "text-sm font-semibold",
+   177→                isProfit ? "text-green-400" : "text-red-400"
+   178→              )}
+   179→            >
+   180→              {isProfit ? "+" : ""}
+   181→              {position.pnlPercent!.toFixed(2)}%
+   182→            </div>
+   183→            <div className="text-text-secondary text-[10px]">
+   184→              {position.positionSizeSol.toFixed(2)} SOL
+   185→            </div>
+   186→          </>
+   187→        ) : (
+   188→          <>
+   189→            <div className="text-text-tertiary animate-pulse text-sm font-semibold">
+   190→              Loading...
+   191→            </div>
+   192→            <div className="text-text-secondary text-[10px]">
+   193→              {position.positionSizeSol.toFixed(2)} SOL
+   194→            </div>
+   195→          </>
+   196→        )}
+   197→      </div>
+   198→    </div>
+   199→  );
+   200→};
+   201→
+   202→// Signal Item Component
+   203→const SignalItem = ({ signal }: { signal: AutopilotSignal }) => {
+   204→  const signalConfig = {
+   205→    magic_buy: { color: "text-cyan-400", icon: Target, label: "BUY" },
+   206→    magic_exit: { color: "text-purple-400", icon: Zap, label: "EXIT" },
+   207→    dump_exit: { color: "text-red-400", icon: ShieldAlert, label: "DUMP" },
+   208→    rule_signal: { color: "text-blue-400", icon: Activity, label: "SIGNAL" },
+   209→  };
+   210→
+   211→  const config = signalConfig[signal.signalType];
+   212→  const Icon = config.icon;
+   213→  const time = new Date(signal.timestamp).toLocaleTimeString("en-US", {
+   214→    hour12: false,
+   215→    hour: "2-digit",
+   216→    minute: "2-digit",
+   217→    second: "2-digit",
+   218→  });
+   219→
+   220→  return (
+   221→    <div className="border-border-primary/50 flex items-center gap-2 border-b py-2 last:border-0">
+   222→      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+   223→      <span className="text-text-secondary text-[10px]">{time}</span>
+   224→      <span className={cn("text-xs font-medium", config.color)}>
+   225→        {config.label}
+   226→      </span>
+   227→      <span className="text-text-primary text-xs">${signal.symbol}</span>
+   228→      {signal.pnlPercent !== undefined && (
+   229→        <span
+   230→          className={cn(
+   231→            "text-xs",
+   232→            signal.pnlPercent >= 0 ? "text-green-400" : "text-red-400"
+   233→          )}
+   234→        >
+   235→          {signal.pnlPercent >= 0 ? "+" : ""}
+   236→          {signal.pnlPercent.toFixed(1)}%
+   237→        </span>
+   238→      )}
+   239→    </div>
+   240→  );
+   241→};
+   242→
+   243→// Token Row Component
+   244→const TokenRow = ({ token }: { token: WatchedToken }) => {
+   245→  const change = token.change1h ?? 0;
+   246→  const isPositive = change >= 0;
+   247→
+   248→  return (
+   249→    <div
+   250→      className={cn(
+   251→        "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+   252→        token.hasPosition
+   253→          ? "border border-cyan-500/20 bg-cyan-500/10"
+   254→          : "bg-bg-tertiary/30"
+   255→      )}
+   256→    >
+   257→      <div className="flex items-center gap-2">
+   258→        <span className="text-text-primary font-medium">${token.symbol}</span>
+   259→        {token.hasPosition && (
+   260→          <span className="text-[8px] font-semibold text-cyan-400">OPEN</span>
+   261→        )}
+   262→      </div>
+   263→      <div className="flex items-center gap-3">
+   264→        {token.priceUsd !== undefined && (
+   265→          <span className="text-text-secondary">
+   266→            $
+   267→            {token.priceUsd < 0.01
+   268→              ? token.priceUsd.toExponential(2)
+   269→              : token.priceUsd.toFixed(4)}
+   270→          </span>
+   271→        )}
+   272→        <span
+   273→          className={cn(
+   274→            "font-medium",
+   275→            isPositive ? "text-green-400" : "text-red-400"
+   276→          )}
+   277→        >
+   278→          {isPositive ? "+" : ""}
+   279→          {change.toFixed(1)}%
+   280→        </span>
+   281→      </div>
+   282→    </div>
+   283→  );
+   284→};
+   285→
+   286→// Token List Section Component
+   287→const TokenListSection = ({
+   288→  title,
+   289→  icon: Icon,
+   290→  tokens,
+   291→  iconColor,
+   292→}: {
+   293→  title: string;
+   294→  icon: React.ElementType;
+   295→  tokens: WatchedToken[];
+   296→  iconColor: string;
+   297→}) => {
+   298→  if (tokens.length === 0) return null;
+   299→
+   300→  return (
+   301→    <div className="flex-shrink-0">
+   302→      <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+   303→        <Icon className={cn("h-3.5 w-3.5", iconColor)} />
+   304→        {title} ({tokens.length})
+   305→      </div>
+   306→      <div className="max-h-32 space-y-1 overflow-auto">
+   307→        {tokens.map(token => (
+   308→          <TokenRow
+   309→            key={token.mint}
+   310→            token={token}
+   311→          />
+   312→        ))}
+   313→      </div>
+   314→    </div>
+   315→  );
+   316→};
+   317→
+   318→// Controls Panel Component
+   319→const ControlsPanel = ({
+   320→  config,
+   321→  sendCommand,
+   322→  isConnected,
+   323→}: {
+   324→  config: AutopilotConfig;
+   325→  sendCommand: (cmd: AutopilotCommand) => void;
+   326→  isConnected: boolean;
+   327→}) => {
+   328→  const [showControls, setShowControls] = useState(false);
+   329→
+   330→  return (
+   331→    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+   332→      {/* Header - always visible */}
+   333→      <button
+   334→        onClick={() => setShowControls(!showControls)}
+   335→        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+   336→        disabled={!isConnected}
+   337→      >
+   338→        <div className="flex items-center gap-2">
+   339→          <Settings className="text-text-secondary h-3.5 w-3.5" />
+   340→          <span className="text-text-secondary font-medium">Controls</span>
+   341→        </div>
+   342→        <div className="flex items-center gap-2">
+   343→          <span
+   344→            className={cn(
+   345→              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+   346→              config.mode === "paper"
+   347→                ? "bg-yellow-500/20 text-yellow-400"
+   348→                : "bg-green-500/20 text-green-400"
+   349→            )}
+   350→          >
+   351→            {config.mode.toUpperCase()}
+   352→          </span>
+   353→          <span className="text-text-tertiary">{showControls ? "▲" : "▼"}</span>
+   354→        </div>
+   355→      </button>
+   356→
+   357→      {/* Expandable controls */}
+   358→      {showControls && (
+   359→        <div className="border-border-primary/50 space-y-3 border-t px-3 py-2">
+   360→          {/* Mode Toggle - Disabled until LOIS integration */}
+   361→          <Tooltip
+   362→            content="Live trading integration coming soon. Invite only 🔒"
+   363→            side="left"
+   364→            triggerClassName="w-full"
+   365→          >
+   366→            <div className="flex w-full cursor-not-allowed items-center justify-between opacity-50">
+   367→              <div className="flex items-center gap-2">
+   368→                <Power className="text-text-secondary h-3.5 w-3.5" />
+   369→                <span className="text-text-secondary text-xs">
+   370→                  Live Trading
+   371→                </span>
+   372→              </div>
+   373→              <Switch
+   374→                size="sm"
+   375→                checked={false}
+   376→                disabled
+   377→              />
+   378→            </div>
+   379→          </Tooltip>
+   380→
+   381→          {/* Auto Sources Toggle */}
+   382→          <div className="flex items-center justify-between">
+   383→            <div className="flex items-center gap-2">
+   384→              <Eye className="h-3.5 w-3.5 text-blue-400" />
+   385→              <span className="text-text-secondary text-xs">Auto Sources</span>
+   386→            </div>
+   387→            <Switch
+   388→              size="sm"
+   389→              checked={config.autoSourcesEnabled}
+   390→              onCheckedChange={checked =>
+   391→                sendCommand({ command: "toggle_sources", enabled: checked })
+   392→              }
+   393→            />
+   394→          </div>
+   395→
+   396→          {/* Trending Toggle */}
+   397→          {config.autoSourcesEnabled && (
+   398→            <div className="flex items-center justify-between pl-5">
+   399→              <div className="flex items-center gap-2">
+   400→                <Flame className="h-3 w-3 text-orange-400" />
+   401→                <span className="text-text-tertiary text-[11px]">Trending</span>
+   402→              </div>
+   403→              <Switch
+   404→                size="sm"
+   405→                checked={config.trendingEnabled}
+   406→                onCheckedChange={checked =>
+   407→                  sendCommand({ command: "toggle_trending", enabled: checked })
+   408→                }
+   409→              />
+   410→            </div>
+   411→          )}
+   412→
+   413→          {/* Whales Toggle */}
+   414→          {config.autoSourcesEnabled && (
+   415→            <div className="flex items-center justify-between pl-5">
+   416→              <div className="flex items-center gap-2">
+   417→                <Wallet className="h-3 w-3 text-green-400" />
+   418→                <span className="text-text-tertiary text-[11px]">
+   419→                  Whale Moves
+   420→                </span>
+   421→              </div>
+   422→              <Switch
+   423→                size="sm"
+   424→                checked={config.whalesEnabled}
+   425→                onCheckedChange={checked =>
+   426→                  sendCommand({ command: "toggle_whales", enabled: checked })
+   427→                }
+   428→              />
+   429→            </div>
+   430→          )}
+   431→
+   432→          {/* Market Filter Toggle */}
+   433→          <div className="flex items-center justify-between">
+   434→            <div className="flex items-center gap-2">
+   435→              <ShieldAlert className="h-3.5 w-3.5 text-purple-400" />
+   436→              <span className="text-text-secondary text-xs">Market Filter</span>
+   437→            </div>
+   438→            <Switch
+   439→              size="sm"
+   440→              checked={config.marketFilterEnabled}
+   441→              onCheckedChange={checked =>
+   442→                sendCommand({ command: "toggle_filter", enabled: checked })
+   443→              }
+   444→            />
+   445→          </div>
+   446→
+   447→          {/* Refresh Sources Button */}
+   448→          <button
+   449→            onClick={() => sendCommand({ command: "refresh_sources" })}
+   450→            className="bg-bg-tertiary/50 text-text-secondary hover:bg-bg-tertiary flex w-full items-center justify-center gap-2 rounded px-3 py-1.5 text-xs transition-colors"
+   451→          >
+   452→            <RefreshCw className="h-3 w-3" />
+   453→            Refresh Sources
+   454→          </button>
+   455→
+   456→          {/* Position Size Display */}
+   457→          <div className="text-text-tertiary border-border-primary/30 flex items-center justify-between border-t pt-1 text-[10px]">
+   458→            <span>Position Size</span>
+   459→            <span>{config.positionSizeSol} SOL</span>
+   460→          </div>
+   461→        </div>
+   462→      )}
+   463→    </div>
+   464→  );
+   465→};
+   466→
+   467→// Strategies Panel Component
+   468→const StrategiesPanel = ({
+   469→  strategies,
+   470→  sendCommand,
+   471→  isConnected,
+   472→}: {
+   473→  strategies: AutopilotStrategies;
+   474→  sendCommand: (cmd: AutopilotCommand) => void;
+   475→  isConnected: boolean;
+   476→}) => {
+   477→  const [showStrategies, setShowStrategies] = useState(false);
+   478→  const activeSet = new Set(strategies.active);
+   479→
+   480→  return (
+   481→    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+   482→      {/* Header - always visible */}
+   483→      <button
+   484→        onClick={() => setShowStrategies(!showStrategies)}
+   485→        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+   486→        disabled={!isConnected}
+   487→      >
+   488→        <div className="flex items-center gap-2">
+   489→          <Layers className="text-text-secondary h-3.5 w-3.5" />
+   490→          <span className="text-text-secondary font-medium">Strategies</span>
+   491→        </div>
+   492→        <div className="flex items-center gap-2">
+   493→          <span
+   494→            className={cn(
+   495→              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+   496→              strategies.active.length > 0
+   497→                ? "bg-green-500/20 text-green-400"
+   498→                : "bg-gray-500/20 text-gray-400"
+   499→            )}
+   500→          >
+   501→            {strategies.active.length} ACTIVE
+   502→          </span>
+   503→          <span className="text-text-tertiary">
+   504→            {showStrategies ? "▲" : "▼"}
+   505→          </span>
+   506→        </div>
+   507→      </button>
+   508→
+   509→      {/* Expandable strategies list */}
+   510→      {showStrategies && (
+   511→        <div className="border-border-primary/50 space-y-2 border-t px-3 py-2">
+   512→          {strategies.available.length === 0 ? (
+   513→            <div className="text-text-tertiary py-2 text-center text-xs">
+   514→              No strategies available
+   515→            </div>
+   516→          ) : (
+   517→            strategies.available.map(strategy => {
+   518→              const isActive = activeSet.has(strategy.id);
+   519→              return (
+   520→                <button
+   521→                  key={strategy.id}
+   522→                  onClick={() =>
+   523→                    sendCommand({
+   524→                      command: "toggle_strategy",
+   525→                      strategyId: strategy.id,
+   526→                      enabled: !isActive,
+   527→                    })
+   528→                  }
+   529→                  className={cn(
+   530→                    "flex w-full items-start gap-2 rounded px-2 py-2 text-left transition-colors",
+   531→                    isActive
+   532→                      ? "border border-green-500/30 bg-green-500/10 hover:bg-green-500/20"
+   533→                      : "bg-bg-tertiary/50 hover:bg-bg-tertiary border border-transparent"
+   534→                  )}
+   535→                >
+   536→                  <div className="mt-0.5 flex-shrink-0">
+   537→                    {isActive ? (
+   538→                      <CheckCircle2 className="h-4 w-4 text-green-400" />
+   539→                    ) : (
+   540→                      <Circle className="text-text-tertiary h-4 w-4" />
+   541→                    )}
+   542→                  </div>
+   543→                  <div className="min-w-0 flex-1">
+   544→                    <div className="flex items-center gap-2">
+   545→                      <span
+   546→                        className={cn(
+   547→                          "text-xs font-medium",
+   548→                          isActive ? "text-green-400" : "text-text-primary"
+   549→                        )}
+   550→                      >
+   551→                        {strategy.name}
+   552→                      </span>
+   553→                      <span
+   554→                        className={cn(
+   555→                          "rounded px-1 py-0.5 text-[9px]",
+   556→                          strategy.mode === "all"
+   557→                            ? "bg-blue-500/20 text-blue-400"
+   558→                            : "bg-purple-500/20 text-purple-400"
+   559→                        )}
+   560→                      >
+   561→                        {strategy.mode.toUpperCase()}
+   562→                      </span>
+   563→                    </div>
+   564→                    <div className="text-text-tertiary truncate text-[10px]">
+   565→                      {strategy.summary}
+   566→                    </div>
+   567→                  </div>
+   568→                </button>
+   569→              );
+   570→            })
+   571→          )}
+   572→        </div>
+   573→      )}
+   574→    </div>
+   575→  );
+   576→};
+   577→
+   578→// Stats Panel Component
+   579→const StatsPanel = ({ stats }: { stats: AutopilotStats }) => {
+   580→  const isProfit = stats.totalPnlSol >= 0;
+   581→
+   582→  return (
+   583→    <div className="border-border-primary bg-bg-tertiary/30 grid grid-cols-4 gap-2 rounded-lg border p-3">
+   584→      <div className="text-center">
+   585→        <div className="text-text-primary text-lg font-bold">
+   586→          {stats.closedTrades}
+   587→        </div>
+   588→        <div className="text-text-secondary text-[10px]">Trades</div>
+   589→      </div>
+   590→      <div className="text-center">
+   591→        <div
+   592→          className={cn(
+   593→            "text-lg font-bold",
+   594→            stats.winRate >= 0.5 ? "text-green-400" : "text-red-400"
+   595→          )}
+   596→        >
+   597→          {(stats.winRate * 100).toFixed(0)}%
+   598→        </div>
+   599→        <div className="text-text-secondary text-[10px]">Win Rate</div>
+   600→      </div>
+   601→      <div className="text-center">
+   602→        <div className="text-text-primary text-lg font-bold">
+   603→          {stats.wins}W/{stats.losses}L
+   604→        </div>
+   605→        <div className="text-text-secondary text-[10px]">Record</div>
+   606→      </div>
+   607→      <div className="text-center">
+   608→        <div
+   609→          className={cn(
+   610→            "text-lg font-bold",
+   611→            isProfit ? "text-green-400" : "text-red-400"
+   612→          )}
+   613→        >
+   614→          {isProfit ? "+" : ""}
+   615→          {stats.totalPnlSol.toFixed(2)}
+   616→        </div>
+   617→        <div className="text-text-secondary text-[10px]">P&L (SOL)</div>
+   618→      </div>
+   619→    </div>
+   620→  );
+   621→};
+   622→
+   623→// Last Analysis Row Component
+   624→const LastAnalysisRow = ({
+   625→  analysis,
+   626→}: {
+   627→  analysis: {
+   628→    symbol: string;
+   629→    timestamp: number;
+   630→    priceChange5m: number | null;
+   631→    priceChange1h: number | null;
+   632→    buySellRatio: number | null;
+   633→    rulesChecked: number;
+   634→    rulesMatched: number;
+   635→    outcome: string;
+   636→    reason: string;
+   637→  } | null;
+   638→}) => {
+   639→  // Use live-updating time ago hook
+   640→  const timeStr = useTimeAgo(analysis?.timestamp);
+   641→
+   642→  if (!analysis) return null;
+   643→
+   644→  const outcomeConfig = {
+   645→    no_signal: { color: "text-gray-400", bg: "bg-gray-500/10" },
+   646→    buy_signal: { color: "text-green-400", bg: "bg-green-500/10" },
+   647→    sell_signal: { color: "text-red-400", bg: "bg-red-500/10" },
+   648→    skipped: { color: "text-yellow-400", bg: "bg-yellow-500/10" },
+   649→  };
+   650→
+   651→  const config =
+   652→    outcomeConfig[analysis.outcome as keyof typeof outcomeConfig] ||
+   653→    outcomeConfig.no_signal;
+   654→
+   655→  return (
+   656→    <div
+   657→      className={cn("border-border-primary rounded-lg border p-2", config.bg)}
+   658→    >
+   659→      <div className="flex items-center justify-between">
+   660→        <div className="flex items-center gap-2">
+   661→          <Activity className={cn("h-3.5 w-3.5", config.color)} />
+   662→          <span className="text-text-primary text-xs font-medium">
+   663→            ${analysis.symbol}
+   664→          </span>
+   665→          <span className="text-text-tertiary text-[10px]">{timeStr}</span>
+   666→        </div>
+   667→        <div className="flex items-center gap-2">
+   668→          <span className={cn("text-[10px] font-semibold", config.color)}>
+   669→            {analysis.rulesMatched}/{analysis.rulesChecked}
+   670→          </span>
+   671→        </div>
+   672→      </div>
+   673→      <div className="mt-1 flex items-center gap-3 text-[10px]">
+   674→        {analysis.priceChange5m !== null && (
+   675→          <span
+   676→            className={
+   677→              analysis.priceChange5m >= 0 ? "text-green-400" : "text-red-400"
+   678→            }
+   679→          >
+   680→            5m: {analysis.priceChange5m >= 0 ? "+" : ""}
+   681→            {analysis.priceChange5m.toFixed(2)}%
+   682→          </span>
+   683→        )}
+   684→        {analysis.priceChange1h !== null && (
+   685→          <span
+   686→            className={
+   687→              analysis.priceChange1h >= 0 ? "text-green-400" : "text-red-400"
+   688→            }
+   689→          >
+   690→            1h: {analysis.priceChange1h >= 0 ? "+" : ""}
+   691→            {analysis.priceChange1h.toFixed(2)}%
+   692→          </span>
+   693→        )}
+   694→        {analysis.buySellRatio !== null && (
+   695→          <span className="text-text-secondary">
+   696→            B/S: {analysis.buySellRatio.toFixed(1)}:1
+   697→          </span>
+   698→        )}
+   699→      </div>
+   700→      <div className="text-text-tertiary mt-1 truncate text-[9px]">
+   701→        {analysis.reason}
+   702→      </div>
+   703→    </div>
+   704→  );
+   705→};
+   706→
+   707→// Section Header Component
+   708→const SectionHeader = ({ children }: { children: React.ReactNode }) => (
+   709→  <div className="text-text-tertiary mb-1.5 text-[10px] font-medium tracking-wide uppercase">
+   710→    {children}
+   711→  </div>
+   712→);
+   713→
+   714→// Collapsible Section Component - follows ControlsPanel/StrategiesPanel pattern
+   715→const CollapsibleSection = ({
+   716→  title,
+   717→  defaultExpanded = true,
+   718→  children,
+   719→}: {
+   720→  title: string;
+   721→  defaultExpanded?: boolean;
+   722→  children: React.ReactNode;
+   723→}) => {
+   724→  const [expanded, setExpanded] = useState(defaultExpanded);
+   725→
+   726→  return (
+   727→    <div
+   728→      className={cn(
+   729→        "flex flex-shrink-0 flex-col transition-opacity duration-200",
+   730→        !expanded && "opacity-75"
+   731→      )}
+   732→    >
+   733→      <button
+   734→        onClick={() => setExpanded(!expanded)}
+   735→        className={cn(
+   736→          "flex cursor-pointer items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase transition-colors",
+   737→          expanded
+   738→            ? "text-text-tertiary hover:text-text-secondary mb-1.5"
+   739→            : "text-text-tertiary/80 hover:text-text-secondary hover:border-border-primary/30 hover:bg-bg-tertiary/30 rounded border border-transparent px-1.5 py-1"
+   740→        )}
+   741→      >
+   742→        <span
+   743→          className={cn(
+   744→            "text-[8px] transition-transform duration-200",
+   745→            expanded ? "rotate-0" : "-rotate-90"
+   746→          )}
+   747→        >
+   748→          ▼
+   749→        </span>
+   750→        {title}
+   751→        {!expanded && (
+   752→          <span className="text-text-tertiary/60 ml-auto text-[8px] font-normal normal-case">
+   753→            click to expand
+   754→          </span>
+   755→        )}
+   756→      </button>
+   757→      <div
+   758→        className={cn(
+   759→          "grid transition-all duration-200",
+   760→          expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+   761→        )}
+   762→      >
+   763→        <div className="overflow-hidden">
+   764→          <div className="flex flex-col gap-2">{children}</div>
+   765→        </div>
+   766→      </div>
+   767→    </div>
+   768→  );
+   769→};
+   770→
+   771→// Main Autopilot Widget Component
+   772→export const AutopilotWidget = () => {
+   773→  // Connect to autopilot backend and auto-subscribe to NATS market data
+   774→  useAutopilotSubscription({ isEnabled: true });
+   775→
+   776→  // Get all autopilot data from Zustand store
+   777→  const {
+   778→    positions,
+   779→    signals,
+   780→    marketStatus,
+   781→    stats,
+   782→    scanTick,
+   783→    lastAnalysis,
+   784→    tokenList,
+   785→    config,
+   786→    strategies,
+   787→    isConnected,
+   788→    sendCommand,
+   789→  } = useAutopilotData();
+   790→
+   791→  const totalTokens =
+   792→    tokenList.watchlist.length +
+   793→    tokenList.trending.length +
+   794→    tokenList.whales.length;
+   795→
+   796→  return (
+   797→    <div className="flex h-full flex-col gap-4 overflow-hidden">
+   798→      {/* Header - Market Status */}
+   799→      <div className="flex items-center justify-between">
+   800→        <div className="flex items-center gap-2">
+   801→          <Bot
+   802→            className={cn(
+   803→              "h-5 w-5",
+   804→              isConnected ? "text-green-400" : "text-red-400"
+   805→            )}
+   806→          />
+   807→          <span className="text-text-primary text-sm font-semibold">
+   808→            Token Autopilot
+   809→          </span>
+   810→          {scanTick && (
+   811→            <span className="text-text-secondary text-[10px]">
+   812→              #{scanTick.scanNumber} | {totalTokens} tokens
+   813→            </span>
+   814→          )}
+   815→          {isConnected && (
+   816→            <>
+   817→              <span className="text-text-tertiary text-[10px]">|</span>
+   818→              <ScanCountdown
+   819→                scanTimestamp={scanTick?.timestamp ?? null}
+   820→                intervalMs={config.pollIntervalMs}
+   821→              />
+   822→            </>
+   823→          )}
+   824→        </div>
+   825→        <MarketStatusBadge status={marketStatus} />
+   826→      </div>
+   827→
+   828→      {/* Connection Status - Always visible when disconnected */}
+   829→      {!isConnected && (
+   830→        <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2">
+   831→          <AlertTriangle className="h-4 w-4 text-yellow-400" />
+   832→          <span className="text-xs text-yellow-400">
+   833→            Connecting to autopilot backend...
+   834→          </span>
+   835→        </div>
+   836→      )}
+   837→
+   838→      {/* ═══ PERFORMANCE SECTION ═══ */}
+   839→      <CollapsibleSection
+   840→        title="Performance"
+   841→        defaultExpanded={true}
+   842→      >
+   843→        <StatsPanel stats={stats} />
+   844→
+   845→        {/* Open Positions */}
+   846→        {positions.length > 0 && (
+   847→          <div>
+   848→            <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+   849→              <Target className="h-3.5 w-3.5" />
+   850→              Open Positions ({positions.length})
+   851→            </div>
+   852→            <div className="max-h-40 space-y-2 overflow-auto">
+   853→              {positions.map(pos => (
+   854→                <PositionCard
+   855→                  key={pos.mint}
+   856→                  position={pos}
+   857→                />
+   858→              ))}
+   859→            </div>
+   860→          </div>
+   861→        )}
+   862→      </CollapsibleSection>
+   863→
+   864→      {/* ═══ ACTIVITY SECTION ═══ */}
+   865→      <CollapsibleSection
+   866→        title="Activity"
+   867→        defaultExpanded={true}
+   868→      >
+   869→        <LastAnalysisRow analysis={lastAnalysis} />
+   870→
+   871→        {/* Recent Signals */}
+   872→        {signals.length > 0 && (
+   873→          <div>
+   874→            <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+   875→              <Zap className="h-3.5 w-3.5" />
+   876→              Recent Signals
+   877→            </div>
+   878→            <div className="max-h-24 overflow-auto">
+   879→              <div className="space-y-0">
+   880→                {signals.slice(0, 5).map((signal, idx) => (
+   881→                  <SignalItem
+   882→                    key={`${signal.timestamp}-${idx}`}
+   883→                    signal={signal}
+   884→                  />
+   885→                ))}
+   886→              </div>
+   887→            </div>
+   888→          </div>
+   889→        )}
+   890→      </CollapsibleSection>
+   891→
+   892→      {/* ═══ TOKEN WATCH SECTION ═══ (Main scrollable area) */}
+   893→      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
+   894→        <SectionHeader>Tokens</SectionHeader>
+   895→
+   896→        {/* Watchlist */}
+   897→        <TokenListSection
+   898→          title="Watchlist"
+   899→          icon={Eye}
+   900→          tokens={tokenList.watchlist}
+   901→          iconColor="text-blue-400"
+   902→        />
+   903→
+   904→        {/* Trending */}
+   905→        <TokenListSection
+   906→          title="Trending"
+   907→          icon={Flame}
+   908→          tokens={tokenList.trending}
+   909→          iconColor="text-orange-400"
+   910→        />
+   911→
+   912→        {/* Whale Moves */}
+   913→        <TokenListSection
+   914→          title="Whale Moves"
+   915→          icon={Wallet}
+   916→          tokens={tokenList.whales}
+   917→          iconColor="text-green-400"
+   918→        />
+   919→
+   920→        {/* Empty state if no tokens */}
+   921→        {totalTokens === 0 && isConnected && (
+   922→          <div className="text-text-secondary border-border-primary/50 rounded-lg border border-dashed p-4 text-center text-xs">
+   923→            No tokens being watched. Enable auto-sources or add to watchlist.
+   924→          </div>
+   925→        )}
+   926→      </div>
+   927→
+   928→      {/* ═══ CONFIGURATION SECTION ═══ */}
+   929→      <div className="border-border-primary/30 flex flex-shrink-0 flex-col gap-2 border-t pt-3">
+   930→        <SectionHeader>Configuration</SectionHeader>
+   931→        <ControlsPanel
+   932→          config={config}
+   933→          sendCommand={sendCommand}
+   934→          isConnected={isConnected}
+   935→        />
+   936→        <StrategiesPanel
+   937→          strategies={strategies}
+   938→          sendCommand={sendCommand}
+   939→          isConnected={isConnected}
+   940→        />
+   941→      </div>
+   942→    </div>
+   943→  );
+   944→};
+   945→
+   946→export default AutopilotWidget;
+   947→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

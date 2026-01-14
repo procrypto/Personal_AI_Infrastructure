@@ -1,0 +1,151 @@
+/**
+ * useTokenSignalStrength
+ *
+ * Provides per-token signal strength for visual indicators in the screener.
+ * Builds a Map<mint, SignalStrength> from the signals array in the autopilot store.
+ *
+ * Signal intensity is based on CONFLUENCE (number of agreeing signals):
+ * - 1 signal: low intensity (0.3)
+ * - 2 signals: medium intensity (0.5)
+ * - 3+ signals: high intensity (0.8)
+ *
+ * When a new signal arrives, TokenRow will flash briefly then settle to confluence level.
+ */
+
+import { useMemo, useRef } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type { AutopilotSignal } from "@/store/memoryStore/slices/autopilot-store/types";
+
+/**
+ * Signal strength for a token based on confluence count.
+ */
+export interface SignalStrength {
+  /** Signal type: buy signals show green glow, sell signals show red glow */
+  type: "buy" | "sell" | "none";
+  /** Number of signals in confluence for this mint */
+  confluenceCount: number;
+  /** Intensity from 0-1, based on confluence count */
+  intensity: number;
+  /** Timestamp of the most recent signal */
+  latestTimestamp: number;
+  /** True when a new signal was just added (for flash effect) */
+  isNew: boolean;
+}
+
+/**
+ * Map confluence count to intensity step.
+ * 1 signal = 0.3, 2 signals = 0.5, 3+ signals = 0.8
+ */
+function confluenceToIntensity(count: number): number {
+  if (count <= 0) return 0;
+  if (count === 1) return 0.3;
+  if (count === 2) return 0.5;
+  return 0.8; // 3+ signals
+}
+
+/**
+ * Classify signal type from AutopilotSignal.
+ */
+function classifySignalType(signal: AutopilotSignal): "buy" | "sell" {
+  switch (signal.signalType) {
+    case "magic_buy":
+      return "buy";
+    case "magic_exit":
+    case "dump_exit":
+      return "sell";
+    case "rule_signal":
+      // For rule_signal, use the action field
+      return signal.action === "buy" ? "buy" : "sell";
+    default:
+      return "sell";
+  }
+}
+
+/**
+ * Hook to get signal strength for each token in the autopilot signals array.
+ * Returns a Map<mint, SignalStrength> for efficient O(1) lookups.
+ *
+ * Confluence-based: counts how many signals agree on direction for each mint.
+ * Tracks when new signals arrive to trigger flash animations in TokenRow.
+ */
+export const useTokenSignalStrength = (): Map<string, SignalStrength> => {
+  // Get signals array from autopilot store
+  const signals = useGlobalStore(useShallow(state => state.autopilot.signals));
+
+  // Track previous latest timestamps to detect new signals
+  const prevTimestampsRef = useRef<Map<string, number>>(new Map());
+
+  return useMemo(() => {
+    const strengthMap = new Map<string, SignalStrength>();
+
+    // Group signals by mint
+    const signalsByMint = new Map<string, AutopilotSignal[]>();
+
+    for (const signal of signals) {
+      const existing = signalsByMint.get(signal.mint) ?? [];
+      existing.push(signal);
+      signalsByMint.set(signal.mint, existing);
+    }
+
+    // Calculate signal strength for each mint based on confluence
+    for (const [mint, mintSignals] of signalsByMint) {
+      // Count buy vs sell signals
+      let buyCount = 0;
+      let sellCount = 0;
+      let latestTimestamp = 0;
+
+      for (const signal of mintSignals) {
+        const type = classifySignalType(signal);
+        if (type === "buy") {
+          buyCount++;
+        } else {
+          sellCount++;
+        }
+        if (signal.timestamp > latestTimestamp) {
+          latestTimestamp = signal.timestamp;
+        }
+      }
+
+      // Determine dominant type (whichever has more signals)
+      // If tied, use the most recent signal's type
+      let dominantType: "buy" | "sell" | "none" = "none";
+      let confluenceCount = 0;
+
+      if (buyCount > sellCount) {
+        dominantType = "buy";
+        confluenceCount = buyCount;
+      } else if (sellCount > buyCount) {
+        dominantType = "sell";
+        confluenceCount = sellCount;
+      } else if (buyCount > 0) {
+        // Tied - use most recent signal's type
+        const latestSignal = mintSignals.reduce((latest, s) =>
+          s.timestamp > latest.timestamp ? s : latest
+        );
+        dominantType = classifySignalType(latestSignal);
+        confluenceCount = buyCount; // or sellCount, they're equal
+      }
+
+      // Check if this is a new signal (timestamp changed)
+      const prevTimestamp = prevTimestampsRef.current.get(mint) ?? 0;
+      const isNew = latestTimestamp > prevTimestamp;
+
+      strengthMap.set(mint, {
+        type: dominantType,
+        confluenceCount,
+        intensity: confluenceToIntensity(confluenceCount),
+        latestTimestamp,
+        isNew,
+      });
+    }
+
+    // Update previous timestamps for next render
+    const newPrevTimestamps = new Map<string, number>();
+    for (const [mint, strength] of strengthMap) {
+      newPrevTimestamps.set(mint, strength.latestTimestamp);
+    }
+    prevTimestampsRef.current = newPrevTimestamps;
+
+    return strengthMap;
+  }, [signals]);
+};

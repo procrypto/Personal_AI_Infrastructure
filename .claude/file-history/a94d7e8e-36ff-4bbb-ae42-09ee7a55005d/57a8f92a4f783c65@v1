@@ -1,0 +1,928 @@
+# TrenchBench API
+
+Production-ready ClickHouse-backed HTTP service powering Community Tracker and TrenchBench custom queries.
+
+**Repository:** `BonkBotTeam/trenchbench-api`
+
+## Deployment Modes
+
+| Environment | Trigger | GCP Project | Port |
+|-------------|---------|-------------|------|
+| Local | `bun dev` | N/A | 8080 |
+| Beta | Push to `main` | bonkbotbeta | 8080 |
+| Production | Push `v*` tag | data-backend-prod | 8080 |
+
+---
+
+## Important: Production Data
+
+This service fetches **production ClickHouse data** in all environments.
+
+**Handle with care:**
+- Treat all responses as **sensitive production data**
+- **Do NOT paste outputs into public channels** (Slack, Discord, GitHub issues, etc.)
+- **Do NOT commit** `.env` files or any fetched data
+- Keep strict limits (wallet count, lookback, row caps) to avoid expensive queries
+
+---
+
+## What is this?
+
+An HTTP service providing generic, reusable ClickHouse-backed endpoints. It uses the ClickHouse Cloud Queries API (Service ID + Basic auth).
+
+**Use cases:**
+- Token analytics (trending, whale moves, market data)
+- Trading data (trades, OHLCV, wallet tracking)
+- Holder statistics (top holders, multi-wallet families)
+- Discovery features (search, funding sources)
+- Local development backfill and prototyping
+
+---
+
+## Endpoint Types
+
+This codebase contains three types of endpoints:
+
+| Type | Description | Documentation |
+|------|-------------|---------------|
+| **Generic endpoints** | Mirror production API behavior. Same routes and response shapes. | See main production API docs (maintained by data team) |
+| **Extensions** | Local-only augmentation layer. Adds extra data to base responses when enabled. | Documented below in this README |
+| **Labs endpoints** | Local-only endpoints not available in production. Custom queries for development needs. | Documented below in this README |
+
+**Labs endpoints** (local-only, always enabled — no flag to disable):
+- `POST /local-api/labs/wallet_trades_snapshot` — Bounded wallet trade history
+- `POST /local-api/labs/holders_stats_batch` — Batch holder lookup by mints
+- `GET /local-api/discovery/whale_moves` — Whale activity discovery (production serves from cache; local-api runs the raw ClickHouse query directly for testing)
+
+> **Note:** Labs endpoints are always registered when the server starts. Unlike extensions (which require `LOCAL_API_ENABLE_EXTENSIONS=true`), there is no environment variable to disable labs endpoints. They always query production ClickHouse directly.
+
+**Generic endpoints** (production mirrors):
+- `/local-api/trades/:mint`, `/local-api/search`, `/local-api/ohlcv/*`, etc.
+- These replicate production behavior for local testing
+- Documentation lives in the main API repository
+
+---
+
+## Setup
+
+### Local Development
+
+#### 1. Install dependencies
+
+```bash
+bun install
+```
+
+#### 2. Configure credentials
+
+Copy the example env file and fill in your ClickHouse credentials:
+
+```bash
+cp env.example .env
+```
+
+Edit `.env`:
+
+```env
+TBKM_CLICKHOUSE_KEY_ID=your_key_id
+TBKM_CLICKHOUSE_KEY_SECRET=your_key_secret
+TBKM_CLICKHOUSE_SERVICE_ID=your_service_id
+```
+
+Ask your team lead for credentials if you don't have them.
+
+#### 3. Start the server
+
+```bash
+bun dev
+```
+
+Server runs on `http://localhost:8080` by default.
+
+---
+
+### Docker Build (Local Test)
+
+```bash
+docker build -t trenchbench-api .
+docker run -p 8080:8080 --env-file .env trenchbench-api
+```
+
+---
+
+### GCP Deployment
+
+Beta and production deployments use GitHub Actions with Workload Identity Federation.
+
+**Infrastructure setup:** See [docs/GCP-SETUP.md](docs/GCP-SETUP.md) for complete GCP configuration.
+
+**CI/CD Workflows:**
+- Push to `main` → deploys to `bonkbotbeta` (Cloud Run)
+- Push `v*` tag → deploys to `data-backend-prod` (Cloud Run)
+
+**Required GCP configuration:**
+- Workload Identity Federation for keyless GitHub Actions auth
+- Secret Manager for ClickHouse credentials
+- Artifact Registry for container images
+
+---
+
+## Frontend Integration
+
+### Prerequisites
+
+Your frontend repo (`web-terminal-frontend`) must be set up as a sibling directory:
+
+```
+BONKbot/github/
+├── local-api/           # This repo
+└── web-terminal-frontend/  # Frontend repo
+```
+
+### Linking for Development
+
+If your frontend doesn't already have the Vite proxy configured, you can set it up:
+
+**1. Verify the proxy configuration exists in the frontend**
+
+Check `web-terminal-frontend/vite.config.ts` for a proxy entry like:
+
+```ts
+server: {
+  proxy: {
+    '/local-api': {
+      target: 'http://localhost:8080',
+      changeOrigin: true,
+    },
+  },
+},
+```
+
+If it doesn't exist, add it to the Vite config's `server` block.
+
+**2. Start both services**
+
+Terminal 1 (local-api):
+```bash
+cd local-api
+bun dev
+# Server runs on http://localhost:8080
+```
+
+Terminal 2 (frontend):
+```bash
+cd web-terminal-frontend
+bun dev
+# Frontend runs on http://localhost:3000 (or similar)
+```
+
+**3. Verify the connection**
+
+From your browser console on the frontend (requires local-api to be running):
+```js
+fetch('/health').then(r => r.json()).then(console.log)
+// Should print: { ok: true, warning: "This API fetches PRODUCTION data" }
+```
+
+> **Note:** The `/health` endpoint is proxied to local-api (port 8080). If local-api isn't running, this request will fail. The frontend Vite config includes this proxy specifically to verify local-api availability.
+
+### Calling Local API from Frontend Code
+
+With the proxy configured, call endpoints without specifying the full URL:
+
+```ts
+// Labs endpoint: Wallet trades snapshot
+const response = await fetch("/local-api/labs/wallet_trades_snapshot", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    traders: ["wallet1", "wallet2"],
+    lookbackDays: 1,
+    limitTotal: 500,
+    minSolAmount: 0.1,
+  }),
+});
+const data = await response.json();
+console.log(data.trades);
+
+// Labs endpoint: Batch holders lookup
+const holdersResponse = await fetch("/local-api/labs/holders_stats_batch", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    mints: ["mint1", "mint2"],
+    limit: 50,
+  }),
+});
+const holdersData = await holdersResponse.json();
+console.log(holdersData.holders);
+```
+
+### Using localStorage Overrides
+
+The smoke page provides toggle buttons that set `localStorage` keys. Your frontend can read these to switch between production and local data sources.
+
+**Important:** `localStorage` is origin-specific. There are two ways to access the smoke page:
+
+| Access Method | URL | Use Case |
+|---------------|-----|----------|
+| Direct (local-api) | `http://localhost:8080/smoke.html` | API testing, endpoint validation |
+| Symlinked (frontend) | `http://localhost:3000/smoke-local.html` | Override toggles that persist to frontend |
+
+For the override toggles to work with your frontend, the smoke page must be served from the **same origin** as your frontend.
+
+#### Symlinking smoke.html to the Frontend
+
+Create a symlink from the frontend's `public/` folder to local-api's smoke.html. Use a different filename (`smoke-local.html`) to avoid conflicts:
+
+```bash
+# From the frontend repo root
+cd web-terminal-frontend
+ln -s ../local-api/public/smoke.html public/smoke-local.html
+```
+
+Now `http://localhost:3000/smoke-local.html` serves the smoke page on the same origin as your frontend, and localStorage keys will be shared.
+
+**Note:** Add `public/smoke-local.html` to the frontend's `.gitignore` to avoid committing the symlink.
+
+#### Quick Toggle via Browser Console
+
+You can toggle endpoints between dev data and production (local-api) data directly from your browser console:
+
+```js
+// Enable production data for trades endpoint
+localStorage.setItem('localApi.override.trades', 'true')
+
+// Disable (back to dev data)
+localStorage.setItem('localApi.override.trades', 'false')
+
+// Check current state
+localStorage.getItem('localApi.override.trades')
+
+// Enable all overrides at once
+['trades', 'wallet_tracker', 'search', 'ohlcv', 'holders_stats', 'holders', 'traders_stats']
+  .forEach(k => localStorage.setItem(`localApi.override.${k}`, 'true'))
+
+// Disable all overrides
+['trades', 'wallet_tracker', 'search', 'ohlcv', 'holders_stats', 'holders', 'traders_stats']
+  .forEach(k => localStorage.setItem(`localApi.override.${k}`, 'false'))
+```
+
+Refresh the page after toggling for the change to take effect.
+
+#### Available Override Keys
+
+| Key | Endpoints Affected |
+|-----|-------------------|
+| `localApi.override.trades` | `/local-api/trades/:mint` |
+| `localApi.override.wallet_tracker` | `/local-api/wallet_tracker/*` |
+| `localApi.override.search` | `/local-api/search`, `/local-api/search/:mint` |
+| `localApi.override.ohlcv` | `/local-api/ohlcv/*`, `/local-api/market_data/*` |
+| `localApi.override.holders_stats` | `/local-api/holders_stats/:mint`, `/local-api/holder_stats/:mint/:wallet` |
+| `localApi.override.holders` | `/local-api/labs/holders_stats_batch` |
+| `localApi.override.traders_stats` | `/local-api/traders_stats/:mint` |
+
+#### Using Overrides in Frontend Code
+
+Your frontend code should check these keys to route requests:
+
+```ts
+// Check if local override is enabled for trades
+const useLocalData = localStorage.getItem('localApi.override.trades') === 'true';
+
+const endpoint = useLocalData
+  ? '/local-api/trades/' + mint   // Production data via local-api
+  : '/api/trades/' + mint;         // Dev/staging data
+```
+
+---
+
+## Extensions (local-only)
+
+- Enable with env flag: `LOCAL_API_ENABLE_EXTENSIONS=true`.
+- Discover extensions via `GET /local-api/ext/registry` (always available). Response includes `enabled`, full metadata, and `warnings` for any `extra_query` extensions.
+- Extension routes live under `/local-api/ext/*` and are **additive-only** (base semantics unchanged).
+- Responses keep the base shape and add `ext` payloads keyed by `extension_id`, e.g. `ext: { EXT_SEARCH_TOKEN_DETAILS: { ... } }`.
+- Cost tiers: `same_result` (no extra queries) vs `extra_query` (may add joins/queries). `extra_query` entries must include a `cost_warning` and are highlighted in startup logs and registry.
+
+### Labs endpoints (local-only, always enabled)
+
+- **Always on:** Labs endpoints have no enable/disable flag. They are registered unconditionally when the server starts.
+- Canonical: `POST /local-api/labs/wallet_trades_snapshot` — bounded historical trades for explicit wallet lists. Limits: max 100 traders, lookback ≤ 7 days, limitTotal ≤ 5000, limitPerTrader ≤ 500.
+- Listed in `/local-api/ext/registry` under `labs`.
+
+### Smoke Page
+
+A browser-based testing dashboard. Access options:
+
+- **Direct:** `http://localhost:8080/smoke.html` — for API testing
+- **Symlinked:** `http://localhost:3000/smoke-local.html` — for override toggles (see [Symlinking smoke.html](#symlinking-smokehtml-to-the-frontend))
+
+**What it does:**
+
+1. **System Checks** — Validates server health and extension metadata
+2. **Local Override Toggles** — Toggle `localStorage` keys to switch between local/production data sources in your frontend
+3. **Labs Endpoint Tests** — Run the local-only labs endpoints with sample data
+4. **Extension Tests** — Test extension endpoints (if `LOCAL_API_ENABLE_EXTENSIONS=true`)
+5. **Base Endpoint Checks** — Smoke test all production-mirror endpoints
+
+**How it works:**
+
+On page load, the dashboard:
+1. Fetches `/local-api/discovery/whale_moves` to get a recent active mint
+2. Fetches a recent trade to get a sample wallet address
+3. Uses these as default inputs for all tests
+
+**Test categories:**
+
+| Section | Tests | Purpose |
+|---------|-------|---------|
+| System Checks | Health, Extension Registry, Metadata Validation | Verify server is running and extensions are properly configured |
+| Local Overrides | Toggle buttons for each endpoint category | Control which endpoints use local vs. dev data in your frontend |
+| Labs Endpoints | wallet_trades_snapshot, holders_stats_batch, whale_moves | Test local-only functionality |
+| Extensions | search/:mint with extension payload | Test extension augmentation (requires env flag) |
+| Base Endpoints | All production-mirror endpoints | Verify ClickHouse connectivity and query correctness |
+
+**Validation rules:**
+- Empty responses are treated as failures
+- Extension metadata must include all required fields
+- `extra_query` extensions must have a `cost_warning`
+
+**Using the override toggles:**
+
+The "Local overrides status" panel shows toggle buttons for each endpoint category. When toggled ON:
+- Sets `localStorage['localApi.override.<key>']` = `"true"`
+- Your frontend can read these keys to route requests to local-api instead of production
+
+This lets you develop against production data locally without modifying frontend code.
+
+---
+
+## Adding Custom Endpoints
+
+See `src/endpoints/custom/README.md` for instructions.
+
+Quick steps:
+
+1. Copy `src/endpoints/_template.ts` to `src/endpoints/custom/my_endpoint.ts`
+2. Customize the route and logic
+3. Register it in `src/server.ts`
+4. Restart the server
+
+---
+
+## Endpoints
+
+### `GET /health`
+
+Health check. Confirms the server is running and ClickHouse credentials are configured.
+
+> **Note:** This endpoint is at `/health` (not `/local-api/health`). The frontend's Vite config proxies `/health` to local-api, so calling `/health` from the frontend will check local-api availability.
+
+**Response:**
+
+```json
+{ "ok": true, "warning": "This API fetches PRODUCTION data" }
+```
+
+### `POST /local-api/labs/wallet_trades_snapshot`
+
+Fetch bounded trade history for a list of wallets with optional dust filtering and pagination.
+
+**Request:**
+
+```json
+{
+  "traders": ["wallet1", "wallet2", "..."],
+  "lookbackDays": 1,
+  "limitTotal": 5000,
+  "limitPerTrader": 500,
+  "sourceTable": "recent_1d",
+  "minSolAmount": 0.1,
+  "since": "1735900000000000000"
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `traders` | `string[]` | Yes | — | Wallet addresses (max 100) |
+| `lookbackDays` | `number` | No | `1` | Days to look back (clamped 1–7) |
+| `limitTotal` | `number` | No | `5000` | Total rows to return (clamped 1–5000) |
+| `limitPerTrader` | `number` | No | `500` | Max rows per wallet (clamped 1–500) |
+| `sourceTable` | `string` | No | `"materializer_trades"` | `"recent_1d"` or `"materializer_trades"` |
+| `minSolAmount` | `number` | No | `0` | Filter trades below this SOL value (0-10) |
+| `since` | `string` | No | — | Pagination cursor: only return trades older than this nanosecond timestamp |
+
+**Table selection:**
+- `recent_1d` → `materializer_trades_recent_1d` (TTL 1 day, faster, safer)
+- `materializer_trades` → `materializer_trades` (full historical, slower)
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "trades": [
+    {
+      "maker": "...",
+      "mint": "...",
+      "signature": "...",
+      "timestamp": "1234567890000000000",
+      "direction": "buy",
+      "sol_amount": "1.5",
+      "sol_amount_usd": "225.00",
+      "market_cap_usd": "50000.00",
+      "token_symbol": "ABC",
+      "token_name": "ABC Token"
+    }
+  ],
+  "count": 42,
+  "oldestTimestamp": "1234567890000000000"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ok` | `boolean` | Success flag |
+| `trades` | `TradeRow[]` | Array of trade objects |
+| `count` | `number` | Number of trades returned |
+| `oldestTimestamp` | `string \| null` | Timestamp of oldest trade (use as `since` for next page) |
+
+**Example: Basic fetch with dust filter**
+
+```bash
+curl -sS http://localhost:8080/local-api/labs/wallet_trades_snapshot \
+  -H 'content-type: application/json' \
+  -d '{
+    "traders": ["4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9"],
+    "lookbackDays": 1,
+    "limitTotal": 5000,
+    "minSolAmount": 0.1
+  }' | jq
+```
+
+**Example: Progressive pagination**
+
+```bash
+# First fetch
+RESP=$(curl -sS http://localhost:8080/local-api/labs/wallet_trades_snapshot \
+  -H 'content-type: application/json' \
+  -d '{"traders": ["4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9"], "minSolAmount": 0.1}')
+
+# Get cursor for next page
+OLDEST=$(echo "$RESP" | jq -r '.oldestTimestamp')
+
+# Second fetch (older trades, no overlap)
+curl -sS http://localhost:8080/local-api/labs/wallet_trades_snapshot \
+  -H 'content-type: application/json' \
+  -d "{\"traders\": [\"4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9\"], \"minSolAmount\": 0.1, \"since\": \"$OLDEST\"}"
+```
+
+**Performance notes:**
+- `minSolAmount: 0.1` filters ~30-50% of dust trades, extending time coverage
+- Use `since` for pagination instead of increasing `lookbackDays`
+- Stick with `sourceTable: "recent_1d"` for fast queries (1-day TTL)
+- `materializer_trades` has full history but is slow for wallet queries
+
+---
+
+### `POST /local-api/labs/holders_stats_batch`
+
+Fetch top holders for multiple token mints in a single query. Returns holders grouped by mint.
+
+**Request:**
+
+```json
+{
+  "mints": ["mint1", "mint2", "..."],
+  "addresses": ["wallet1", "wallet2"],
+  "limit": 100
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mints` | `string[]` | Yes | — | Token mint addresses (max 50) |
+| `addresses` | `string[]` | No | — | Filter to specific wallets (max 200) |
+| `limit` | `number` | No | `100` | Max holders per mint (1-100) |
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "holders": {
+    "mint1": [
+      {
+        "address": "...",
+        "mint": "mint1",
+        "remaining_tokens": "1000000",
+        "portfolio_value_sol": "50.5",
+        "pnl_total_usd": "1234.56",
+        "average_entry_mc_usd": "50000",
+        "is_dev": false,
+        "is_insider": false,
+        "holder_status": "holding"
+      }
+    ],
+    "mint2": []
+  },
+  "count": 42
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ok` | `boolean` | Success flag |
+| `holders` | `Record<string, HolderRow[]>` | Holders grouped by mint address |
+| `count` | `number` | Total holders returned across all mints |
+
+**Example: Fetch top 50 holders for 3 tokens**
+
+```bash
+curl -sS http://localhost:8080/local-api/labs/holders_stats_batch \
+  -H 'content-type: application/json' \
+  -d '{
+    "mints": [
+      "So11111111111111111111111111111111111111112",
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+    ],
+    "limit": 50
+  }' | jq
+```
+
+**Example: Check specific wallets holdings across tokens**
+
+```bash
+curl -sS http://localhost:8080/local-api/labs/holders_stats_batch \
+  -H 'content-type: application/json' \
+  -d '{
+    "mints": ["mint1", "mint2"],
+    "addresses": ["kol_wallet_1", "kol_wallet_2", "tracked_wallet_3"],
+    "limit": 100
+  }' | jq
+```
+
+**Use cases:**
+- Ground truth validation: Compare trade-based holdings with actual on-chain state
+- Multi-token portfolio view: See all positions for specific wallets
+- Token-centric analysis: Find top holders across multiple tokens efficiently
+
+**Performance notes:**
+- Uses `materializer_holder_mint_latest` table with `PREWHERE mint IN (...)` for efficiency
+- `LIMIT BY mint` ensures even distribution across requested tokens
+- Empty arrays are returned for mints with no matching holders
+
+---
+
+## Future: 7-Day Wallet Trade History
+
+The `materializer_trades` table times out for wallet-based queries because it's indexed by
+`(mint, timestamp)`, not `(maker, timestamp)`. The bloom filter on `maker` helps but can't
+match primary key performance.
+
+**For reliable 7-day wallet trade history, a dedicated table is recommended:**
+
+- Table: `materializer_trades_recent_7d`
+- ORDER BY: `(maker, timestamp, mint)` — maker-first for wallet queries
+- TTL: 7 days
+- Same columns as `materializer_trades`
+
+This would slot into the existing `sourceTable` parameter seamlessly.
+
+---
+
+## Security Reminders
+
+1. **Credentials**: Never commit `.env`. It's gitignored.
+2. **Outputs**: Production data should stay local or within your Tailnet.
+3. **Limits**: Always use strict limits to avoid expensive queries.
+4. **Secrets**: Beta/prod credentials are managed via GCP Secret Manager.
+
+---
+
+## Troubleshooting
+
+**"Missing ClickHouse credentials"**
+- Make sure `.env` exists and has all three variables set.
+
+**"ClickHouse API error 401"**
+- Credentials are invalid. Double-check `key_id`, `key_secret`, `service_id`.
+
+**"Too many traders (max 100)"**
+- Reduce the number of wallets in your request.
+
+**Query times out**
+- Reduce `lookbackDays` or use `sourceTable: "recent_1d"`.
+- Reduce `limitTotal`.
+
+---
+
+## Network Deployment (Tailscale Serve)
+
+Deploy local-api on a dedicated machine and expose it securely to your Tailnet using Tailscale Serve. The server stays bound to localhost — Tailscale handles encrypted network access.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Host Machine                                                   │
+│                                                                 │
+│   local-api (localhost:8080) <─── Tailscale Serve <─── Tailnet │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- **local-api** binds to `127.0.0.1:8080` (not exposed to network)
+- **Tailscale Serve** proxies traffic from your Tailnet to localhost
+- Access via `https://<hostname>.tailnet-name.ts.net` with automatic HTTPS
+
+### Prerequisites
+
+- Tailscale installed and authenticated on the host machine
+- Bun runtime installed (`curl -fsSL https://bun.sh/install | bash`)
+- ClickHouse credentials (same as local development)
+
+### 1. Clone and Configure
+
+```bash
+git clone https://github.com/BonkBotTeam/trenchbench-api ~/trenchbench-api
+cd ~/trenchbench-api
+bun install
+cp env.example .env
+# Edit .env with your ClickHouse credentials
+```
+
+### 2. Create a Persistent Service
+
+Choose the appropriate method for your operating system.
+
+#### macOS (launchd)
+
+**Create the plist file:**
+
+```bash
+sudo mkdir -p /var/log/trenchbench-api
+```
+
+Create `/Library/LaunchDaemons/com.bonkbot.trenchbench-api.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bonkbot.trenchbench-api</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USER/.bun/bin/bun</string>
+        <string>run</string>
+        <string>src/server.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USER/trenchbench-api</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TBKM_CLICKHOUSE_KEY_ID</key>
+        <string>your_key_id</string>
+        <key>TBKM_CLICKHOUSE_KEY_SECRET</key>
+        <string>your_key_secret</string>
+        <key>TBKM_CLICKHOUSE_SERVICE_ID</key>
+        <string>your_service_id</string>
+        <key>LOCAL_API_ENABLE_EXTENSIONS</key>
+        <string>true</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/trenchbench-api/stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/trenchbench-api/stderr.log</string>
+</dict>
+</plist>
+```
+
+> **Note:** Replace `YOUR_USER` with your username. Find your bun path with `which bun`.
+
+**Load the service:**
+
+```bash
+sudo chown root:wheel /Library/LaunchDaemons/com.bonkbot.trenchbench-api.plist
+sudo chmod 644 /Library/LaunchDaemons/com.bonkbot.trenchbench-api.plist
+sudo launchctl load /Library/LaunchDaemons/com.bonkbot.trenchbench-api.plist
+```
+
+**Service management:**
+
+```bash
+# Check status
+sudo launchctl list | grep bonkbot
+
+# View logs
+tail -f /var/log/trenchbench-api/stdout.log
+
+# Restart
+sudo launchctl kickstart -k system/com.bonkbot.trenchbench-api
+
+# Stop
+sudo launchctl unload /Library/LaunchDaemons/com.bonkbot.trenchbench-api.plist
+```
+
+#### Linux (systemd)
+
+Create `/etc/systemd/system/trenchbench-api.service`:
+
+```ini
+[Unit]
+Description=TrenchBench API (ClickHouse-backed HTTP service)
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/trenchbench-api
+ExecStart=/home/YOUR_USER/.bun/bin/bun run src/server.ts
+Restart=always
+RestartSec=5
+
+Environment=TBKM_CLICKHOUSE_KEY_ID=your_key_id
+Environment=TBKM_CLICKHOUSE_KEY_SECRET=your_key_secret
+Environment=TBKM_CLICKHOUSE_SERVICE_ID=your_service_id
+Environment=LOCAL_API_ENABLE_EXTENSIONS=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> **Note:** Replace `YOUR_USER` with your username. For production secrets, use `EnvironmentFile=/etc/trenchbench-api.env` instead of inline `Environment` directives.
+
+**Enable and start:**
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now trenchbench-api
+```
+
+**Service management:**
+
+```bash
+# Check status
+sudo systemctl status trenchbench-api
+
+# View logs
+journalctl -u trenchbench-api -f
+
+# Restart
+sudo systemctl restart trenchbench-api
+
+# Stop
+sudo systemctl stop trenchbench-api
+```
+
+#### Windows (Task Scheduler)
+
+**Option A: Task Scheduler (built-in)**
+
+1. Open Task Scheduler (`taskschd.msc`)
+2. Create Task (not Basic Task)
+3. General tab:
+   - Name: `trenchbench-api`
+   - Check "Run whether user is logged on or not"
+   - Check "Run with highest privileges"
+4. Triggers tab:
+   - New -> At startup
+5. Actions tab:
+   - New -> Start a program
+   - Program: `C:\Users\YOUR_USER\.bun\bin\bun.exe`
+   - Arguments: `run src/server.ts`
+   - Start in: `C:\Users\YOUR_USER\trenchbench-api`
+6. Settings tab:
+   - Check "If the task fails, restart every: 1 minute"
+
+For environment variables, create a wrapper script `start-trenchbench-api.bat`:
+
+```batch
+@echo off
+set TBKM_CLICKHOUSE_KEY_ID=your_key_id
+set TBKM_CLICKHOUSE_KEY_SECRET=your_key_secret
+set TBKM_CLICKHOUSE_SERVICE_ID=your_service_id
+set LOCAL_API_ENABLE_EXTENSIONS=true
+cd /d C:\Users\YOUR_USER\trenchbench-api
+C:\Users\YOUR_USER\.bun\bin\bun.exe run src/server.ts
+```
+
+Then point the Task Scheduler action to run this batch file.
+
+**Option B: NSSM (recommended for production)**
+
+NSSM (Non-Sucking Service Manager) creates proper Windows services with auto-restart.
+
+```powershell
+# Install NSSM (via winget or download from nssm.cc)
+winget install nssm
+
+# Install the service
+nssm install trenchbench-api "C:\Users\YOUR_USER\.bun\bin\bun.exe"
+nssm set trenchbench-api AppParameters "run src/server.ts"
+nssm set trenchbench-api AppDirectory "C:\Users\YOUR_USER\trenchbench-api"
+nssm set trenchbench-api AppEnvironmentExtra "TBKM_CLICKHOUSE_KEY_ID=your_key_id" "TBKM_CLICKHOUSE_KEY_SECRET=your_key_secret" "TBKM_CLICKHOUSE_SERVICE_ID=your_service_id" "LOCAL_API_ENABLE_EXTENSIONS=true"
+
+# Start the service
+nssm start trenchbench-api
+```
+
+**Service management (NSSM):**
+
+```powershell
+# Check status
+nssm status trenchbench-api
+
+# View logs (configure log paths first)
+nssm set trenchbench-api AppStdout "C:\logs\trenchbench-api\stdout.log"
+nssm set trenchbench-api AppStderr "C:\logs\trenchbench-api\stderr.log"
+
+# Restart
+nssm restart trenchbench-api
+
+# Stop
+nssm stop trenchbench-api
+```
+
+### 3. Enable Tailscale Serve
+
+With trenchbench-api running on localhost:8080, enable Tailscale Serve to expose it:
+
+```bash
+# Enable Tailscale Serve (runs in background)
+tailscale serve --bg 8080
+
+# Verify it's configured
+tailscale serve status
+```
+
+This maps `https://<hostname>.tailnet-name.ts.net` -> `http://localhost:8080`.
+
+> **Note:** On Windows, run these commands in an elevated (Administrator) terminal.
+
+### 4. Access from Tailnet
+
+From any machine in your Tailnet:
+
+```bash
+# Find your hostname
+tailscale status
+
+# Test connectivity (replace with your actual hostname)
+curl https://your-hostname.tailnet-name.ts.net/health
+```
+
+Expected response:
+
+```json
+{ "ok": true, "warning": "This API fetches PRODUCTION data" }
+```
+
+### 5. Configure Clients
+
+Update your frontend or internal systems to use the Tailscale URL:
+
+```typescript
+const LOCAL_API_BASE = process.env.LOCAL_API_URL || 'https://your-hostname.tailnet-name.ts.net';
+
+// Example: Fetch trades
+const response = await fetch(`${LOCAL_API_BASE}/local-api/trades/${mint}`);
+```
+
+### Disabling Tailscale Serve
+
+To stop exposing the service:
+
+```bash
+tailscale serve --bg off
+```
+
+The trenchbench-api service continues running on localhost but is no longer accessible via Tailscale.
+
+---
+
+## Related Documentation
+
+- [docs/GCP-SETUP.md](docs/GCP-SETUP.md) — GCP infrastructure configuration
+- [src/endpoints/custom/README.md](src/endpoints/custom/README.md) — Custom endpoint guide
+
+---
+
+## License
+
+Internal development tool. Not for distribution.

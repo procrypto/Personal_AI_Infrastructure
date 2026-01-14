@@ -1,0 +1,114 @@
+# analytics_clickhouse - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2026-01-10
+- **Last updated**: 2026-01-12
+- **Discovery depth**: Standard
+- **Documentation quality**: Good (dbt docs, schema files)
+
+---
+
+## System Identity
+
+**What it is**: dbt-based analytics pipeline using ClickHouse.
+
+**What it does**:
+- Transforms token market data into multi-timeframe analytics (5m, 1h, 6h, 24h)
+- Calculates trending scores and statistical normalization
+- Provides honeypot detection metrics
+- Outputs to `mart_token_metrics_trending_5m` and `mart_token_stats_market_5m` tables
+
+**Key insight**: Sibling to analytics-dataform - same data team, different target database (ClickHouse vs BigQuery).
+
+**IMPORTANT - Runtime Independence**: This system does **NOT** power web-terminal's live trending/discovery features. web-terminal has its own self-contained trending implementation using ClickHouse materialized views (`discovery_trending_token_stats_ts`). The `mart_*` tables produced here are not consumed by web-terminal. Likely use cases: offline analytics, dashboards, or research/prototyping for trending algorithms.
+
+---
+
+## Architecture Highlights
+
+### Stack
+- dbt 1.9.4 + dbt-clickhouse 1.9.1
+- ClickHouse (GCP: r7vsio4v4z.europe-west4.gcp.clickhouse.cloud)
+- Python 3.10-3.11
+
+### Data Flow
+```
+materializer_token_market_data (raw)
+  ↓ Staging
+stg_token_market_data (5m buckets)
+  ↓ Intermediate
+int_token_market_metrics + int_token_stats_normalized
+  ↓ Marts
+mart_token_stats_market_5m (market-wide)
+mart_token_metrics_trending_5m (per-token)
+```
+
+### Key Models (8)
+- `stg_token_market_data` - Raw → 5-minute buckets
+- `int_token_trending_metrics` - Z-scores, price changes, derived ratios
+- `mart_token_metrics_trending_5m` - Token-specific trending (ReplacingMergeTree)
+
+---
+
+## Key Metrics
+
+### Volume
+- buy/sell volumes (SOL & USD) for 5m/1h/6h/24h
+- volume_per_txn (whale indicator)
+
+### Statistical
+- Z-scores: standard deviations from market average
+- Percentiles: P10/P25/P75/P90 for volume/traders
+
+### Honeypot Detection
+- txns_per_maker >= 2.0
+- volume_to_fdv >= 0.015
+- unique_traders >= 1000
+- token_age >= 24h
+
+---
+
+## Trending Query
+
+`analyses/trending/query_trending_tokens.sql`:
+- 30+ parameters for filtering
+- Multi-component score (volume, traders, price, liquidity)
+- Honeypot filtering built-in
+
+---
+
+## Working Here
+
+### Setup
+```bash
+pip install -r requirements.txt
+export CLICKHOUSE_PASSWORD=<from @vem>
+dbt debug
+```
+
+### Commands
+```bash
+dbt compile          # Preview SQL
+dbt run --empty      # Dry run
+dbt run              # Execute
+dbt test             # Run tests
+```
+
+---
+
+## Cross-System Relationships
+
+| System | Relationship | Details |
+|--------|--------------|---------|
+| web-terminal | **Independent/Parallel** | Both read from `materializer_token_market_data` but produce separate outputs. No runtime dependency. |
+| analytics-dataform | Sibling | Same team, same patterns, targets BigQuery instead of ClickHouse |
+
+**Verified 2026-01-12**: web-terminal's trending queries use `discovery_trending_token_stats_ts` (its own materialized views), not `mart_token_metrics_trending_5m` (this repo's output).
+
+---
+
+## Team & Ownership
+
+**Lead**: @vem
+**Key Contributors**: lmart1n (7), Ritapgb (5), victoremnm (5)
+**Created**: May 2025

@@ -1,0 +1,154 @@
+# Telegram Chat Extractor
+
+A React + TypeScript (Vite) UI that extracts and filters Telegram chat exports. Runs entirely in your browser — no files leave your machine.
+
+## Quick Start (Air-Gapped)
+
+```bash
+# Clone and install while online
+git clone https://github.com/user/tg-ripper.git && cd tg-ripper
+npm install
+
+# Build static files for offline use
+npm run build
+
+# Serve the build locally (install serve if needed: npm i -g serve)
+serve dist
+
+# DISCONNECT FROM INTERNET before loading sensitive exports
+# Open http://localhost:3000 and process your files offline
+```
+
+> **Maximum privacy**: Disconnect your network before loading any Telegram export. The app runs 100% client-side with zero external requests.
+
+## Features
+
+- **Two export modes** — Group Mode (fast, recommended) or User Mode depending on your needs.
+- **Streaming JSON parser** — Handles multi-GB export files without loading them entirely into memory.
+- **Date range filtering** — Only process messages within a specific UTC time window.
+- **ZIP download** — All chat files are bundled into a single ZIP for easy download.
+- **User mapping** — Assign preferred names, roles, and track aliases for users.
+
+## Export Modes
+
+### Group Mode (Default)
+
+Select and export entire chats/groups. Best for:
+- Extracting specific conversations
+- Archiving group discussions
+- Fast scanning of large exports
+
+### User Mode
+
+Find and filter by specific users across all chats. Best for:
+- Tracking a specific person's messages across groups
+- Using a whitelist of user IDs to auto-select
+- Exporting full conversations where selected users participated
+
+## Run Locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open the localhost URL shown in the terminal.
+
+## Workflow
+
+### Group Mode (Recommended)
+
+1. **Set date range** (optional) — Choose start/end dates to filter messages.
+2. **Load Telegram export** — Select your JSON export file.
+3. **Scan** — Click "Scan for groups in date range" to list all chats.
+4. **Select groups** — Choose which chats to export.
+5. **Download** — Click "Download selected groups" to get a ZIP of the selected conversations.
+
+### User Mode
+
+1. **Set date range** (optional) — Choose start/end dates to filter messages.
+2. **Set user whitelist** (optional) — Paste user IDs (one per line) to auto-select after scanning.
+3. **Load Telegram export** — Select your JSON export file.
+4. **Scan** — Click "Scan for users in date range" to find all users.
+5. **Select users** — Choose users to filter by. Whitelist matches are pre-selected.
+6. **Filter and download** — Exports full conversations where selected users participated.
+
+User Mode performs a two-pass filter:
+- **Pass 1**: Find all chats where selected users have messages.
+- **Pass 2**: Export ALL messages from those chats (full conversation context).
+
+Results are downloaded as a ZIP file named `telegram_export_YYYY-MM-DD_to_YYYY-MM-DD.zip`.
+
+## User Mapping
+
+The file `src/user_mapping.json` provides roles, preferred names, and aliases. During export, new display names are discovered and added as aliases.
+
+### Roles
+
+- `staff` — Team members
+- `moderator` — Community moderators
+- `""` (blank) — Default for newly discovered users
+
+Users already in the mapping keep their assigned role. New users discovered during import get a blank role by default.
+
+### Mapping Format
+
+```json
+{
+  "version": "1",
+  "users": [
+    {
+      "userId": "123456789",
+      "preferredName": "Alice",
+      "aliases": ["Al", "alice_tg"],
+      "role": "staff"
+    }
+  ]
+}
+```
+
+## Output Format
+
+Each chat is saved as a separate JSON file with this structure:
+
+```json
+{
+  "chatId": "123456",
+  "chatName": "Example Chat",
+  "chatType": "private_supergroup",
+  "dateRange": {
+    "start": "2024-11-01T00:00:00.000Z",
+    "end": "2024-11-30T23:59:59.000Z"
+  },
+  "selectedUsers": ["123456789", "987654321"],
+  "messages": [
+    {
+      "messageId": "1",
+      "userId": "123456789",
+      "displayName": "Alice",
+      "mappedName": "Alice",
+      "role": "staff",
+      "date": "2024-11-25T18:28:00.000Z",
+      "text": "Hello team",
+      "chatId": "123456",
+      "chatName": "Example Chat",
+      "chatType": "private_supergroup"
+    }
+  ]
+}
+```
+
+## Optional Tools
+
+Located in the collapsible "Tools" section at the bottom of the UI:
+
+- **Download Mapping** — Export the current user mapping (with any new aliases discovered during the session).
+- **Reset Mapping** — Revert to the default mapping from `src/user_mapping.json`.
+- **Enrich Mapping** — Upload previously exported chat JSON files to discover additional user aliases.
+
+## Notes
+
+- All date inputs use UTC.
+- All parsing, filtering, and downloading happens client-side.
+- Large files are processed via streaming to avoid memory issues.
+- Truncated JSON files are handled gracefully with warnings.

@@ -1,0 +1,84 @@
+   755→  // Portal to document.body when dragged
+   756→  return position ? createPortal(panel, document.body) : panel;
+   757→};
+   758→
+   759→// Main Autopilot Widget Component
+   760→export const AutopilotWidget = () => {
+   761→  // Connect to autopilot backend and auto-subscribe to NATS market data
+   762→  useAutopilotSubscription({ isEnabled: true });
+   763→
+   764→  // Get all autopilot data from Zustand store
+   765→  const {
+   766→    positions,
+   767→    marketStatus,
+   768→    stats,
+   769→    scanTick,
+   770→    tokenList,
+   771→    config,
+   772→    strategies,
+   773→    isConnected,
+   774→    sendCommand,
+   775→    unrealizedPnlSol,
+   776→  } = useAutopilotData();
+   777→
+   778→  // Get signal strength map for screener token glow indicators
+   779→  const signalStrengthMap = useTokenSignalStrength();
+   780→
+   781→  // Settings panel state
+   782→  const [settingsOpen, setSettingsOpen] = useState(false);
+   783→
+   784→  // DEBUG: Debug panel state (remove before production)
+   785→  const [debugOpen, setDebugOpen] = useState(false);
+   786→
+   787→  const totalTokens =
+   788→    tokenList.watchlist.length +
+   789→    tokenList.trending.length +
+   790→    tokenList.whales.length;
+   791→
+   792→  return (
+   793→    <div className="flex h-full flex-col gap-4 overflow-hidden">
+   794→      {/* Header - Market Status */}
+   795→      <div className="flex items-center justify-between">
+   796→        <div className="flex items-center gap-2">
+   797→          <Bot
+   798→            className={cn(
+   799→              "h-5 w-5",
+   800→              isConnected ? "text-text-success" : "text-text-error"
+   801→            )}
+   802→          />
+   803→          <span className="text-text-primary text-sm font-semibold">
+   804→            Token Autopilot
+   805→          </span>
+   806→          {scanTick && (
+   807→            <Tooltip
+   808→              content={`Scan #${scanTick.scanNumber} analyzed ${totalTokens} tokens this cycle`}
+   809→              side="bottom"
+   810→            >
+   811→              <span className="text-text-secondary cursor-help text-[10px]">
+   812→                #{scanTick.scanNumber} · {totalTokens} tokens
+   813→              </span>
+   814→            </Tooltip>
+   815→          )}
+   816→          {isConnected && (
+   817→            <>
+   818→              <span className="text-text-tertiary text-[10px]">|</span>
+   819→              <ScanCountdown
+   820→                scanTimestamp={scanTick?.timestamp ?? null}
+   821→                intervalMs={config.pollIntervalMs}
+   822→              />
+   823→            </>
+   824→          )}
+   825→        </div>
+   826→        <div className="flex items-center gap-3">
+   827→          {/* PAPER/LIVE mode badge */}
+   828→          <span
+   829→            className={cn(
+   830→              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+   831→              config.mode === "paper"
+   832→                ? "bg-bg-warning-primary text-text-warning"
+   833→                : "bg-bg-success-primary text-text-success"
+   834→            )}
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

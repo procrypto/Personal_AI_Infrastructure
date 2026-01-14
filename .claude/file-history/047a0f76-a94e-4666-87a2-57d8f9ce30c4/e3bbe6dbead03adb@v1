@@ -1,0 +1,148 @@
+/**
+ * Search Token Endpoint
+ *
+ * Fetches token information by mint address.
+ *
+ * ⚠️  This fetches PRODUCTION data.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, escapeString, isSolanaPubkey } from "../../clickhouse/client";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type TokenSearchResult = {
+    mint: string;
+    name: string;
+    symbol: string;
+    description: string;
+    image: string;
+    decimals: number;
+    exchange: string;
+    launchpad: string | null;
+    partner: string | null;
+    market_cap_sol: string;
+    market_cap_usd: string;
+    price_sol: string;
+    price_usd: string;
+    volume_24h_sol: string;
+    volume_24h_usd: string;
+    liquidity_sol: string;
+    liquidity_usd: string;
+    holders: string;
+    created: string;
+    has_graduated: boolean;
+    about_to_graduate: boolean;
+    timestamp: string;
+};
+
+type SearchTokenResponse =
+    | { ok: true; token: TokenSearchResult | null }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerSearchTokenRoutes = (app: Elysia) => {
+    app.get("/search/:mint", async ({ params }) => {
+        const mint = params.mint;
+
+        // ---------------------------------------------------------------------
+        // 1. Validate mint
+        // ---------------------------------------------------------------------
+        const validated = validateSearchTokenRequest(mint);
+        if (!validated.ok) {
+            return validated;
+        }
+
+        // ---------------------------------------------------------------------
+        // 2. Build query
+        // ---------------------------------------------------------------------
+        const sql = buildSearchTokenSql(validated.input.mint);
+
+        console.log(`[search] Looking up token mint=${mint}`);
+
+        const result = await clickhouseQuery<TokenSearchResult>(sql);
+
+        if (!result.success) {
+            return {
+                ok: false,
+                error: result.error,
+            } satisfies SearchTokenResponse;
+        }
+
+        return formatSearchTokenResponse(result.data, validated.input.mint);
+    });
+};
+
+// =============================================================================
+// Base helpers (exported for extensions)
+// =============================================================================
+
+export const validateSearchTokenRequest = (
+    mint: string
+): { ok: true; input: { mint: string } } | { ok: false; error: string } => {
+    if (!isSolanaPubkey(mint)) {
+        return {
+            ok: false,
+            error: "Invalid mint address",
+        };
+    }
+    return { ok: true, input: { mint } };
+};
+
+export const buildSearchTokenSql = (mint: string): string => {
+    return `
+        SELECT
+            mint,
+            name,
+            symbol,
+            description,
+            image,
+            decimals,
+            exchange,
+            launchpad,
+            partner,
+            market_cap_sol,
+            market_cap_usd,
+            price_sol,
+            price_usd,
+            volume_24h_sol,
+            volume_24h_usd,
+            liquidity_sol,
+            liquidity_usd,
+            holders,
+            created,
+            has_graduated,
+            about_to_graduate,
+            timestamp
+        FROM materializer_token_market_data_latest
+        WHERE mint = '${escapeString(mint)}'
+        ORDER BY timestamp DESC
+        LIMIT 1
+    `;
+};
+
+export const formatSearchTokenResponse = (
+    rows: TokenSearchResult[],
+    mint: string
+): SearchTokenResponse => {
+    const token = rows.length > 0 ? rows[0] : null;
+
+    if (token) {
+        console.log(`[search] Found token: ${token.symbol} (${token.name})`);
+    }
+    else {
+        console.log(`[search] Token not found for mint=${mint}`);
+    }
+
+    return {
+        ok: true,
+        token,
+    };
+};
+
+

@@ -1,0 +1,203 @@
+# Autopilot Native Integration Plan
+
+## Summary
+Integrate token-analysis-autopilot with web-terminal-frontend using native NATS WebSocket patterns and Zustand store. Frontend fetches market data via NATS; autopilot backend only sends positions/signals/strategies.
+
+## Architecture Change
+
+```
+BEFORE: Backend fetches market data → broadcasts positions with P&L → frontend displays
+AFTER:  Backend broadcasts position entries → frontend subscribes NATS for prices → calculates P&L
+```
+
+## Data Flow
+
+```
+┌─────────────────────┐          ┌──────────────────────┐
+│  AUTOPILOT BACKEND  │          │  NATS WS (existing)  │
+│  (ws://localhost:   │          │  market_data.{mint}  │
+│   8765)             │          └──────────────────────┘
+└─────────────────────┘                    │
+         │                                 │
+         │ positions (entry only)          │ live prices
+         │ signals, strategies             │
+         │ config, stats                   │
+         ▼                                 ▼
+┌────────────────────────────────────────────────────────┐
+│                   ZUSTAND STORE                        │
+│  autopilot.positions   │   websocketMessages.market_data│
+│  autopilot.signals     │                               │
+│  autopilot.strategies  │                               │
+└────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│              useAutopilotPositions Hook                │
+│  Combines entry data + live prices = P&L calculation   │
+└────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│                 AutopilotWidget                        │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Implementation Phases
+
+### Phase 1: Zustand Store Slice
+Create autopilot store for non-market data:
+
+**New files:**
+- `apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts`
+- `apps/web-terminal/src/store/memoryStore/slices/autopilot-store/autopilot-store.ts`
+
+**Store contents:**
+- `positions: Map<mint, PositionEntry>` (entry data only - no current price)
+- `signals: AutopilotSignal[]` (last 50)
+- `strategies: { available, active }`
+- `config: { mode, positionSize, toggles }`
+- `marketStatus: { state, solChange, blockEntries }`
+- `stats: { totalTrades, winRate, pnl }`
+- `scanTick: { scanNumber, tokenCount }`
+- `tokenList: { watchlist, trending, whales }`
+- `isConnected: boolean`
+
+**Modify:**
+- `apps/web-terminal/src/store/memoryStore/types.ts` - add AutopilotStore to GlobalStore
+
+---
+
+### Phase 2: WebSocket Infrastructure
+Extend BaseWebsocket for autopilot connection:
+
+**New files:**
+- `apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts`
+- `apps/web-terminal/src/websocket/autopilot/autopilotWebsocketInstance.ts`
+- `apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts`
+
+**Key features:**
+- Extend `BaseWebsocket` class
+- No auth token needed (local service)
+- `sendCommand(cmd)` for toggle/config commands
+- `subscribeToData(onMessage)` for receiving updates
+- URL detection: `ws://localhost:8765` (dev) or `wss://{host}/autopilot-ws` (prod)
+
+---
+
+### Phase 3: Subscription & Data Hooks
+
+**New files:**
+- `apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts`
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts`
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts`
+
+**useAutopilotSubscription:**
+- Uses `useBaseSubscription` pattern
+- Connects to autopilot WebSocket
+- Auto-subscribes to NATS `market_data.{mint}` for each position mint
+- Handles cleanup on unmount
+
+**useAutopilotPositions:**
+- Gets position entries from `autopilot.positions`
+- Gets market data from `websocketMessages.market_data`
+- Calculates P&L: `(currentPrice - entryPrice) / entryPrice * 100`
+- Returns positions with live P&L (or null if no market data)
+
+**useAutopilotData:**
+- Main hook for widget consumption
+- Returns all autopilot data + `sendCommand` function
+
+---
+
+### Phase 4: Widget Migration
+
+**Modify:**
+- `apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx`
+
+**Changes:**
+1. Remove old `useAutopilotWebSocket` hook (lines 135-266)
+2. Import new hooks: `useAutopilotSubscription`, `useAutopilotData`
+3. Replace local state with Zustand store access
+4. Update `PositionCard` to handle nullable P&L (show "Loading..." if null)
+
+```tsx
+// New pattern
+export const AutopilotWidget = () => {
+  useAutopilotSubscription({ isEnabled: true });
+  const { positions, signals, stats, ... } = useAutopilotData();
+  // ... render
+};
+```
+
+---
+
+### Phase 5: Backend Simplification
+
+**Modify:**
+- `token-analysis-autopilot/src/websocket-server.ts`
+- `token-analysis-autopilot/src/cli.ts`
+
+**Changes to PositionData interface:**
+```typescript
+// REMOVE these fields:
+currentPriceSol: number;
+pnlPercent: number;
+pnlSol: number;
+
+// KEEP these fields:
+mint, symbol, action, entryPriceSol, positionSizeSol, entryTime
+```
+
+**Changes to cli.ts broadcast (lines 825-849):**
+- Remove market data lookup for positions
+- Remove P&L calculation
+- Just broadcast entry data for all open trades
+- This fixes the BONK issue (no market data needed)
+
+---
+
+### Phase 6: Cleanup
+- Remove old `useAutopilotWebSocket` code
+- Add index.ts exports
+- Test end-to-end
+
+---
+
+## Critical Files
+
+| File | Action |
+|------|--------|
+| `web-terminal-frontend/.../store/memoryStore/types.ts` | Add AutopilotStore |
+| `web-terminal-frontend/.../store/memoryStore/slices/autopilot-store/` | Create (new) |
+| `web-terminal-frontend/.../websocket/autopilot/` | Create (new) |
+| `web-terminal-frontend/.../hooks/useAutopilot/` | Create (new) |
+| `web-terminal-frontend/.../hooks/useSubscriptions/useAutopilotSubscription.ts` | Create (new) |
+| `web-terminal-frontend/.../ui/dashboard/widgets/autopilot-widget.tsx` | Migrate |
+| `token-analysis-autopilot/src/websocket-server.ts` | Simplify PositionData |
+| `token-analysis-autopilot/src/cli.ts` | Remove P&L from broadcast |
+
+---
+
+## Migration Strategy
+
+**Clean replacement** - Replace old code directly as we build new infrastructure. Widget may be temporarily non-functional during implementation, but results in cleaner codebase with no feature flags or dual code paths.
+
+---
+
+## Key Benefits
+
+1. **Fixes BONK issue** - Backend no longer needs market data for positions
+2. **Consistent architecture** - Uses same patterns as rest of frontend
+3. **Real-time prices** - NATS market data updates instantly
+4. **Centralized state** - Zustand store enables other components to consume autopilot data
+5. **Reduced backend complexity** - No market data fetching for position broadcasts
+
+---
+
+## Working Directory
+
+Switch to: `/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot`
+
+This is the worktree for the autopilot feature branch.

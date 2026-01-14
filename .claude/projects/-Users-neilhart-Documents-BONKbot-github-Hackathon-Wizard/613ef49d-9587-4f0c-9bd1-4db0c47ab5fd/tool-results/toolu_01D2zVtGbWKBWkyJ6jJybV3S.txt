@@ -1,0 +1,152 @@
+     1→import { cn } from "@/lib/utils";
+     2→import * as RadixTooltip from "@radix-ui/react-tooltip";
+     3→import * as RadixPopover from "@radix-ui/react-popover";
+     4→import { useMediaQuery } from "usehooks-ts";
+     5→import {
+     6→  popoverContentVariants,
+     7→  type PopoverContentVariantProps,
+     8→} from "@/components/popover";
+     9→
+    10→type TooltipProps = {
+    11→  children: React.ReactNode;
+    12→  content: React.ReactNode;
+    13→  className?: string;
+    14→  side?: "top" | "right" | "bottom" | "left";
+    15→  align?: "start" | "center" | "end";
+    16→  withArrow?: boolean;
+    17→  asChild?: boolean;
+    18→  triggerClassName?: string;
+    19→  unstyled?: boolean; // default: false
+    20→  onOpenChange?: (open: boolean) => void;
+    21→  open?: boolean;
+    22→  arrowClassName?: string;
+    23→  contentProps?: React.ComponentProps<typeof RadixTooltip.Content>;
+    24→  triggerProps?: React.ComponentProps<typeof RadixTooltip.Trigger>;
+    25→  disableHoverableContent?: boolean;
+    26→  sideOffset?: number;
+    27→  disabled?: boolean;
+    28→  delayDuration?: number;
+    29→  skipDelayDuration?: number;
+    30→} & PopoverContentVariantProps;
+    31→
+    32→export const Tooltip = ({
+    33→  children,
+    34→  content,
+    35→  className,
+    36→  variant,
+    37→  compact,
+    38→  side = "top",
+    39→  align = "center",
+    40→  withArrow = true,
+    41→  asChild = false,
+    42→  triggerClassName,
+    43→  unstyled = false,
+    44→  arrowClassName,
+    45→  open,
+    46→  contentProps,
+    47→  disableHoverableContent = true,
+    48→  triggerProps,
+    49→  onOpenChange,
+    50→  disabled = false,
+    51→  sideOffset = 0,
+    52→  delayDuration = 0,
+    53→  skipDelayDuration = 0,
+    54→}: TooltipProps) => {
+    55→  // Detect if the device is a touch device. Works on mobile and tablet.
+    56→  const isTouch = useMediaQuery("(pointer: coarse)");
+    57→
+    58→  // props should be controlled only if open & onOpenChange are provided
+    59→  const controlledProps =
+    60→    open !== undefined && onOpenChange ? { open, onOpenChange } : {};
+    61→
+    62→  // https://github.com/radix-ui/primitives/issues/955#issuecomment-960610209
+    63→  // Tooltip is not working on mobile devices, so we use Popover instead
+    64→  if (isTouch) {
+    65→    return (
+    66→      <RadixPopover.Root {...controlledProps}>
+    67→        <RadixPopover.Trigger
+    68→          asChild={asChild}
+    69→          className={cn("outline-none", triggerClassName)}
+    70→        >
+    71→          {children}
+    72→        </RadixPopover.Trigger>
+    73→        <RadixPopover.Portal>
+    74→          <RadixPopover.Content
+    75→            onClick={e => e.stopPropagation()}
+    76→            side={side}
+    77→            align={align}
+    78→            sideOffset={sideOffset}
+    79→            className={cn(
+    80→              "animate-in fade-in-0 zoom-in-95 relative z-[9999] max-w-60 rounded outline-none sm:max-w-full",
+    81→              !unstyled && "bg-black",
+    82→              !unstyled && popoverContentVariants({ variant, compact }),
+    83→              className
+    84→            )}
+    85→            collisionPadding={10}
+    86→            {...contentProps}
+    87→          >
+    88→            {withArrow && (
+    89→              <RadixPopover.Arrow
+    90→                className={cn("h-1.5 w-4 fill-black", arrowClassName)}
+    91→              />
+    92→            )}
+    93→            {content}
+    94→          </RadixPopover.Content>
+    95→        </RadixPopover.Portal>
+    96→      </RadixPopover.Root>
+    97→    );
+    98→  }
+    99→
+   100→  return (
+   101→    <RadixTooltip.Provider
+   102→      delayDuration={delayDuration}
+   103→      skipDelayDuration={skipDelayDuration}
+   104→    >
+   105→      <RadixTooltip.Root
+   106→        {...(open !== undefined ? { open } : {})}
+   107→        disableHoverableContent={disableHoverableContent}
+   108→        onOpenChange={onOpenChange}
+   109→      >
+   110→        <RadixTooltip.Trigger
+   111→          asChild={asChild}
+   112→          className={cn(
+   113→            "outline-none",
+   114→            disabled && "pointer-events-none",
+   115→            triggerClassName
+   116→          )}
+   117→          {...triggerProps}
+   118→        >
+   119→          {children}
+   120→        </RadixTooltip.Trigger>
+   121→        <RadixTooltip.Portal>
+   122→          <RadixTooltip.Content
+   123→            onClick={e => e.stopPropagation()}
+   124→            side={side}
+   125→            align={align}
+   126→            sideOffset={sideOffset}
+   127→            className={cn(
+   128→              "animate-in fade-in-0 zoom-in-95 relative z-[9999] rounded",
+   129→              !unstyled && "bg-black",
+   130→              !unstyled && popoverContentVariants({ variant, compact }),
+   131→              className
+   132→            )}
+   133→            collisionPadding={10}
+   134→            {...contentProps}
+   135→          >
+   136→            {withArrow && (
+   137→              <RadixTooltip.Arrow
+   138→                className={cn("h-1.5 w-4 fill-black", arrowClassName)}
+   139→              />
+   140→            )}
+   141→            {content}
+   142→          </RadixTooltip.Content>
+   143→        </RadixTooltip.Portal>
+   144→      </RadixTooltip.Root>
+   145→    </RadixTooltip.Provider>
+   146→  );
+   147→};
+   148→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,103 @@
+# wasm-validator - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2026-01-10
+- **Last updated**: 2026-01-10
+- **Discovery depth**: Standard
+- **Documentation quality**: Good (has README, comprehensive code comments)
+
+---
+
+## System Identity
+
+**What it is**: WebAssembly transaction validation framework for BONKbot.
+
+**What it does**:
+- Validates Solana transactions before DEX execution
+- Enforces fee policies and recipient whitelisting
+- Runs in sandboxed WASM environment for security
+- Supports 19 DEX platforms (Jupiter, Raydium, Meteora, etc.)
+
+**Key insight**: Critical security layer - prevents unauthorized transfers and validates swap conditions before execution.
+
+---
+
+## Architecture Highlights
+
+### Stack
+- Rust 1.88.0 targeting wasm32-wasip1 (WASI)
+- Solana SDK 1.18.23
+- Borsh/Bincode serialization
+- FFI to host via lookup/result functions
+
+### Workspace Structure
+```
+crates/           # Shared infrastructure
+  common/         # Types, constraints, errors
+  host_extern/    # WASM host bindings (FFI)
+  programs/       # Solana program parsers (20 DEXes)
+modules/          # WASM validation binaries
+  send_sol/       # Direct SOL transfers
+  sol_swap/       # Multi-DEX token swaps (main module)
+  sslp_create/    # Meteora DLMM liquidity
+```
+
+### Supported DEXes (19)
+Jupiter, Raydium (Standard/CLMM/CPMM/Launchpad), Meteora (4 variants), Orca, PumpFun (2), Boop, Heaven, Messina, Moonshot, Limit Order, Token Mill, Vertigo
+
+---
+
+## Key Patterns
+
+1. **VerifyProgram Trait**: Generic instruction parser/verifier
+2. **WASM Host FFI**: `lookup()`, `lookupInt()`, `result()` for host communication
+3. **Constraint Variants**: Type-safe enum (SolSwap, SendSol, SendTokenOwn, etc.)
+4. **Dual Mode**: ENV=dev/prod for testing vs production
+
+---
+
+## Validation Flow
+
+```
+Host provides: transactions, constraints, annotations
+  ↓ FFI (lookup)
+WASM Module:
+  1. Deserialize constraint/annotation
+  2. Iterate transactions
+  3. Validate instructions per DEX
+  4. Check amounts, fees, destinations
+  ↓ FFI (result)
+Host receives: verification result
+```
+
+---
+
+## Key Constraints
+
+- `max_fee_bps`: Max 100 (1%) fee
+- `fee_receivers`: Whitelisted BONKbot accounts only
+- `max_priority_fee`: 100 SOL limit
+- Token whitelist for purchases
+- Destination account validation
+
+---
+
+## Working Here
+
+### Build
+```bash
+rustup target add wasm32-wasip1
+ENV=prod cargo build --target wasm32-wasip1 --release
+```
+
+### Test
+```bash
+ENV=dev cargo test --workspace -- --test-threads=1
+```
+
+---
+
+## Team & Ownership
+
+**Key Contributors**: tarquin-the-brave (38 PRs), lewilewilewi (16), pvishayanuroj (10)
+**Created**: November 2024

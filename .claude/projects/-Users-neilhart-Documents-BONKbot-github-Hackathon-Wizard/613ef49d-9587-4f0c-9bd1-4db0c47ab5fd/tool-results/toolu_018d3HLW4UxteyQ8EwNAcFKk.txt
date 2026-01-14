@@ -1,0 +1,216 @@
+     1→# PUM3 (Program Update Machine, 3rd edition)
+     2→
+     3→Add any docs to the Notion: https://www.notion.so/PUM3-1b52420e776c8054bd98cd764caed36a
+     4→# PUM3 (Program Update Machine, 3rd edition)
+     5→A high-performance caching layer for Solana blockchain state, designed to power DEX operations, limit orders, and swap construction.
+     6→
+     7→## Overview
+     8→
+     9→The easiest way to think about PUM3 is as a glorified cache. **Its main responsibility is to store and maintain the relevant parts of the latest state of the Solana blockchain**. Its secondary responsibilities include:
+    10→
+    11→- Publishing the latest state to interested parties (e.g. Web Terminal Data Pipeline)
+    12→- Using the state to determine spot price, construct quotes and build messages used for swaps
+    13→- Evaluating and executing limit orders
+    14→
+    15→## Table of Contents
+    16→
+    17→- [Fundamental Concepts](#fundamental-concepts)
+    18→- [Core System](#core-system)
+    19→- [Limit Order System](#limit-order-system)
+    20→- [Utilities](#utilities)
+    21→
+    22→---
+    23→
+    24→## Fundamental Concepts
+    25→
+    26→### Dex
+    27→
+    28→Decentralized exchange. These are typically run by large companies like `Meteora`, `Orca`, `Raydium`, etc. There can be multiple dexes run by a single entity, such as `RaydiumAMM`, `RaydiumCLMM`, `RaydiumCPMM`, and `RaydiumLaunchlab`.
+    29→
+    30→The full list of dexes is defined in [`pum3/common/src/dexes.rs`](https://github.com/BonkBotTeam/pum3/blob/e042455c8c213ed3aef28070e832572af828577b/pum3/common/src/dexes.rs#L4). Note: this is not necessarily the set of dexes that PUM3 supports—the active set is defined in each binary's `.env` file.
+    31→
+    32→There are various types of dexes:
+    33→- **Traditional AMMs** (automated market makers) — e.g. `RaydiumAMM`
+    34→- **Concentrated liquidity pools** — e.g. `RaydiumCLMM`, `Orca Whirlpools`
+    35→
+    36→### Pool
+    37→
+    38→A pool represents a token pair (`token_a` and `token_b`) and allows users to swap between the two. **There can be multiple pools that trade the same token pair, across multiple dexes or even on the same dex.**
+    39→
+    40→One of the core questions PUM3 is designed to answer: *What is the best pool or pools that a user should use to swap from `token_a` to `token_b`?*
+    41→
+    42→### Account Data
+    43→
+    44→A fundamental data structure for data stored and retrieved from the Solana blockchain. Data such as token accounts, mint accounts, pool data, etc. are represented as account data. This is primarily what PUM3 stores.
+    45→
+    46→### Geyser
+    47→
+    48→A streaming data feed provided by RPC providers such as `Helius` or `Triton`. Provides account updates, transaction updates, slot updates, etc. We interact with Geyser by setting up subscription requests:
+    49→
+    50→```rust
+    51→let owners = SubscribeRequestFilterAccounts {
+    52→    owner: owner_program_ids
+    53→        .iter()
+    54→        .map(|x| bs58::encode(&x).into_string())
+    55→        .collect(),
+    56→    account: vec![],
+    57→    filters: vec![],
+    58→    nonempty_txn_signature: None,
+    59→};
+    60→
+    61→SubscribeRequest {
+    62→    accounts: hashmap! {
+    63→        "pools".to_string() => owners,
+    64→    },
+    65→    slots: hashmap! {},
+    66→    transactions: hashmap! {},
+    67→    transactions_status: hashmap! {},
+    68→    entry: hashmap! {},
+    69→    blocks: hashmap! {},
+    70→    blocks_meta: hashmap! {},
+    71→    commitment: Some(commitment.into()),
+    72→    accounts_data_slice: vec![],
+    73→    ping: None,
+    74→    from_slot: None,
+    75→}
+    76→```
+    77→
+    78→---
+    79→
+    80→## Core System
+    81→
+    82→The core system is composed of the `publisher`, `api`, and `writer` binaries. All binaries are built from the `nami` crate. Each variant listens to a Geyser stream and filters for account updates for pools that have been indexed.
+    83→
+    84→### Architecture
+    85→
+    86→![Core Architecture](docs/images/pum3-core-architecture.png)
+    87→
+    88→### Publisher
+    89→
+    90→The `publisher` binary is responsible for publishing price updates to the materializer via NATS.
+    91→
+    92→### API
+    93→
+    94→The `api` binary is responsible for serving pricing, quotes, and swap instructions via an HTTP endpoint.
+    95→
+    96→### Writer
+    97→
+    98→The `writer` binary listens specifically for Pumpfun account updates and writes each update to Redis. This is necessary to ensure that Pumpfun data in Redis stays up-to-date for use when the `api` instance starts up.
+    99→
+   100→### Storage
+   101→
+   102→Because PUM3 is essentially a cache, it is worth reviewing exactly how data is stored. The relevant structures are:
+   103→
+   104→```rust
+   105→ThreadSafePool = Arc<RwLock<Box<dyn Pool + Send + Sync>>>;
+   106→
+   107→// StorageLayerInner
+   108→
+   109→pools_by_address: RwLock<FxHashMap<Pubkey, ThreadSafePool>>,
+   110→
+   111→pools_by_token_pair: RwLock<FxHashMap<TokenPair, HashSet<HashableThreadSafePool>>>,
+   112→
+   113→account_to_pools: RwLock<FxHashMap<Pubkey, HashSet<HashableThreadSafePool>>>,
+   114→
+   115→// SharedAccountStorage
+   116→
+   117→storage: RwLock<FxHashMap<SharedAccountType, SharedAccountVariant>>,
+   118→
+   119→// HopMap
+   120→
+   121→hops: DashMap<Pubkey, HashSet<Pubkey>>,
+   122→```
+   123→
+   124→| Structure | Description |
+   125→|-----------|-------------|
+   126→| `ThreadSafePool` | An `Arc<RwLock<Box<dyn Pool + Send + Sync>>>` — a pointer to a pool guarded by a read/write lock. |
+   127→| `pools_by_address` | Pools keyed by pool address. Used for directly accessing pools to get pricing, quotes, and building swaps once the route has been determined. |
+   128→| `pools_by_token_pair` | Pools keyed by `token_a` and `token_b` pair. Used for queries such as determining which pools a token pair can trade on. |
+   129→| `account_to_pools` | Pools keyed by account data address. Critical for determining which pool's data is modified when an account update is received from Geyser. |
+   130→| `storage` | Shared account type to shared account data. Used to store accounts that are shared across multiple pools. |
+   131→| `hops` | The set of tokens that a token (the key) shares a pool with. Used for determining which paths are available between a `token_a` and `token_b`. |
+   132→
+   133→### Routing
+   134→
+   135→Routing is used for calculating quotes and building swaps. The routing algorithm uses the following steps:
+   136→
+   137→1. List all paths between `token_a` and `token_b` (graph search using `hops` map)
+   138→2. Iterate through each path:
+   139→   - For each hop within the path, determine which one has the greatest `amount_out`
+   140→   - Keep all the best hops for a given path and calculate the final `amount_out`
+   141→3. Determine which path has the greatest `amount_out`
+   142→4. Construct swap (if necessary) using the selected path
+   143→
+   144→### Swap Construction
+   145→
+   146→Uses the builder pattern to "apply" plugins. Examples of plugins:
+   147→
+   148→- Address lookup table plugin
+   149→- Cleanup plugin (close ATA)
+   150→- Compute budget plugin
+   151→- Fee program plugin
+   152→- Pumpfun/Pumpswap user volume plugin
+   153→- Setup plugin (create ATA, transfer, and sync)
+   154→
+   155→Instructions are constructed per `submitter` type:
+   156→- Rpc
+   157→- Jito
+   158→- Jito Bundle
+   159→- Nozomi
+   160→
+   161→---
+   162→
+   163→## Limit Order System
+   164→
+   165→The limit order system introduces two new binaries: `dispatcher` and `evaluator`. Both binaries are built from the `lois` crate.
+   166→
+   167→### Architecture
+   168→
+   169→![Limit Order Architecture](docs/images/pum3-limit-order-architecture.png)
+   170→
+   171→### Dispatcher
+   172→
+   173→The `dispatcher` listens for incoming price updates and checks if any of the tokens associated with the price update match a token that a limit order is configured to swap on. If a trigger condition is met, an evaluation request is sent to the `evaluator` via NATS. For trailing limit orders, the high water mark is kept updated in Postgres.
+   174→
+   175→Additionally, the `dispatcher` must maintain an up-to-date state for *all* unfulfilled limit orders:
+   176→- Limit order creations, updates, and deletions are sent via NATS from the BONKbot API server
+   177→- The `dispatcher` also runs a maintenance poll that queries directly against the Postgres database to use as a source of truth
+   178→
+   179→### Evaluator
+   180→
+   181→The `evaluator` listens for evaluation requests originating from the `dispatcher`. If one is received, the following steps are taken:
+   182→
+   183→1. Grab the lock to ensure no other instance can process this request
+   184→2. Check against the DB that the limit order is still unfulfilled
+   185→3. Determine slippage settings:
+   186→   - `min_amount_out` (buy dips & take profits)
+   187→   - `slippage_bps` (all other limit order types)
+   188→4. Build the swap message via PUM3 `api`
+   189→5. Check price impact
+   190→6. Get signature from signer
+   191→7. Simulate swap
+   192→8. Submit and confirm swap
+   193→9. Update DB tables to update order and swap states
+   194→10. Send NATS message to let `dispatcher` know the order was fulfilled and can be removed from memory
+   195→11. Calculate and log order execution metrics
+   196→
+   197→---
+   198→
+   199→## Utilities
+   200→
+   201→### Address Lookup Table (ALT) Updater
+   202→
+   203→Tool for managing the state of the ALTs that BONKbot uses with its swaps.
+   204→
+   205→### Dex Tester
+   206→
+   207→Tool for obtaining quotes and executing swaps against a running PUM3 instance. Contains test cases for various dexes and swap types.
+   208→
+   209→### Pumpfun Backfill
+   210→
+   211→Tool for reading a CSV file containing bonding curve and mint addresses (generated from a Snowflake query), making RPCs to fetch the underlying account data, and storing this into Redis.
+   212→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

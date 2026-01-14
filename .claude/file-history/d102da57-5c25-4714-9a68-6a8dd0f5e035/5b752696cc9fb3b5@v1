@@ -1,0 +1,66 @@
+# Token Analysis Autopilot
+
+## What This Is
+
+Backend evaluation engine for the token-analysis-autopilot dashboard widget. Receives market data from the main web-terminal app, runs trading rules, generates signals, and tracks paper P&L. Designed for future Rust rewrite and LOIS live trading integration.
+
+## Core Value
+
+**Fast evaluation with clean LOIS-ready architecture.** Signal generation must be sub-100ms. Interfaces must be clean enough to reimplement in Rust.
+
+## Requirements
+
+### Validated
+
+- ✓ Rule engine with pluggable rules — existing
+- ✓ Paper trading with P&L tracking — existing
+- ✓ WebSocket server for frontend communication — existing
+- ✓ Williams fractal trailing stop logic — existing
+- ✓ Rotations/market structure analysis — existing
+- ✓ Magic buy/exit automation — existing
+- ✓ SOL dump protection (market filter) — existing
+
+### Active
+
+- [ ] Receive data from main app instead of fetching (invert data flow)
+- [ ] Pre-computed metrics path for simple rules (price %, volume ratios)
+- [ ] Raw OHLCV path for complex analysis (rotations, fractals)
+- [ ] Sub-100ms signal evaluation latency
+- [ ] Clean interfaces suitable for Rust reimplementation
+- [ ] Parallel development: new architecture alongside existing
+
+### Out of Scope
+
+- Live LOIS trading execution — architecture only, no actual trades
+- Frontend/main app changes — backend refactor only this push
+- New rule types — focus on speed, not new analysis methods
+- Accurate signal tuning — next push priority
+
+## Context
+
+**Current state:** This backend polls BONKbot API for market data, runs analysis, broadcasts via WebSocket. Works but adds latency and duplicates data the main app already has.
+
+**Target state:** Main app firehoses market data to this backend. This becomes a pure evaluation engine - receives data, scores it, emits signals.
+
+**Data split:**
+- Pre-computed (from main app): price changes, volume ratios, buy/sell counts → simple rules
+- Raw OHLCV + trades (from main app): → complex analysis (rotations, fractals, SFP)
+
+**Future path:** Rust rewrite to integrate tightly with LOIS execution engine.
+
+## Constraints
+
+- **None hard** — free to redesign architecture
+- **Soft preference** — parallel development, keep existing system working until cutover
+
+## Key Decisions
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Main app owns data ingestion | Avoid duplicate WebSocket connections, reduce latency | — Pending |
+| Hybrid data flow (pre-computed + raw) | Simple rules don't need OHLCV, complex ones do | — Pending |
+| LOIS-ready interfaces over speed hacks | Enables Rust rewrite without major redesign | — Pending |
+| Parallel development approach | Lower risk, can validate before cutover | — Pending |
+
+---
+*Last updated: 2026-01-09 after initialization*

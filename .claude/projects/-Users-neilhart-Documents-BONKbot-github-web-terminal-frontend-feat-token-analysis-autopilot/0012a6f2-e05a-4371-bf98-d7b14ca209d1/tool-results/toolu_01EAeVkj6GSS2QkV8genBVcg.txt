@@ -1,0 +1,100 @@
+#!/usr/bin/env node
+/**
+ * CLI Interface
+ *
+ * Simple CLI for configuring and running the analysis autopilot.
+ */
+
+import { configStore } from './config/index.js';
+import type { TokenSource } from './config/types.js';
+import { templates, listTemplates, getTemplate, getTemplateSummary, RuleEngine } from './rules/index.js';
+import { localApi } from './api/index.js';
+import { paperTracker, createTrigger, createAutoSourceManager, magicExits, magicBuy, marketFilter, MarketFilter } from './trading/index.js';
+import { wsServer, type PositionData, type SignalData, type MarketStatusData, type StatsData, type WatchedToken, type TokenListData, type ConfigData, type AutopilotCommand, type StrategiesData, type StrategyInfo } from './websocket-server.js';
+
+// Wrapped SOL mint for market filter
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+
+const HELP = `
+Token Analysis Autopilot CLI
+
+Commands:
+  watch <mint> [symbol]  Add token to watchlist
+  unwatch <mint>         Remove token from watchlist
+  list                   List watchlist
+
+  sources                Show auto-source status (trending, whales)
+  sources on|off         Enable/disable auto-sources
+  sources trending on|off
+  sources whales on|off
+
+  templates              List available rule templates
+  use <template>         Add a template to active rules
+  remove <rule-id>       Remove a rule set
+  rules                  List active rules
+
+  config                 Show current config
+  mode <paper|live>      Set trigger mode
+  size <sol>             Set default position size
+
+  filter                 Show market filter status
+  filter on|off          Enable/disable market filter
+
+  analyze <mint>         Analyze a single token (with trigger)
+  run                    Start analysis loop
+
+  status                 Live portfolio overview with P&L
+  trades                 List all paper trades
+  stats                  Show trading stats
+  close <mint>           Close open position for mint
+  reset                  Clear all trading data
+
+  help                   Show this help
+`;
+
+async function main() {
+  const args = process.argv.slice(2);
+  const command = args[0]?.toLowerCase();
+
+  await configStore.load();
+  await paperTracker.load();
+
+  switch (command) {
+    case 'watch': {
+      const mint = args[1];
+      const symbol = args[2];
+      if (!mint) {
+        console.error('Usage: watch <mint> [symbol]');
+        process.exit(1);
+      }
+      configStore.addToWatchlist(mint, symbol);
+      await configStore.save();
+      console.log(`Added ${symbol || mint} to watchlist`);
+      break;
+    }
+
+    case 'unwatch': {
+      const mint = args[1];
+      if (!mint) {
+        console.error('Usage: unwatch <mint>');
+        process.exit(1);
+      }
+      if (configStore.removeFromWatchlist(mint)) {
+        await configStore.save();
+        console.log(`Removed ${mint} from watchlist`);
+      } else {
+        console.log('Token not found in watchlist');
+      }
+      break;
+    }
+
+    case 'list': {
+      const watchlist = configStore.getWatchlist();
+      if (watchlist.length === 0) {
+        console.log('Watchlist is empty');
+      } else {
+        console.log('\nWatchlist:');
+        for (const token of watchlist) {
+          console.log(`  ${token.symbol || 'Unknown'} - ${token.mint}`);
+        }
+      }

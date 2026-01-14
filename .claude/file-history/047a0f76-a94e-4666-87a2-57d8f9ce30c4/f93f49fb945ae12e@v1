@@ -1,0 +1,250 @@
+/**
+ * Holders Stats Batch Endpoint
+ *
+ * Fetches top holders for multiple token mints in a single query.
+ * Returns holders grouped by mint address.
+ *
+ * ⚠️  This fetches PRODUCTION data. Strict limits are enforced.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, buildInList, isSolanaPubkey, clamp } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const MAX_MINTS = 50;
+const MAX_ADDRESSES = 200;
+const DEFAULT_LIMIT_PER_MINT = 100;
+const MAX_LIMIT_PER_MINT = 100;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type HoldersStatsBatchRequest = {
+    mints: string[];
+    addresses?: string[];
+    limit?: number;
+};
+
+type HolderRow = {
+    address: string;
+    mint: string;
+    remaining_tokens: string;
+    portfolio_value_sol: string;
+    portfolio_value_usd: string;
+    invested_total_usd: string;
+    invested_total_sol: string;
+    invested_tokens: string;
+    last_buy: string;
+    buy_transactions: string;
+    sold_total_usd: string;
+    sold_total_sol: string;
+    sold_tokens: string;
+    last_sell: string;
+    sell_transactions: string;
+    pnl_total_sol: string;
+    pnl_total_usd: string;
+    average_entry_price_sol: string;
+    average_entry_price_usd: string;
+    average_entry_mc_sol: string;
+    average_entry_mc_usd: string;
+    average_exit_price_sol: string;
+    average_exit_price_usd: string;
+    average_exit_mc_sol: string;
+    average_exit_mc_usd: string;
+    is_dev: boolean;
+    is_insider: boolean;
+    is_sniper: boolean;
+    is_bundler: boolean;
+    is_hard_bundler: boolean;
+    is_top_10_holder: boolean;
+    holder_status: string;
+    holder_since: string;
+    last_trade: string;
+    timestamp: string;
+};
+
+type HoldersStatsBatchResponse =
+    | { ok: true; holders: Record<string, HolderRow[]>; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerHoldersStatsBatchRoutes = (app: Elysia) => {
+    app.post("/custom/holders-stats-batch", async ({ body }) => {
+        const req = body as HoldersStatsBatchRequest;
+
+        const validation = validateHoldersStatsBatchRequest(req);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildHoldersStatsBatchSql(validation.params);
+
+        console.log(`[holders_stats_batch] Querying top ${validation.params.limit} holders for ${validation.params.mints.length} mints`);
+
+        const result = await clickhouseQuery<HolderRow>(sql);
+
+        return formatHoldersStatsBatchResponse(result, validation.params.mints);
+    });
+};
+
+// =============================================================================
+// Validation
+// =============================================================================
+
+type ValidatedParams = {
+    mints: string[];
+    addresses: string[];
+    limit: number;
+};
+
+export const validateHoldersStatsBatchRequest = (
+    req: HoldersStatsBatchRequest
+):
+    | { ok: true; params: ValidatedParams }
+    | { ok: false; error: string } => {
+    // Validate mints array exists and is not empty.
+    if (!req.mints || !Array.isArray(req.mints) || req.mints.length === 0) {
+        return {
+            ok: false,
+            error: "mints array is required and must not be empty",
+        };
+    }
+
+    // Filter and limit mints.
+    const validMints = req.mints.filter(isSolanaPubkey).slice(0, MAX_MINTS);
+    if (validMints.length === 0) {
+        return {
+            ok: false,
+            error: "No valid mint addresses provided",
+        };
+    }
+
+    // Filter and limit addresses (optional).
+    let validAddresses: string[] = [];
+    if (req.addresses && Array.isArray(req.addresses)) {
+        validAddresses = req.addresses.filter(isSolanaPubkey).slice(0, MAX_ADDRESSES);
+    }
+
+    // Clamp limit.
+    const limit = clamp(req.limit ?? DEFAULT_LIMIT_PER_MINT, 1, MAX_LIMIT_PER_MINT);
+
+    return {
+        ok: true,
+        params: {
+            mints: validMints,
+            addresses: validAddresses,
+            limit,
+        },
+    };
+};
+
+// =============================================================================
+// SQL Builder
+// =============================================================================
+
+export const buildHoldersStatsBatchSql = (params: ValidatedParams): string => {
+    const mintsInList = buildInList(params.mints);
+    const addressFilter = params.addresses.length > 0
+        ? `AND address IN (${buildInList(params.addresses)})`
+        : "";
+
+    return `
+        SELECT
+            address,
+            mint,
+            remaining_tokens,
+            portfolio_value_sol,
+            portfolio_value_usd,
+            invested_total_usd,
+            invested_total_sol,
+            invested_tokens,
+            last_buy,
+            buy_transactions,
+            sold_total_usd,
+            sold_total_sol,
+            sold_tokens,
+            last_sell,
+            sell_transactions,
+            pnl_total_sol,
+            pnl_total_usd,
+            average_entry_price_sol,
+            average_entry_price_usd,
+            average_entry_mc_sol,
+            average_entry_mc_usd,
+            average_exit_price_sol,
+            average_exit_price_usd,
+            average_exit_mc_sol,
+            average_exit_mc_usd,
+            is_dev,
+            is_insider,
+            is_sniper,
+            is_bundler,
+            is_hard_bundler,
+            is_top_10_holder,
+            holder_status,
+            holder_since,
+            last_trade,
+            timestamp
+        FROM materializer_holder_mint_latest
+        PREWHERE mint IN (${mintsInList})
+        WHERE (address, mint, timestamp) IN (
+            SELECT address, mint, max(timestamp)
+            FROM materializer_holder_mint_latest
+            WHERE mint IN (${mintsInList}) ${addressFilter}
+            GROUP BY address, mint
+        )
+        ORDER BY mint, remaining_tokens DESC
+        LIMIT ${params.limit} BY mint
+    `;
+};
+
+// =============================================================================
+// Response Formatter
+// =============================================================================
+
+export const formatHoldersStatsBatchResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<HolderRow>>>,
+    requestedMints: string[]
+): HoldersStatsBatchResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    // Group holders by mint.
+    const holdersByMint: Record<string, HolderRow[]> = {};
+
+    // Initialize all requested mints with empty arrays.
+    for (const mint of requestedMints) {
+        holdersByMint[mint] = [];
+    }
+
+    // Populate with results.
+    for (const holder of result.data) {
+        if (holdersByMint[holder.mint]) {
+            holdersByMint[holder.mint].push(holder);
+        }
+        else {
+            holdersByMint[holder.mint] = [holder];
+        }
+    }
+
+    const totalCount = result.data.length;
+    console.log(`[holders_stats_batch] Returned ${totalCount} holders across ${requestedMints.length} mints`);
+
+    return {
+        ok: true,
+        holders: holdersByMint,
+        count: totalCount,
+    };
+};
+

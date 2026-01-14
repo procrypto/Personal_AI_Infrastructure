@@ -1,0 +1,100 @@
+     1→/**
+     2→ * feedAdapters.ts - Pure functions to convert NATS data to backend feed format
+     3→ *
+     4→ * These adapters map data from the NATS WebSocket store to the format
+     5→ * expected by the CLI backend.
+     6→ */
+     7→
+     8→import type {
+     9→  MarketDataMessage,
+    10→  OHLCVMessage,
+    11→  TradeMessage,
+    12→} from "@/store/memoryStore/slices/websocket-messages-store/types";
+    13→import type {
+    14→  MarketDataFeed,
+    15→  OhlcvFeed,
+    16→  TradeFeed,
+    17→  CvdFeed,
+    18→} from "./AutopilotWebsocket";
+    19→
+    20→/**
+    21→ * Convert MarketDataMessage from NATS → MarketDataFeed for backend
+    22→ */
+    23→export function toMarketDataFeed(msg: MarketDataMessage): MarketDataFeed {
+    24→  return {
+    25→    type: "market_data_feed",
+    26→    data: msg, // TokenMarketData is the full message
+    27→  };
+    28→}
+    29→
+    30→/**
+    31→ * Convert OHLCVMessage from NATS → OhlcvFeed for backend
+    32→ * Note: Backend expects array, so wrap single candle
+    33→ */
+    34→export function toOhlcvFeed(mint: string, msg: OHLCVMessage): OhlcvFeed {
+    35→  return {
+    36→    type: "ohlcv_update",
+    37→    mint,
+    38→    ohlcv: [
+    39→      {
+    40→        open: Number(msg.o_sol),
+    41→        high: Number(msg.h_sol),
+    42→        low: Number(msg.l_sol),
+    43→        close: Number(msg.c_sol),
+    44→        volume: Number(msg.v_sol),
+    45→        timestamp: msg.timestamp_secs,
+    46→      },
+    47→    ],
+    48→  };
+    49→}
+    50→
+    51→/**
+    52→ * Convert TradeMessage from NATS → TradeFeed for backend
+    53→ */
+    54→export function toTradeFeed(msg: TradeMessage): TradeFeed {
+    55→  return {
+    56→    type: "trade_feed",
+    57→    trade: {
+    58→      mint: msg.mint,
+    59→      side: msg.type === "buy" ? "buy" : "sell",
+    60→      price: Number(msg.sol_amount || 0) / Number(msg.token_amount || 1),
+    61→      amount: Number(msg.token_amount),
+    62→      timestamp: Number(msg.timestamp),
+    63→    },
+    64→  };
+    65→}
+    66→
+    67→/**
+    68→ * Calculate CVD from trading stats (1h period)
+    69→ * Uses trading_stats_1h from MarketDataMessage
+    70→ */
+    71→export function toCvdFeed(
+    72→  mint: string,
+    73→  msg: MarketDataMessage
+    74→): CvdFeed | null {
+    75→  const stats = msg.trading_stats_1h;
+    76→  if (!stats) return null;
+    77→
+    78→  const buyVolume = Number(stats.buy_volume_sol || 0);
+    79→  const sellVolume = Number(stats.sell_volume_sol || 0);
+    80→  const netDelta = buyVolume - sellVolume;
+    81→
+    82→  return {
+    83→    type: "cvd_update",
+    84→    data: {
+    85→      mint,
+    86→      timestamp: Date.now(),
+    87→      cvd: netDelta, // Simplified: use net delta as CVD
+    88→      cvdChange: netDelta, // Change equals current for single period
+    89→      buyVolume,
+    90→      sellVolume,
+    91→      netDelta,
+    92→      periodMs: 3600000, // 1 hour
+    93→    },
+    94→  };
+    95→}
+    96→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

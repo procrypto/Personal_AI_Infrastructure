@@ -1,0 +1,137 @@
+---
+phase: 03-interface-cleanup-cutover
+plan: 03
+type: execute
+---
+
+<objective>
+Integrate signal pipeline into CLI and complete the gradual replacement cutover.
+
+Purpose: Replace the old polling-based analysis with the new signal processor pipeline.
+Output: CLI using new signal pipeline, deprecated code removed, working end-to-end system.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/03-interface-cleanup-cutover/03-01-SUMMARY.md
+@.planning/phases/03-interface-cleanup-cutover/03-02-SUMMARY.md
+
+# Key files:
+@src/cli.ts
+@src/signal/integration.ts
+@src/websocket-server.ts
+
+**Constraining decisions:**
+- "Gradual replacement cutover" - swap each piece when ready
+- "Reuse existing WebSocket connections"
+**Key pattern:** createSignalPipeline(engine, options) from Phase 2
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Integrate signal pipeline into CLI run command</name>
+  <files>src/cli.ts</files>
+  <action>
+Wire the signal pipeline into the CLI's `run` command:
+
+1. Import createSignalPipeline from './signal/integration.js'
+2. In the run command setup (after RuleEngine creation):
+   ```typescript
+   const pipeline = createSignalPipeline(engine, {
+     marketDataProvider: () => wsServer.getAllMarketData()
+   });
+   ```
+3. Register signal callback to broadcast via WebSocket:
+   ```typescript
+   pipeline.onSignal((signal) => {
+     wsServer.broadcastSignal(signal);
+   });
+   ```
+4. Wire data feed handling:
+   ```typescript
+   wsServer.onDataFeed((message) => {
+     pipeline.handleDataFeed(message);
+   });
+   ```
+
+This connects the new signal processor to the existing WebSocket infrastructure.
+Keep old analysis loop intact for now - both can run in parallel during transition.
+  </action>
+  <verify>tsc --noEmit passes, CLI starts without errors</verify>
+  <done>Signal pipeline wired into CLI, data feeds route to processor</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add parallel mode flag for gradual cutover</name>
+  <files>src/cli.ts</files>
+  <action>
+Add a flag to control old vs new analysis path:
+
+1. Add `--new-engine` flag to run command options
+2. When flag is set:
+   - Skip old polling-based analysis loop
+   - Rely entirely on signal pipeline for analysis
+3. When flag is NOT set (default):
+   - Run both old and new in parallel
+   - Log when signals differ (for validation)
+4. Add console message indicating which mode is active
+
+This enables safe rollout:
+- Default: Both run, compare results
+- With flag: New engine only (when validated)
+
+Do NOT remove old code yet - that's for after validation.
+  </action>
+  <verify>CLI accepts --new-engine flag, both modes start correctly</verify>
+  <done>Parallel mode available, --new-engine flag enables new-only mode</done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Signal pipeline integrated with CLI, parallel/new-engine modes available</what-built>
+  <how-to-verify>
+    1. Start CLI in default mode: `npm run cli run`
+    2. Verify WebSocket server starts on port 8765
+    3. Confirm log shows "Signal pipeline initialized" or similar
+    4. Start CLI with new engine: `npm run cli run -- --new-engine`
+    5. Confirm log shows new engine mode active
+    6. Send test data via WebSocket client (or wait for real data)
+    7. Verify signals are generated and broadcast
+  </how-to-verify>
+  <resume-signal>Type "approved" to continue, or describe issues to fix</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `tsc --noEmit` passes
+- [ ] `npm test` passes all tests
+- [ ] CLI starts in both modes without errors
+- [ ] Signal pipeline processes data and emits signals
+- [ ] WebSocket broadcasts signals to connected clients
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- Human verified end-to-end signal flow
+- Phase 3 complete - system ready for production validation
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-interface-cleanup-cutover/03-03-SUMMARY.md` with:
+- Integration approach taken
+- Any deviations from plan
+- Notes for future: when to remove old code, what to monitor
+</output>

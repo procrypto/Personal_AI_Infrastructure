@@ -1,0 +1,529 @@
+     1→# Backend API and Data Documentation
+     2→
+     3→This document provides a comprehensive reference for all APIs, WebSocket topics, ClickHouse tables, and data processors in the web-terminal backend.
+     4→
+     5→## Realtime vs ClickHouse Routes
+     6→
+     7→Data can be divided into three categories:
+     8→
+     9→- "Realtime" delivered from NATS
+    10→- "ClickHouse" delivered from ClickHouse queries alone
+    11→- "Hybrid" delivered from ClickHouse queries + NATS data
+    12→
+    13→All categories are delivered to the FE over web-sockets.
+    14→
+    15→### Realtime data
+    16→
+    17→Realtime data can arrive via two paths:
+    18→
+    19→`geyser -> initializer -> materializer -> web-server`
+    20→
+    21→OR
+    22→
+    23→`geyser -> initializer -> web-server`
+    24→
+    25→both of these paths are facilitated by NATS. All realtime data is managed via the "nats websocket" flow in the web-server. 
+    26→
+    27→### Historical & ClickHouse-augmented data
+    28→
+    29→The web-server delivers historical and ClickHouse-augmented data via two paths:
+    30→
+    31→- Direct ClickHouse queries, where data is coming from `geyser -> initializer -> materializer -> ch-writer -> clickhouse -> web-server`
+    32→- Hybrid queries, where data is coming from NATS + ClickHouse
+    33→
+    34→Hybrid queries are handled in the "custom websocket" flow in the web-server. They arrive via ClickHouse plus any of the NATS paths (initializer, materializer). For example, the path can provide data from ClickHouse, then update portions with NATS data from the initializer and/or the materialier NATS topics. The NATS data might be combined or augmented *by the web-server* before it is delivered in the response. This would be delivered in sequence over a web-socket to the FE.
+    35→
+    36→### Seed vs live data
+    37→
+    38→The FE will occasionally make an HTTP call to seed data upon initial page load, and then use a WS connection to keep the data fresh. For example, the FE calls `/data/recent_new_pair` to seed X-Ray new-pair list, and then `/data/xray_ws/new_pair` to keep it fresh.
+    39→
+    40→## REST API ENDPOINTS
+    41→
+    42→**Base URL:** `/data/` (for BONKbot load balancer)
+    43→**Server:** `bin/web-server/`
+    44→
+    45→### Health Check
+    46→
+    47→| Method | Endpoint | Handler | Description |
+    48→|--------|----------|---------|-------------|
+    49→| GET | `/data/health` | `health::simple_health_check()` | Ping web server to verify connectivity |
+    50→| GET | `/data/health/deep` | `health::deep_health_check()` | Verify Docker service status, nats & clickhouse connectivity, Grafana alert status |
+    51→
+    52→### Market Data
+    53→
+    54→| Method | Endpoint | Handler | ClickHouse Table |
+    55→|--------|----------|---------|------------------|
+    56→| GET | `/data/market_data/{mint}` | `token_market_data::handle()` | `materializer_token_market_data` |
+    57→| GET | `/data/market_data_batch?mint={mints}` | `token_market_data::handle_batch()` | `materializer_token_market_data` |
+    58→| GET | `/data/market_data_by_pool/{mint}/{pool}` | `pool_market_data::handle()` | `materializer_pool_market_data` |
+    59→
+    60→### OHLCV (Candlestick Data)
+    61→
+    62→| Method | Endpoint | Handler | ClickHouse Table |
+    63→|--------|----------|---------|------------------|
+    64→| GET | `/data/ohlcv/token/{mint}/{resolution}` | `ohlcv::handle_token_ohlcv()` | `materializer_token_ohlcv` |
+    65→| GET | `/data/ohlcv/pool/{pool}/{resolution}` | `ohlcv::handle_pool_ohlcv()` | `materializer_pool_ohlcv` |
+    66→
+    67→**Resolutions:** `1s`, `5s`, `15s`, `30s`, `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `6h`, `12h`, `1d`, `1w`
+    68→
+    69→**Query Parameters:**
+    70→- `start_date` (UnixSecs) - Start timestamp
+    71→- `countback` (u32) - Number of candles
+    72→
+    73→### Portfolio & PnL
+    74→
+    75→| Method | Endpoint | Handler | ClickHouse Table |
+    76→|--------|----------|---------|------------------|
+    77→| GET | `/data/pnl_v2` | `pnl::handle_v2()` | `materializer_holder` |
+    78→| GET | `/data/pnl/{address}` | `pnl::handle()` | `materializer_holder` |
+    79→| GET | `/data/pnl_v2_tg_home` | `pnl::handle_tg_home()` | `materializer_holder` |
+    80→
+    81→**PnL v2 Query Parameters:**
+    82→- `user_id` - User ID (required for auth in prod/staging)
+    83→- `addresses` - Wallet addresses
+    84→- `token_agg_only` - Aggregate by token only
+    85→- `return_agg` - Return aggregated data
+    86→
+    87→### Holder Statistics
+    88→
+    89→| Method | Endpoint | Handler | ClickHouse Table |
+    90→|--------|----------|---------|------------------|
+    91→| GET | `/data/holders_stats/{mint}` | `holders_stats::handle()` | `materializer_holder` |
+    92→| GET | `/data/holder_stats/{mint}/{address}` | `holder_stats::handle()` | `materializer_holder` |
+    93→| GET | `/data/traders_stats/{mint}` | `traders_stats::handle()` | `materializer_holder` |
+    94→
+    95→### Trading Data
+    96→
+    97→| Method | Endpoint | Handler | ClickHouse Table |
+    98→|--------|----------|---------|------------------|
+    99→| GET | `/data/trades/{mint}` | `trades::handle()` | `materializer_trades` |
+   100→| GET | `/data/token_event/{mint}` | `token_event::handle()` | `materializer_token_event` |
+   101→
+   102→### Wallet Analysis
+   103→
+   104→| Method | Endpoint | Handler | ClickHouse Table |
+   105→|--------|----------|---------|------------------|
+   106→| GET | `/data/wallet_funding/{address}` | `wallet_funding::handle()` | `materializer_wallet_funding` |
+   107→| GET | `/data/multi-wallet-families/{mint}` | `multi_wallet_families::handle()` | `materializer_holder` |
+   108→
+   109→**Wallet Funding Query Parameters:**
+   110→- `start_date` (UnixNano, optional)
+   111→- `end_date` (UnixNano, optional)
+   112→
+   113→### Wallet Tracker
+   114→
+   115→| Method | Endpoint | Handler | ClickHouse Table |
+   116→|--------|----------|---------|------------------|
+   117→| GET | `/data/wallet_tracker/trades` | `wallet_tracker::handle_trades()` | `materializer_trades` |
+   118→| GET | `/data/wallet_tracker/summary_all_v2` | `wallet_tracker::handle_summary_all()` | `wallet_tracker_holder_trade_stats_7d` |
+   119→| GET | `/data/wallet_tracker/default_list` | `wallet_tracker::handle_default_list()` | Application config (no ClickHouse query) |
+   120→
+   121→### Search
+   122→
+   123→| Method | Endpoint | Handler | ClickHouse Table |
+   124→|--------|----------|---------|------------------|
+   125→| GET | `/data/search?text={query}` | `search_text::handle()` | `materializer_token_market_data_searchable` |
+   126→| GET | `/data/search/{mint}` | `search_token::handle()` | `materializer_token_market_data_searchable` |
+   127→
+   128→**Query Parameters:**
+   129→- `text` - Search query
+   130→- `fast_search` (bool, default: true) - Use fast search mode
+   131→- `enable_spam_filter` (bool, default: true) - Filter spam tokens
+   132→
+   133→### Discovery
+   134→
+   135→| Method | Endpoint | Handler | ClickHouse Table |
+   136→|--------|----------|---------|------------------|
+   137→| GET | `/data/discovery/trending?limit={n}` | `discovery::handle_trending()` | `discovery_trending_token_stats_ts` |
+   138→| GET | `/data/discovery/volume_per_hour` | `discovery::handle_volume_per_hour()` | `discovery_agg_launchpad_volume_state_hourly` |
+   139→| GET | `/data/discovery/volume_per_day` | `discovery::handle_volume_per_day()` | `discovery_agg_launchpad_volume_daily` |
+   140→| GET | `/data/discovery/volume_rolling` | `discovery::handle_volume_rolling()` | `discovery_agg_launchpad_volume_state_hourly` |
+   141→| GET | `/data/discovery/whale_moves` | `discovery::handle_whale_moves()` | `discovery_fact_whale_trades_7d` |
+   142→| GET | `/data/discovery/launches_graduation` | `discovery::handle_launches_graduation()` | `materializer_token_market_data` |
+   143→
+   144→### X-Ray (Market Stage)
+   145→
+   146→| Method | Endpoint | Handler | ClickHouse Table |
+   147→|--------|----------|---------|------------------|
+   148→| GET | `/data/xray/{section}` | `xray::handle()` | `materializer_xray_*` tables |
+   149→| GET | `/data/recent_new_pair` | `xray::handle_recent_new_pair()` | `materializer_xray_new_pair_by_mint` |
+   150→
+   151→**Sections:** `NewPair`, `AboutToGraduate`, `Graduated`, `GraduatedAndDexLaunch`
+   152→
+   153→### Sentinel (AI Filters)
+   154→
+   155→| Method | Endpoint | Handler | ClickHouse Table |
+   156→|--------|----------|---------|------------------|
+   157→| POST | `/data/sentinel/execute` | `sentinel::handle_execute()` | `materializer_token_market_data`, `materializer_trades` |
+   158→| POST | `/data/sentinel/recently_traded` | `sentinel::handle_recently_traded()` | `materializer_trades` |
+   159→
+   160→**Execute Request Body:**
+   161→```json
+   162→{
+   163→  "mint": "string",
+   164→  "filters": [{"type": "filter_name", "params": {...}}]
+   165→}
+   166→```
+   167→
+   168→### Watchlist
+   169→
+   170→| Method | Endpoint | Handler | ClickHouse Table |
+   171→|--------|----------|---------|------------------|
+   172→| GET | `/data/watchlist?mint={mints}` | `watchlist::handle()` | `materializer_token_market_data` |
+   173→
+   174→## WEBSOCKET ENDPOINTS
+   175→
+   176→### Standalone WebSocket Connections
+   177→
+   178→| Endpoint | Handler | Description |
+   179→|----------|---------|-------------|
+   180→| `/data/discovery/trending_ws` | `discovery_ws::handle()` | Real-time trending tokens |
+   181→| `/data/watchlist_ws` | `watchlist_ws::handle()` | Real-time watchlist updates |
+   182→| `/data/active_positions_ws` | `active_positions_ws::handle()` | Top 15 active positions |
+   183→| `/data/topbar_ws` | `topbar_ws::handle()` | Ticker tape data (deprecated) |
+   184→| `/data/xray_ws/{section}` | `xray_ws::handle()` | X-Ray market stage updates |
+   185→| `/data/wallet_tracker/ws_v2` | `wallet_tracker_ws::handle()` | Wallet tracker streams |
+   186→| `/data/ws` | `nats_websocket::handle_ws()` | Generic NATS subscription |
+   187→
+   188→## NATS TOPIC PATTERNS
+   189→
+   190→Topics are defined in `crates/primitives/src/nats/topics.rs`
+   191→
+   192→### Token-Specific Topics
+   193→
+   194→| Topic Pattern | Publisher | Rust Struct | Description |
+   195→|---------------|-----------|-------------|-------------|
+   196→| `materializer.market_data.{mint}` | Materializer | `TokenMarketData` | Token market data updates |
+   197→| `materializer.trades2.{mint}` | Materializer | `EnrichedTrade` | Live trades (v2) |
+   198→| `materializer.token_ohlcv.{mint}.{resolution}` | Materializer | `TokenOHLCV` | OHLCV candles |
+   199→| `materializer.token_event.{mint}` | Materializer | `TokenEvent` | Token lifecycle events |
+   200→| `materializer.holders_stats.{mint}` | Materializer | `HoldersFlattened` | Top holder statistics |
+   201→| `materializer.holders_stats_by_wallet.{address}` | Materializer | `HolderFlattened` | Top holder statistics by wallet |
+   202→| `materializer.wallet_funding` | Materializer | `WalletFundingEntity` | Funding source for wallet |
+   203→
+   204→
+   205→### User-Specific Topics
+   206→
+   207→Environment prefix: `prod` or `beta`
+   208→
+   209→| Topic Pattern | Publisher | Description |
+   210→|---------------|-----------|-------------|
+   211→| `{env}.pnl_v2.{telemetry_id}.{signer_wallet_id}` | Web API | PnL updates per wallet |
+   212→| `{env}.swap.{telemetry_id}` | Web API | Swap transaction updates |
+   213→| `{env}.limit_order.{telemetry_id}` | Web API | Limit order updates |
+   214→| `{env}.limit_order_complete.{telemetry_id}` | Web API | Limit order completions |
+   215→| `{env}.distribute.{telemetry_id}` | Web API | Distribution transfers |
+   216→| `{env}.consolidate.{telemetry_id}` | Web API | Consolidation transfers |
+   217→| `{env}.signer.withdrawal.{id}.{signer_wallet_id}` | Web API | Withdrawal status |
+   218→
+   219→### Global Topics
+   220→
+   221→| Topic | Publisher | Rust Struct | Description |
+   222→|-------|-----------|-------------|-------------|
+   223→| `materializer.sol_price` | Materializer | `SolPriceWithSlot` | SOL/USD price |
+   224→| `materializer.sol_balance.{address}` | Materializer | `SolBalance` | SOL wallet balance |
+   225→| `materializer.slot` | Materializer | `Slot` | Latest Solana slot |
+   226→
+   227→### X-Ray Topics
+   228→
+   229→| Topic | Publisher | Rust Struct | Description |
+   230→|-------|-----------|-------------|-------------|
+   231→| `materializer.xray.new_pair` | Materializer | `TokenMarketData` | New token pairs |
+   232→| `materializer.xray.about_to_graduate` | Materializer | `TokenMarketData` | About to graduate |
+   233→| `materializer.xray.graduated` | Materializer | `TokenMarketData` | Graduated tokens |
+   234→| `materializer.xray.graduated_and_dex_launch` | Materializer | `TokenMarketData` | Graduated + DEX launch |
+   235→
+   236→### Pool Topics
+   237→
+   238→| Topic Pattern | Publisher | Rust Struct | Description |
+   239→|---------------|-----------|-------------|-------------|
+   240→| `materializer.pool_market_data.{mint}.{pool}` | Materializer | `PoolMarketData` | Pool market data |
+   241→| `materializer.pool_ohlcv.{pool}.{resolution}` | Materializer | `PoolOHLCV` | Pool OHLCV |
+   242→| `materializer.pool_event.{pool}` | Materializer | `PoolEvent` | Pool state changes |
+   243→
+   244→### Trending Topics
+   245→
+   246→| Topic Pattern | Publisher | Rust Struct | Description |
+   247→|---------------|-----------|-------------|-------------|
+   248→| `materializer.trending.{resolution}` | Materializer | `TrendingData` | Trending tokens |
+   249→
+   250→**Resolutions:** `5m`, `1h`, `6h`, `24h`
+   251→
+   252→### Initializer Topics
+   253→
+   254→| Topic Pattern | Publisher | Rust Struct | Description |
+   255→|---------------|-----------|-------------|-------------|
+   256→| `initializer.token.{mint}.new` | Initializer | `Token` | New token created |
+   257→| `initializer.dex_event.trade` | Initializer | `DexEvent` | DEX trade event |
+   258→| `initializer.dex_event.new_pool` | Initializer | `DexEvent` | New liquidity pool |
+   259→| `initializer.dex_event.graduated` | Initializer | `DexEvent` | Graduation event |
+   260→| `initializer.dex_event.migrated` | Initializer | `DexEvent` | Migration event |
+   261→| `initializer.token_transfer.{user}` | Initializer | `TokenTransfer` | Token transfers |
+   262→| `initializer.system_transfer.{user}` | Initializer | `SystemTransfer` | SOL transfers |
+   263→| `initializer.metaplex_update.{mint}` | Initializer | `MetaplexUpdate` | Metadata updates |
+   264→| `initializer.sol_price` | Initializer | `SolPriceWithSlot` | SOL/USD price |
+   265→
+   266→## CLICKHOUSE TABLES
+   267→
+   268→### Core Materializer Tables
+   269→
+   270→| Table | Purpose | Key Columns |
+   271→|-------|---------|-------------|
+   272→| `materializer_token_market_data` | Full token market data | `mint`, `price_*`, `market_cap_*`, `volume_*`, `holders` |
+   273→| `materializer_token_market_data_latest` | Latest snapshot per token | Same as above |
+   274→| `materializer_holder` | Holder positions | `mint`, `address`, `remaining_tokens`, `pnl_*` |
+   275→| `materializer_trades` | Processed trades | `mint`, `maker`, `sol_amount`, `market_cap_sol`, `slot` |
+   276→| `materializer_token_ohlcv` | Candlestick data | `mint`, `resolution`, `open`, `high`, `low`, `close`, `volume` |
+   277→| `materializer_token_event` | Token lifecycle events | `mint`, `event_type`, `timestamp` |
+   278→
+   279→### Trades Table Schema
+   280→
+   281→All columns in `materializer_trades` are actively used:
+   282→
+   283→| Column | Type | Used By |
+   284→|--------|------|---------|
+   285→| `pool` | String | Trade routing |
+   286→| `mint` | String | Token identification |
+   287→| `direction` | String | Buy/Sell indicator |
+   288→| `maker` | String | Trader address |
+   289→| `sol_amount` | Decimal(38,9) | Trade size |
+   290→| `token_amount` | Decimal(38,9) | Token quantity |
+   291→| `sol_amount_usd` | Decimal(38,9) | USD value |
+   292→| `is_dev` | Bool | Dev trade flag |
+   293→| `is_insider` | Bool | Insider flag |
+   294→| `is_sniper` | Bool | Sniper flag |
+   295→| `is_traders_first_buy` | Bool | First buy indicator |
+   296→| `is_bundler` | Bool | Bundler flag |
+   297→| `is_hard_bundler` | Bool | Hard bundler flag |
+   298→| `platform` | String | Trading bot source |
+   299→| `signature` | String | Transaction signature |
+   300→| `timestamp` | Int128 | Event timestamp |
+   301→| `slot` | UInt64 | Solana slot (used by materializer) |
+   302→| `market_cap_sol` | Decimal(38,9) | Market cap at trade time (used by FE) |
+   303→| `market_cap_usd` | Decimal(38,9) | USD market cap |
+   304→| `token_symbol` | String | Token symbol |
+   305→| `exchange` | String | DEX name |
+   306→| `launchpad` | String | Launchpad source |
+   307→
+   308→### Token Market Data Key Fields
+   309→
+   310→All trading stats (5m, 1h, 6h, 24h) are used by frontend:
+   311→
+   312→| Field Pattern | Timeframes | Used By |
+   313→|---------------|------------|---------|
+   314→| `buys_*`, `sells_*` | 5m, 1h, 6h, 24h | Trading activity |
+   315→| `buy_volume_sol_*`, `sell_volume_sol_*` | 5m, 1h, 6h, 24h | Volume metrics |
+   316→| `buyers_*`, `sellers_*`, `traders_*` | 5m, 1h, 6h, 24h | Trader counts |
+   317→| `earliest_price_sol_*` | 5m, 1h, 6h, 24h | Price change calculation |
+   318→| `market_cap_sol`, `price_sol` | - | Core pricing (FE confirmed) |
+   319→
+   320→### X-Ray Tables
+   321→
+   322→| Table | Purpose |
+   323→|-------|---------|
+   324→| `materializer_xray_new_pair_by_mint` | New pair tracking |
+   325→| `materializer_xray_new_pair_by_mint_recent` | Recent new pairs |
+   326→| `materializer_xray_graduated_by_mint` | Graduated tokens |
+   327→| `materializer_xray_graduated_and_dex_launch_by_mint` | Graduated + DEX launch |
+   328→
+   329→### Discovery Tables
+   330→
+   331→| Table | Purpose |
+   332→|-------|---------|
+   333→| `discovery_trending_token_stats_ts` | Trending token time series |
+   334→| `discovery_fact_whale_trades_7d` | Whale trades (7-day window) |
+   335→| `discovery_agg_launchpad_volume_*` | Launchpad volume aggregations |
+   336→| `discovery_dim_whale_wallets` | Identified whale wallets |
+   337→
+   338→### Pool Tables
+   339→
+   340→| Table | Purpose |
+   341→|-------|---------|
+   342→| `materializer_pool_market_data` | Pool market data |
+   343→| `materializer_pool_ohlcv` | Pool candlestick data |
+   344→| `materializer_pool_latest_liquidity` | Latest pool liquidity |
+   345→
+   346→### Wallet Tracker
+   347→
+   348→| Table | Purpose |
+   349→|-------|---------|
+   350→| `wallet_tracker_holder_trade_stats_7d` | 7-day holder trade stats |
+   351→| `materializer_wallet_funding` | Wallet funding events |
+   352→
+   353→## GEYSER PROCESSORS
+   354→
+   355→Location: `bin/initializer/src/processors/`
+   356→
+   357→### DEX Programs
+   358→
+   359→| Processor | Program | Events |
+   360→|-----------|---------|--------|
+   361→| `raydium.rs` | Raydium AMM | Swaps, LP events |
+   362→| `raydium_clmm.rs` | Raydium CLMM | Concentrated liquidity |
+   363→| `raydium_cpmm.rs` | Raydium CPMM | Constant product |
+   364→| `meteora_dlmm.rs` | Meteora DLMM | Dynamic liquidity |
+   365→| `meteora_dynamic.rs` | Meteora Dynamic | AMM swaps |
+   366→| `meteora_damm_v2.rs` | Meteora DAMM v2 | Advanced AMM |
+   367→| `meteora_dynamic_bonding_curve.rs` | Meteora DBC | Bonding curve |
+   368→| `whirlpool.rs` | Orca Whirlpool | Concentrated liquidity |
+   369→| `jupiter.rs` | Jupiter | Aggregated swaps |
+   370→| `pumpfun.rs` | Pump.fun | Launchpad trades |
+   371→| `pumpswap.rs` | PumpSwap | DEX swaps |
+   372→| `moonshot.rs` | Moonshot | Launchpad trades |
+   373→| `boop.rs` | BOOP | Protocol events |
+   374→
+   375→### Token Programs
+   376→
+   377→| Processor | Program | Events |
+   378→|-----------|---------|--------|
+   379→| `token_program.rs` | SPL Token | Transfers, mints, burns |
+   380→| `token_mill.rs` | Token Mill | Token operations |
+   381→| `system_program.rs` | System | SOL transfers |
+   382→
+   383→### Metadata & Oracle
+   384→
+   385→| Processor | Program | Events |
+   386→|-----------|---------|--------|
+   387→| `mpl_token_metadata.rs` | Metaplex | Token metadata |
+   388→| `pyth.rs` | Pyth | Price feeds |
+   389→
+   390→### Lock Programs
+   391→
+   392→| Processor | Program | Events |
+   393→|-----------|---------|--------|
+   394→| `juplock.rs` | Jupiter Lock | Token locks |
+   395→| `streamflow.rs` | StreamFlow | Vesting/locks |
+   396→
+   397→## SENTINEL FILTERS
+   398→
+   399→Location: `bin/web-server/src/api/sentinel/filter/`
+   400→
+   401→| Filter | Purpose |
+   402→|--------|---------|
+   403→| `market_cap_usd` | Market cap threshold |
+   404→| `volume_24h_usd` | 24h volume threshold |
+   405→| `token_age_sec` | Token age filter |
+   406→| `dev_holds_x_or_more` | Dev holding amount |
+   407→| `dev_has_not_sold_in_last_x_minutes` | Dev selling pattern |
+   408→| `dev_prior_graduations_percentage` | Dev graduation history |
+   409→| `number_of_dev_graduations` | Graduation count |
+   410→| `number_of_dev_launches` | Launch count |
+   411→| `supply_locked` | Supply lock percentage |
+   412→| `has_specific_socials` | Social media presence |
+   413→| `price_mcap_change` | Price/mcap change |
+   414→| `volume_change` | Volume change tracking |
+   415→| `top_x_holders_avg_unrealized_pnl` | Top holder PnL |
+   416→| `pump_fun_stream_live` | Pump.fun stream status |
+   417→| `xray` | Market stage filter |
+   418→
+   419→## ARCHITECTURE
+   420→
+   421→### Data Flow
+   422→
+   423→```
+   424→Geyser RPC
+   425→    |
+   426→    v
+   427→Geezer Geyser processor
+   428→    |
+   429→    v
+   430→Input NATS
+   431→    |
+   432→    +--> Input NATS Topics (input_initializer_deduped.*)
+   433→    |
+   434→    v
+   435→Initializer
+   436→    |
+   437→    +--> WT NATS Topics (initializer.*)
+   438→    |
+   439→    v
+   440→Materializer (Event Handler)
+   441→    |
+   442→    +--> RocksDB (State)
+   443→    +--> ClickHouseWriter --> ClickHouse (Persistence)
+   444→    +--> NATS Topics (materializer.*)
+   445→    |
+   446→    v
+   447→Web Server (REST + WebSocket)
+   448→    |
+   449→    v
+   450→Frontend
+   451→```
+   452→
+   453→### Key Components
+   454→
+   455→| Component | Location | Purpose |
+   456→|-----------|----------|---------|
+   457→| Initializer | `bin/initializer/` | Geyser event processing |
+   458→| Materializer | `bin/materializer/` | State aggregation |
+   459→| Web Server | `bin/web-server/` | API serving |
+   460→| Data SDK | `crates/data-sdk/` | Query implementations |
+   461→| Storage | `crates/storage/` | ClickHouse/RocksDB layer |
+   462→| Primitives | `crates/primitives/` | Shared types, NATS topics |
+   463→
+   464→## FILE STRUCTURE
+   465→
+   466→```
+   467→bin/
+   468→  initializer/
+   469→    src/
+   470→      processors/              # Geyser program processors
+   471→      nats_input/             # NATS consumer
+   472→  materializer/
+   473→    src/
+   474→      core/
+   475→        event_handler.rs      # Main dispatcher (4k+ lines)
+   476→        top_holders.rs        # TopK calculation
+   477→        ohlcv.rs             # Candle processing
+   478→      state/
+   479→        holder.rs            # Holder state + ATA aggregation
+   480→        token.rs             # Token state
+   481→  web-server/
+   482→    src/
+   483→      api/                   # REST endpoint handlers
+   484→      nats_websocket/        # NATS-WebSocket bridge
+   485→      custom_websocket/      # Custom WS handlers
+   486→
+   487→crates/
+   488→  data-sdk/
+   489→    src/
+   490→      queries/
+   491→        data_api/            # Query implementations
+   492→  storage/
+   493→    src/
+   494→      clickhouse/
+   495→        entity/              # Rust entities
+   496→        query/
+   497→          create/
+   498→            tables/          # Table definitions
+   499→            materialized_views/
+   500→  primitives/
+   501→    src/
+   502→      nats/
+   503→        topics.rs           # NATS topic definitions
+   504→```
+   505→
+   506→---
+   507→
+   508→## CONFIGURATION
+   509→
+   510→### Environment Variables
+   511→
+   512→| Variable | Description |
+   513→|----------|-------------|
+   514→| `CLICKHOUSE_URL` | ClickHouse connection |
+   515→| `NATS_URL` | NATS server |
+   516→| `ROCKSDB_PATH` | RocksDB storage path |
+   517→| `GEYSER_URL` | Geyser RPC endpoint |
+   518→| `APP_ENV` | Environment (prod/staging/local) |
+   519→
+   520→### NATS Topic Environment
+   521→
+   522→User-specific topics use environment prefix:
+   523→- Production: `prod.*`
+   524→- Beta/Staging: `beta.*`
+   525→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

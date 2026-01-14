@@ -1,0 +1,207 @@
+---
+phase: 03-cross-widget-sync
+plan: 01
+type: execute
+---
+
+<objective>
+Enable store-based cross-widget selection sync while keeping CustomEvents as fallback.
+
+Purpose: Make Intel Grid ↔ Vantage ↔ Anomalyzer selection sync work via trenchBenchStore, with CustomEvents remaining functional for validation.
+Output: Selection in any widget reflects in all three widgets via store subscription.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./03-01-summary.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/02-intel-grid-features/02-01-SUMMARY.md
+
+# Key files
+@apps/web-terminal/src/store/trenchBenchStore.ts
+@apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx
+@apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx
+@apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx
+
+**Current state from analysis:**
+
+1. **Store ready**: trenchBenchStore has selectedTokenMints (Set<string>), toggleToken(), clearTokenSelections()
+
+2. **Widget usage:**
+   - Intel Grid: Uses toggleSharedToken via handleSelectCardShared ✓, but LISTENS to vantage-token-select/deselect and anomalyzer-token-select CustomEvents
+   - Vantage: Uses toggleSharedToken on bag/KOL clicks ✓, LISTENS to anomalyzer-token-select CustomEvent
+   - Anomalyzer: Does NOT use store for selection (dispatches/listens only CustomEvents)
+
+3. **CustomEvent flow (current):**
+   - intel-grid-token-select → Vantage, Anomalyzer listen
+   - vantage-token-select/deselect → Intel Grid, Anomalyzer listen
+   - anomalyzer-token-select → Intel Grid, Vantage listen
+
+4. **Problem:** Vantage/Intel Grid toggle via store, but other widgets listen to CustomEvents that were never dispatched (store changes don't emit events).
+
+**Constraining decisions:**
+- [01-01] Keep trenchBenchStore from preload-data as primary data source
+- [PROJECT.md] Hybrid → Pure migration: Keep CustomEvents working, add store subscriptions in parallel
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Intel Grid - Subscribe to store selection state</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx</files>
+  <action>
+Add useEffect that syncs local selectedMints state from sharedSelectedTokens (store).
+
+Current pattern (lines ~2180-2195):
+- sharedSelectedTokens is already subscribed via useTrenchBenchStore
+- selectedMints is local state (useState)
+
+Add sync effect:
+```tsx
+// Sync local selection state from shared store
+useEffect(() => {
+  setSelectedMints(new Set(sharedSelectedTokens));
+}, [sharedSelectedTokens]);
+```
+
+Place this effect near line 2195 (after the store subscription). This makes the local UI state reflect store changes from any widget.
+
+Keep the existing CustomEvent listeners (lines ~2094-2168) in place - they serve as fallback and will be removed in Phase 6.
+  </action>
+  <verify>TypeScript compiles: cd apps/web-terminal && npx tsc --noEmit</verify>
+  <done>Intel Grid local selectedMints syncs from store. When Vantage toggles a token via store, Intel Grid reflects the change.</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Vantage - Subscribe to store selection state</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx</files>
+  <action>
+Add useEffect that syncs local selectedBagMints/selectedBagMintsRef from sharedSelectedTokens (store).
+
+Current pattern (lines ~1407-1423):
+- sharedSelectedTokens is already subscribed via useTrenchBenchStore
+- selectedBagMints is local state, selectedBagMintsRef is ref for canvas
+
+Add sync effect after store subscription (~line 1425):
+```tsx
+// Sync local selection state from shared store
+useEffect(() => {
+  const newSet = new Set(sharedSelectedTokens);
+  selectedBagMintsRef.current = newSet;
+  setSelectedBagMints(newSet);
+}, [sharedSelectedTokens]);
+```
+
+This makes Vantage's bag highlighting reflect store changes from any widget.
+
+Keep the existing anomalyzer-token-select CustomEvent listener (lines ~1260-1299) in place - serves as fallback.
+  </action>
+  <verify>TypeScript compiles: cd apps/web-terminal && npx tsc --noEmit</verify>
+  <done>Vantage selectedBagMints syncs from store. When Intel Grid toggles a token via store, Vantage highlights the bag.</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Anomalyzer - Use store for selection (hybrid)</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx</files>
+  <action>
+Add store subscription for selection state and update selection handlers to use store.
+
+1. Add store subscription in the component (near other store usage ~line 1808):
+```tsx
+const { selectedTokenMints: sharedSelectedTokens, toggleToken: toggleSharedToken, selectedTraderAddresses: sharedSelectedTraders, toggleTrader: toggleSharedTrader } = useTrenchBenchStore(
+  useShallow(state => ({
+    selectedTokenMints: state.selectedTokenMints,
+    toggleToken: state.toggleToken,
+    selectedTraderAddresses: state.selectedTraderAddresses,
+    toggleTrader: state.toggleTrader,
+  }))
+);
+```
+
+2. Add local state sync effect (similar to other widgets):
+```tsx
+// Sync local selection from shared store
+useEffect(() => {
+  // Update highlightedTokens from store
+  setHighlightedTokens(new Set(sharedSelectedTokens));
+}, [sharedSelectedTokens]);
+
+useEffect(() => {
+  // Update highlightedWallets from store
+  setHighlightedWallets(new Set(sharedSelectedTraders));
+}, [sharedSelectedTraders]);
+```
+
+3. Update handleRowClick (around line 1600-1640) to ALSO update store:
+When selecting a token/trader, call toggleSharedToken/toggleSharedTrader in addition to existing CustomEvent dispatch. This makes Anomalyzer's selections propagate via store.
+
+Example modification in handleRowClick:
+```tsx
+// After existing CustomEvent dispatch, add store toggle
+if (action === "add" && mint) {
+  toggleSharedToken(mint.toLowerCase());
+}
+```
+
+Keep CustomEvent dispatches in place - other widgets may still rely on them during Phase 6 migration.
+
+Add import for useShallow if not present:
+```tsx
+import { useShallow } from "zustand/react/shallow";
+```
+  </action>
+  <verify>TypeScript compiles: cd apps/web-terminal && npx tsc --noEmit</verify>
+  <done>Anomalyzer uses store for selection state. Selections propagate bidirectionally via store while CustomEvents remain as parallel channel.</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `cd apps/web-terminal && npx tsc --noEmit` passes
+- [ ] No new TypeScript errors introduced
+- [ ] All three widgets have store sync effects
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- Intel Grid, Vantage, Anomalyzer all subscribe to selectedTokenMints from store
+- Selection in one widget reflects in others via store (not just CustomEvents)
+- CustomEvents remain functional as fallback
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-cross-widget-sync/03-01-SUMMARY.md`:
+
+# Phase 3 Plan 01: Cross-Widget Sync Summary
+
+**[Substantive one-liner about what was accomplished]**
+
+## Accomplishments
+
+- [Key outcome 1]
+- [Key outcome 2]
+
+## Files Created/Modified
+
+- `path/to/file.ts` - Description
+
+## Decisions Made
+
+[Key decisions and rationale, or "None"]
+
+## Issues Encountered
+
+[Problems and resolutions, or "None"]
+
+## Next Phase Readiness
+
+[Ready for Phase 4: Data Accuracy]
+</output>

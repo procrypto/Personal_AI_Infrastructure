@@ -1,0 +1,96 @@
+/**
+ * Configuration loaded from environment variables.
+ *
+ * ⚠️  These credentials connect to PRODUCTION ClickHouse (or beta/prod instances).
+ */
+
+// Environment types
+export type Environment = "local" | "beta" | "prod";
+
+const getEnvironment = (): Environment => {
+    const env = process.env.APP_ENV;
+    if (env === "beta" || env === "prod") return env;
+    return "local";
+};
+
+export const isLocal = (): boolean => getEnvironment() === "local";
+export const isBeta = (): boolean => getEnvironment() === "beta";
+export const isProd = (): boolean => getEnvironment() === "prod";
+
+/**
+ * Get ClickHouse credentials based on environment.
+ *
+ * - Local: Uses TBKM_CLICKHOUSE_* vars (preserves existing workflow)
+ * - Beta/Prod: Uses generic CLICKHOUSE_* vars (injected by GCP Secret Manager)
+ */
+const getClickHouseConfig = () => {
+    const env = getEnvironment();
+
+    if (env === "local") {
+        // Local: use existing TBKM_* vars (preserves current behavior)
+        return {
+            keyId: process.env.TBKM_CLICKHOUSE_KEY_ID ?? "",
+            keySecret: process.env.TBKM_CLICKHOUSE_KEY_SECRET ?? "",
+            serviceId: process.env.TBKM_CLICKHOUSE_SERVICE_ID ?? "",
+        };
+    }
+
+    // Beta/Prod: use generic vars (injected by GCP Secret Manager)
+    return {
+        keyId: process.env.CLICKHOUSE_KEY_ID ?? "",
+        keySecret: process.env.CLICKHOUSE_KEY_SECRET ?? "",
+        serviceId: process.env.CLICKHOUSE_SERVICE_ID ?? "",
+    };
+};
+
+export const config = {
+    environment: getEnvironment(),
+    clickhouse: getClickHouseConfig(),
+    port: Number(process.env.PORT) || 8787,
+    enableExtensions: process.env.LOCAL_API_ENABLE_EXTENSIONS === "true",
+};
+
+export const assertConfig = () => {
+    const missing: string[] = [];
+    const env = config.environment;
+
+    // Check correct env vars based on environment
+    const prefix = env === "local" ? "TBKM_CLICKHOUSE_" : "CLICKHOUSE_";
+
+    if (!config.clickhouse.keyId) missing.push(`${prefix}KEY_ID`);
+    if (!config.clickhouse.keySecret) missing.push(`${prefix}KEY_SECRET`);
+    if (!config.clickhouse.serviceId) missing.push(`${prefix}SERVICE_ID`);
+
+    if (missing.length > 0) {
+        const helpText = env === "local"
+            ? `
+To fix:
+  1. Copy env.example to .env:  cp env.example .env
+  2. Fill in your credentials
+  3. Restart the server
+
+Get credentials from your team lead or TrenchBench WP admin settings.`
+            : `
+To fix (${env} environment):
+  Ensure GCP Secret Manager is injecting the CLICKHOUSE_* environment variables.
+  Required: CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, CLICKHOUSE_SERVICE_ID`;
+
+        console.error(`
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  ❌ Missing ClickHouse credentials (${env} environment)${" ".repeat(Math.max(0, 27 - env.length))}║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Missing environment variables:
+${missing.map(v => `  - ${v}`).join("\n")}
+${helpText}
+`);
+        process.exit(1);
+    }
+
+    console.log(`[config] Environment: ${config.environment}`);
+};
+
+
+
+
+

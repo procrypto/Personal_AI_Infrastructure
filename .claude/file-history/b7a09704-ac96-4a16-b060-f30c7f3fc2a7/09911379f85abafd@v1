@@ -1,0 +1,90 @@
+# analytics-dataform - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2026-01-10
+- **Last updated**: 2026-01-10
+- **Discovery depth**: Standard
+- **Documentation quality**: Excellent (has CLAUDE.md, comprehensive README)
+
+---
+
+## System Identity
+
+**What it is**: Dataform-based ELT pipeline for BonkBot blockchain trading analytics.
+
+**What it does**:
+- Transforms raw Postgres data into BigQuery analytics tables
+- Tracks user trading volumes, limit orders, referral networks
+- Maintains SCD Type 2 slowly changing dimensions
+- Produces leaderboards and VIP status tables
+
+**Key insight**: This is Victor's data team's primary analytics pipeline - powers Looker dashboards and Web Terminal metrics.
+
+---
+
+## Architecture Highlights
+
+### Stack
+- Dataform 3.0.0 + BigQuery + Cloud SQL (Postgres)
+- EXTERNAL_QUERY pattern for real-time Postgres access
+- Node.js 18 for Dataform CLI
+
+### Data Flow
+```
+Postgres Replica → EXTERNAL_QUERY → tmp_ staging views
+→ dim_ dimensions (SCD2) + fact_ tables
+→ agg_ aggregations → Looker/Web Terminal
+```
+
+### Key Tables (37+)
+- `dim_all_user_metrics` - SCD2 user dimension (main table)
+- `fact_all_user_referral_networks` - 3-level referral chains
+- `fact_limit_order_user_actions` - Daily limit order aggregates
+- `agg_user_referrer_performance` - Referrer earnings
+
+---
+
+## Key Patterns
+
+1. **SCD Type 2**: `dim_all_user_metrics` tracks historical user state changes
+2. **Recursive Referrals**: 3-level downline traversal via recursive CTE
+3. **Incremental Loads**: Daily partitioned aggregations
+4. **Platform Segmentation**: Telegram vs Web Terminal metrics split
+
+---
+
+## Integration Points
+
+### Upstream
+- Postgres replica (bonkbot-replica BigQuery connection)
+- Tables: user, transaction, swap, limit_order, wallet
+
+### Downstream
+- Looker dashboards
+- Web Terminal (VIP status, leaderboards)
+- Analytics apps (referral tracking)
+
+---
+
+## Working Here
+
+### Quick Start
+```bash
+npm install
+gcloud auth application-default login
+dataform compile
+dataform run --dry-run
+```
+
+### Key Files
+- `definitions/dim_all_user_metrics.sqlx` - Main user dimension
+- `definitions/_variables.sqlx` - Shared declarations
+- `docs/SERVICE_ACCOUNT_SETUP.md` - GCP configuration
+
+---
+
+## Team & Ownership
+
+**Codeowners**: @BonkbotTeam/data-product
+**Key Contributors**: victoremnm (32 PRs), Ritapgb (20), jji1515 (6)
+**Created**: April 2025

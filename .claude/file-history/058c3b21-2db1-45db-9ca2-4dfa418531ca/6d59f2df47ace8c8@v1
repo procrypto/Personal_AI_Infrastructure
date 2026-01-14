@@ -1,0 +1,203 @@
+---
+phase: 09-data-flow-investigation
+plan: 01
+type: execute
+---
+
+<objective>
+Investigate why P&L, token stats, and market status aren't updating in the autopilot widget.
+
+Purpose: Identify root causes and decide on architecture (CLI-computed vs app-native NATS data) before implementing fixes.
+Output: INVESTIGATION.md documenting findings, architecture decision, and updated roadmap scope.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Key files for investigation:
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts
+@apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+@apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/autopilot-store.ts
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+
+# Prior phase context:
+@.planning/phases/03-controls-and-pnl/03-01-SUMMARY.md
+@.planning/phases/05-unit-tests/05-01-SUMMARY.md
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Analyze Data Flow Paths</name>
+  <files>apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts</files>
+  <action>
+Trace each of the three known issues through the codebase:
+
+**Issue 1: Token stats always 0.0% (change1h)**
+- Trace: tokenList → setTokenList → TokenRow component
+- Document: Where price data should come from, why it's missing
+- Finding: useAutopilotSubscription only subscribes NATS for position mints, not tokenList mints
+
+**Issue 2: Stats P&L not updating (totalPnlSol)**
+- Trace: stats_update event → setStats → StatsPanel component
+- Document: What backend sends vs what frontend expects
+- Add diagnostic: console.log in connectAutopilotWebsocket for stats_update events
+
+**Issue 3: Market status SOL +0.00% (solPriceChangePercent)**
+- Trace: market_status event → setMarketStatus → MarketStatusBadge component
+- Document: What backend sends vs what frontend expects
+- Add diagnostic: console.log in connectAutopilotWebsocket for market_status events
+
+Add minimal diagnostic logging to connectAutopilotWebsocket.ts:
+- Log stats_update events with full payload
+- Log market_status events with full payload
+- These logs help verify what CLI backend actually sends
+  </action>
+  <verify>grep -n "console.log.*stats_update\|console.log.*market_status" apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts shows diagnostic logs added</verify>
+  <done>Diagnostic logging added, data flow paths documented in comments</done>
+</task>
+
+<task type="checkpoint:decision" gate="blocking">
+  <decision>Choose data architecture: CLI-computed vs app-native NATS</decision>
+  <context>
+The autopilot widget needs real-time price data for three use cases:
+1. Token list prices (change1h) - currently always 0.0%
+2. Stats P&L (totalPnlSol) - currently static
+3. Market status (solPriceChangePercent) - currently always 0.0%
+
+Two approaches are possible, with different tradeoffs.
+  </context>
+  <options>
+    <option id="cli-computed">
+      <name>CLI Backend Computes</name>
+      <pros>
+- Single source of truth for all data
+- Backend already runs analysis loop with price data
+- Frontend stays thin/simple
+- Consistent with current architecture intent
+      </pros>
+      <cons>
+- Requires changes to token-analysis-autopilot repo
+- Adds WebSocket latency for price updates
+- Backend becomes responsible for real-time price streaming
+- More complex backend state management
+      </cons>
+    </option>
+    <option id="app-native">
+      <name>Frontend Uses App-Native NATS</name>
+      <pros>
+- Leverages existing NATS infrastructure (already used for position P&L)
+- Real-time updates without CLI changes
+- Consistent with how position P&L already works
+- No backend changes needed for price data
+      </pros>
+      <cons>
+- Duplicates price logic between CLI and frontend
+- Frontend becomes heavier
+- Stats like winRate/avgPnlPercent still need backend
+      </cons>
+    </option>
+    <option id="hybrid">
+      <name>Hybrid: NATS for Prices, CLI for Stats</name>
+      <pros>
+- Best of both: real-time prices from NATS, aggregate stats from CLI
+- Matches existing pattern (positions use NATS for P&L)
+- CLI sends structure data (positions, signals, strategies)
+- Frontend enriches with live prices from NATS
+- Clear separation of concerns
+      </pros>
+      <cons>
+- Two data sources to coordinate
+- Frontend aggregates some stats (totalPnlSol from positions)
+- Need to decide what CLI sends vs frontend calculates
+      </cons>
+    </option>
+  </options>
+  <resume-signal>Select: cli-computed, app-native, or hybrid</resume-signal>
+</task>
+
+<task type="auto">
+  <name>Task 3: Document Investigation and Update Roadmap</name>
+  <files>.planning/phases/09-data-flow-investigation/09-INVESTIGATION.md, .planning/ROADMAP.md</files>
+  <action>
+Create 09-INVESTIGATION.md documenting:
+
+1. **Issue Analysis** - Root cause for each of the three issues
+2. **Architecture Decision** - Chosen approach and rationale
+3. **Implementation Plan** - What changes are needed where
+
+Based on chosen architecture, update ROADMAP.md:
+- Expand Phase 10 scope to include all price-related fixes
+- Add specific implementation tasks based on decision
+- Update Phase 11 if needed
+
+If hybrid chosen (recommended):
+- Phase 10: Add NATS subscriptions for tokenList + SOL price, enrich token data, calculate totalPnlSol from positions
+- CLI backend: Continue sending positions/signals/strategies/config (no price changes needed)
+  </action>
+  <verify>cat .planning/phases/09-data-flow-investigation/09-INVESTIGATION.md shows complete investigation report</verify>
+  <done>INVESTIGATION.md created with root causes, decision rationale, and implementation plan. ROADMAP.md updated with expanded Phase 10 scope.</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] Diagnostic logging added to WebSocket handler
+- [ ] Architecture decision made and documented
+- [ ] 09-INVESTIGATION.md exists with complete analysis
+- [ ] ROADMAP.md Phase 10 scope updated based on decision
+- [ ] No TypeScript errors introduced
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- Architecture decision documented with clear rationale
+- Root causes identified for all three issues
+- Phase 10 scope expanded to cover implementation
+- Clear path forward for fixing data flow issues
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/09-data-flow-investigation/09-01-SUMMARY.md`:
+
+# Phase 9 Plan 01: Data Flow Investigation Summary
+
+**[One-liner summarizing key finding and decision]**
+
+## Accomplishments
+
+- [Root causes identified]
+- [Architecture decision made]
+- [Roadmap updated]
+
+## Files Created/Modified
+
+- `09-INVESTIGATION.md` - Full investigation report
+- `connectAutopilotWebsocket.ts` - Diagnostic logging added
+- `ROADMAP.md` - Phase 10 scope expanded
+
+## Decisions Made
+
+- Architecture: [chosen approach]
+- Rationale: [why]
+
+## Issues Encountered
+
+[Any blockers or surprises]
+
+## Next Phase Readiness
+
+Phase 10 scope defined, ready for planning.
+</output>

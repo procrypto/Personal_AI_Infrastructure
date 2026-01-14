@@ -1,0 +1,48 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   650→        }
+   651→
+   652→        console.log(line);
+   653→
+   654→        // === WebSocket Broadcasts ===
+   655→
+   656→        // Broadcast scan tick
+   657→        wsServer.broadcastScanTick({
+   658→          timestamp: Date.now(),
+   659→          scanNumber: scanCount,
+   660→          tokenCount: tokens.length,
+   661→          openPositions: openTrades.length,
+   662→        });
+   663→
+   664→        // Broadcast token list grouped by source
+   665→        const tokenListData: TokenListData = {
+   666→          watchlist: [],
+   667→          trending: [],
+   668→          whales: [],
+   669→        };
+   670→        for (const token of tokens) {
+   671→          const marketData = marketDataCache.get(token.mint);
+   672→          const watchedToken: WatchedToken = {
+   673→            mint: token.mint,
+   674→            symbol: token.symbol || marketData?.symbol || token.mint.slice(0, 6),
+   675→            source: token.source,
+   676→            priceSol: marketData?.price_sol,
+   677→            priceUsd: marketData?.price_usd,
+   678→            change1h: marketData?.price_change_1h,
+   679→            change24h: marketData?.price_change_24h,
+   680→            volume24h: marketData?.volume_24h,
+   681→            mcap: marketData?.mcap,
+   682→            hasPosition: openMints.has(token.mint),
+   683→          };
+   684→          if (token.source === 'watchlist') {
+   685→            tokenListData.watchlist.push(watchedToken);
+   686→          } else if (token.source === 'trending') {
+   687→            tokenListData.trending.push(watchedToken);
+   688→          } else if (token.source === 'whales') {
+   689→            tokenListData.whales.push(watchedToken);
+   690→          }
+   691→        }
+   692→        wsServer.broadcastTokenList(tokenListData);
+   693→
+   694→        // Broadcast market status
+   695→        wsServer.broadcastMarketStatus({
+   696→          state: marketFilterResult.state as 'NORMAL' | 'CAUTION' | 'DUMP',

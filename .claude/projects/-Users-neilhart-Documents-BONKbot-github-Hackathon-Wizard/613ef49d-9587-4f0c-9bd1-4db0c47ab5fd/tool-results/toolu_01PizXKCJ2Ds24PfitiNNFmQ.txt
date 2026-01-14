@@ -1,0 +1,88 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   324→      setInterval(runLoop, config.pollIntervalMs);
+   325→      break;
+   326→    }
+   327→
+   328→    case 'status': {
+   329→      const openTrades = paperTracker.getOpenTrades();
+   330→      const stats = paperTracker.getStats();
+   331→      const ruleSets = configStore.getRuleSets();
+   332→      const watchlist = configStore.getWatchlist();
+   333→
+   334→      console.log('\n=== PORTFOLIO STATUS ===\n');
+   335→
+   336→      // Open positions with live P&L
+   337→      if (openTrades.length === 0) {
+   338→        console.log('Open Positions: none\n');
+   339→      } else {
+   340→        console.log('Open Positions:');
+   341→        let totalUnrealizedSol = 0;
+   342→        let totalUnrealizedUsd = 0;
+   343→        let totalExposure = 0;
+   344→
+   345→        for (const trade of openTrades) {
+   346→          try {
+   347→            const marketData = await localApi.getMarketData(trade.mint);
+   348→            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   349→            const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   350→            totalUnrealizedSol += pnl.pnlSol;
+   351→            totalUnrealizedUsd += pnl.pnlUsd;
+   352→            totalExposure += trade.positionSizeSol;
+   353→
+   354→            console.log(`  ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${pnl.pnlPercent.toFixed(2)}%  (${sign}${pnl.pnlSol.toFixed(4)} SOL)`);
+   355→            console.log(`    Entry: ${trade.entryPriceSol} -> Now: ${marketData.price_sol} SOL`);
+   356→          } catch {
+   357→            console.log(`  ${trade.action.toUpperCase()} ${trade.symbol}  (price fetch failed)`);
+   358→          }
+   359→        }
+   360→
+   361→        const unrealizedSign = totalUnrealizedSol >= 0 ? '+' : '';
+   362→        console.log(`\n  Exposure: ${totalExposure.toFixed(4)} SOL`);
+   363→        console.log(`  Unrealized: ${unrealizedSign}${totalUnrealizedSol.toFixed(4)} SOL ($${totalUnrealizedUsd.toFixed(2)})\n`);
+   364→      }
+   365→
+   366→      // Realized P&L
+   367→      console.log('Realized P&L:');
+   368→      const realizedSign = stats.totalPnlSol >= 0 ? '+' : '';
+   369→      console.log(`  ${stats.closedTrades} trades | ${stats.wins}W/${stats.losses}L | ${(stats.winRate * 100).toFixed(0)}% win`);
+   370→      console.log(`  Total: ${realizedSign}${stats.totalPnlSol.toFixed(4)} SOL ($${stats.totalPnlUsd.toFixed(2)})\n`);
+   371→
+   372→      // Active config
+   373→      console.log('Config:');
+   374→      console.log(`  Watching: ${watchlist.length} tokens | Rules: ${ruleSets.length} sets`);
+   375→      console.log(`  Mode: ${configStore.getTriggerConfig().mode}\n`);
+   376→
+   377→      break;
+   378→    }
+   379→
+   380→    case 'trades': {
+   381→      const trades = paperTracker.getAllTrades();
+   382→      if (trades.length === 0) {
+   383→        console.log('No trades recorded');
+   384→      } else {
+   385→        console.log('\nPaper Trades:');
+   386→        for (const trade of trades) {
+   387→          if (trade.status === 'open') {
+   388→            try {
+   389→              const marketData = await localApi.getMarketData(trade.mint);
+   390→              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   391→              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   392→              console.log(`  [OPEN] ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${pnl.pnlPercent.toFixed(2)}%`);
+   393→              console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+   394→            } catch {
+   395→              console.log(`  [OPEN] ${trade.action.toUpperCase()} ${trade.symbol}`);
+   396→              console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+   397→            }
+   398→          } else {
+   399→            const sign = (trade.pnlPercent ?? 0) >= 0 ? '+' : '';
+   400→            console.log(`  [CLOSED] ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${trade.pnlPercent?.toFixed(2)}%`);
+   401→            console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+   402→          }
+   403→        }
+   404→      }
+   405→      break;
+   406→    }
+   407→
+   408→    case 'stats': {
+   409→      const stats = paperTracker.getStats();
+   410→      console.log('\nTrading Statistics:');

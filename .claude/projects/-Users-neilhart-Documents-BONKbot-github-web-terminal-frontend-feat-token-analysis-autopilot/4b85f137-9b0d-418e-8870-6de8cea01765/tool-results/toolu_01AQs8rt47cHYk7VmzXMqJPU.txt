@@ -1,0 +1,130 @@
+     1→# Token Analysis Autopilot - Frontend Integration
+     2→
+     3→## What This Is
+     4→
+     5→Frontend integration for the token-analysis-autopilot paper trading system. Brings the CLI's rule-based analysis and paper trading capabilities into the web-terminal dashboard widget, using existing WebSocket patterns and NATS data sources.
+     6→
+     7→## Core Value
+     8→
+     9→**Full feature parity with the CLI through the dashboard widget.** Users should be able to configure strategies, monitor positions, view signals, and track P&L without touching the command line.
+    10→
+    11→## Current State (v1.4)
+    12→
+    13→**Shipped:** 2026-01-09
+    14→
+    15→**What's Working:**
+    16→
+    17→- Full autopilot widget with live data from backend WebSocket
+    18→- Three-column Screener showing Watchlist, Trending, Whales
+    19→- User's starred tokens populate Watchlist (via user API)
+    20→- Whale moves and trending from Discovery API/WebSocket (instant load)
+    21→- NATS market data subscriptions for live prices
+    22→- Confluence-based signal indicators on token rows (green/red backgrounds)
+    23→- Draggable floating SettingsPanel with all controls
+    24→- Performance stats with Realized/Unrealized P&L
+    25→- Close All button for position management
+    26→- Paper/Live mode indicator in header
+    27→
+    28→**Tech Stack:**
+    29→
+    30→- TypeScript, React, Zustand, Vite
+    31→- WebSocket client extending BaseWebsocket
+    32→- NATS for market data subscriptions
+    33→- Discovery API/WebSocket for whale moves and trending
+    34→- User API for watchlist data
+    35→
+    36→<details>
+    37→<summary>Previous milestones</summary>
+    38→
+    39→**v1.0-v1.3:** Foundation, unit tests, UX polish, data flow fixes
+    40→See `.planning/milestones/` for full details.
+    41→
+    42→</details>
+    43→
+    44→## Requirements
+    45→
+    46→### Validated
+    47→
+    48→- Rule engine with configurable strategies (CLI) — existing
+    49→- Paper trading with P&L tracking (CLI) — existing
+    50→- Rotations S/R, Magic TP/SL, Market Filter (CLI) — existing
+    51→- Auto-sources: trending, whale moves (CLI) — existing
+    52→- WebSocket server foundation in autopilot repo — existing
+    53→- Dashboard widget UI scaffold — v1.0
+    54→- Zustand store slice for autopilot data — v1.0
+    55→- WebSocket client extending BaseWebsocket — v1.0
+    56→- Complete WebSocket message protocol (backend→frontend) — v1.0
+    57→- LOIS compatibility documentation for all types — v1.0
+    58→- Vite plugin for auto-start autopilot backend — v1.0
+    59→- LOIS_INTEGRATION.md guide for PUM3 team — v1.0
+    60→- P&L calculation unit tests — v1.1
+    61→- Store slice unit tests — v1.1
+    62→- Message parsing unit tests — v1.1
+    63→- Connect widget to backend and display live data — v1.4
+    64→- Implement all control commands (strategies, sources, filter toggles) — v1.4
+    65→- Calculate real-time P&L using NATS market_data subscriptions — v1.4
+    66→- Three-column Screener with Watchlist, Trending, Whales — v1.4
+    67→- Discovery API/WebSocket for fast whale moves and trending — v1.4
+    68→- User watchlist integration — v1.4
+    69→- Signal indicators on token rows — v1.4
+    70→
+    71→### Active
+    72→
+    73→- [ ] Fixes and tweaks before backend optimization (v1.5)
+    74→
+    75→### Out of Scope
+    76→
+    77→- LOIS/live trading integration — separate milestone after paper trading proven
+    78→- Custom rule creation in UI — use pre-built templates only, no rule builder this sprint
+    79→- Deploying autopilot backend to production — local development only
+    80→- Changes to LOIS codebase in pum3 repo — that team's responsibility
+    81→
+    82→## Context
+    83→
+    84→**Related Repositories:**
+    85→
+    86→- `github/token-analysis-autopilot/` — CLI engine, WebSocket server, rule definitions
+    87→- `github/web-terminal-frontend/feat-token-analysis-autopilot/` — this worktree
+    88→- `github/local-api/` — ClickHouse dev server, Vite proxy pattern reference
+    89→- `github/pum3/` — LOIS reference (not modifying)
+    90→- `github/web-terminal/` — data backend reference (`ai.md`)
+    91→
+    92→**Data Flow:**
+    93→
+    94→```
+    95→autopilot backend (WebSocket server)
+    96→    ↓ positions, signals, stats, config, strategies
+    97→frontend widget (useAutopilotSubscription)
+    98→    ↓ stores in Zustand
+    99→AutopilotWidget renders
+   100→    ↓ position mints
+   101→NATS market_data subscriptions → live prices → P&L calculation
+   102→```
+   103→
+   104→## Constraints
+   105→
+   106→- **Existing Patterns**: Must follow web-terminal's established WebSocket/store patterns
+   107→- **Vite Proxy**: Backend communication via Vite dev server proxy (like local-api)
+   108→- **NATS for Prices**: Use existing NATS market_data subscriptions for real-time prices
+   109→- **No New Dependencies**: Use what's in package.json already
+   110→
+   111→## Key Decisions
+   112→
+   113→| Decision                            | Rationale                                                           | Outcome |
+   114→| ----------------------------------- | ------------------------------------------------------------------- | ------- |
+   115→| Paper trading only (no LOIS)        | Prove the system works before live trading                          | Good    |
+   116→| Templates only (no custom rules)    | Reduce scope, CLI still available for power users                   | Good    |
+   117→| Feature parity before auto-startup  | More valuable to have working features than convenient startup      | Good    |
+   118→| NATS for P&L not backend            | Leverage existing subscription infrastructure, backend stays simple | Good    |
+   119→| WatchedToken type alias pattern     | Backward compatibility with existing widget imports                 | Good    |
+   120→| lois-adapter.ts pattern recommended | Clean format conversions at WebSocket boundary                      | Pending |
+   121→| Pure function extraction for tests  | Enables testing without mocking React hooks                         | Good    |
+   122→
+   123→---
+   124→
+   125→_Last updated: 2026-01-09 after v1.4 milestone_
+   126→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,57 @@
+# Phase 1: Environment Configuration - Context
+
+**Gathered:** 2026-01-13
+**Status:** Ready for planning
+
+<vision>
+## How This Should Work
+
+Environment detection happens automatically based on the URL the API receives. When requests come to `localhost:3000`, it's local mode. When deployed to Cloud Run, the URL pattern determines beta vs prod.
+
+This follows the existing frontend pattern where `.env.local` drives configuration. The API should behave the same way — no manual switching, no remembering to change settings.
+
+Local development gets extra flexibility to switch between data sources (beta and prod-derived ClickHouse) that deployed environments don't have access to. This is a local-only power user feature.
+
+</vision>
+
+<essential>
+## What Must Be Nailed
+
+- **Zero local disruption** - `bun dev` just works exactly as it does today. No new setup steps, no new environment variables to remember.
+- **URL-based detection** - The API knows its environment from the request URL, not from config files or env vars that could get stale.
+- **Local has superpowers** - Local mode can switch data sources; deployed environments are locked to their designated ClickHouse instance.
+
+</essential>
+
+<boundaries>
+## What's Out of Scope
+
+- Auth/rate limiting — handled by infra team separately
+- New endpoints — focus on config, not features
+- Monitoring/logging infrastructure — deferred to later milestone
+
+</boundaries>
+
+<specifics>
+## Specific Ideas
+
+- localhost:3000 = local mode (standard detection)
+- Local gets switches for beta vs prod-derived data sources
+- ClickHouse URL + credentials change per environment
+- Follow the `.env.local` pattern the frontend uses
+
+</specifics>
+
+<notes>
+## Additional Context
+
+Primary concern is protecting the existing local development workflow. Neil and Paul use this daily — any disruption would be immediately painful.
+
+The "local has superpowers" concept is interesting: local dev can point at different data sources for testing, but deployed environments are locked down.
+
+</notes>
+
+---
+
+*Phase: 01-environment-config*
+*Context gathered: 2026-01-13*

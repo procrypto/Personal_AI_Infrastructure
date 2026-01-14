@@ -1,0 +1,33 @@
+import type { Elysia } from "elysia";
+import { extensions } from "./catalog";
+
+export const registerExtensionRoutes = (app: Elysia) => {
+    if (extensions.length === 0) {
+        console.log("[extensions] No extensions registered.");
+        return;
+    }
+
+    const metadata = extensions.map(ext => ext.metadata);
+    metadata.forEach(meta => {
+        const costNote = meta.cost_tier === "extra_query"
+            ? `cost=extra_query${meta.cost_warning ? ` (${meta.cost_warning})` : ""}`
+            : "cost=same_result";
+        console.log(`[extensions] Registering ${meta.ext_method} ${meta.ext_path} (id=${meta.extension_id}, ${costNote})`);
+    });
+
+    const extraQueryExtensions = metadata.filter(meta => meta.cost_tier === "extra_query");
+    if (extraQueryExtensions.length > 0) {
+        console.log("[extensions] Warning: extra_query extensions enabled:");
+        extraQueryExtensions.forEach(meta => {
+            console.log(`  - ${meta.extension_id} at ${meta.ext_path}${meta.cost_warning ? ` — ${meta.cost_warning}` : ""}`);
+        });
+    }
+
+    extensions.forEach(ext => {
+        ext.register(app);
+    });
+
+    console.log(`[extensions] Registered ${extensions.length} extension route(s).`);
+};
+
+

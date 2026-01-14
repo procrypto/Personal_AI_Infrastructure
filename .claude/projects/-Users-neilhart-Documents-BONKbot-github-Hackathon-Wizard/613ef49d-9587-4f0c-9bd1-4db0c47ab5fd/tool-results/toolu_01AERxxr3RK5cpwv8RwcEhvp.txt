@@ -1,0 +1,186 @@
+     1→/**
+     2→ * WebSocket Server for Frontend Integration
+     3→ *
+     4→ * Broadcasts live autopilot events to connected clients.
+     5→ */
+     6→
+     7→import { WebSocketServer, WebSocket } from 'ws';
+     8→import type { PaperTrade } from './trading/types.js';
+     9→
+    10→// Event types the frontend can receive
+    11→export type AutopilotEvent =
+    12→  | { type: 'position_update'; positions: PositionData[] }
+    13→  | { type: 'signal'; signal: SignalData }
+    14→  | { type: 'market_status'; status: MarketStatusData }
+    15→  | { type: 'stats_update'; stats: StatsData }
+    16→  | { type: 'scan_tick'; tick: ScanTickData }
+    17→  | { type: 'token_list'; tokens: TokenListData };
+    18→
+    19→export interface PositionData {
+    20→  mint: string;
+    21→  symbol: string;
+    22→  action: 'buy' | 'sell';
+    23→  entryPriceSol: number;
+    24→  currentPriceSol: number;
+    25→  positionSizeSol: number;
+    26→  pnlPercent: number;
+    27→  pnlSol: number;
+    28→  entryTime: number;
+    29→}
+    30→
+    31→export interface SignalData {
+    32→  timestamp: number;
+    33→  mint: string;
+    34→  symbol: string;
+    35→  signalType: 'magic_buy' | 'magic_exit' | 'dump_exit' | 'rule_signal';
+    36→  action: 'buy' | 'sell' | 'close';
+    37→  reason: string;
+    38→  pnlPercent?: number;
+    39→  entryType?: string;
+    40→}
+    41→
+    42→export interface MarketStatusData {
+    43→  state: 'NORMAL' | 'CAUTION' | 'DUMP';
+    44→  solPriceChangePercent: number;
+    45→  blockEntries: boolean;
+    46→  exitAll: boolean;
+    47→}
+    48→
+    49→export interface StatsData {
+    50→  totalTrades: number;
+    51→  openTrades: number;
+    52→  closedTrades: number;
+    53→  wins: number;
+    54→  losses: number;
+    55→  winRate: number;
+    56→  totalPnlSol: number;
+    57→  totalPnlUsd: number;
+    58→  avgPnlPercent: number;
+    59→}
+    60→
+    61→export interface ScanTickData {
+    62→  timestamp: number;
+    63→  scanNumber: number;
+    64→  tokenCount: number;
+    65→  openPositions: number;
+    66→}
+    67→
+    68→export interface WatchedToken {
+    69→  mint: string;
+    70→  symbol: string;
+    71→  source: 'watchlist' | 'trending' | 'whales';
+    72→  priceSol?: number;
+    73→  priceUsd?: number;
+    74→  change1h?: number;
+    75→  change24h?: number;
+    76→  volume24h?: number;
+    77→  mcap?: number;
+    78→  hasPosition?: boolean;
+    79→}
+    80→
+    81→export interface TokenListData {
+    82→  watchlist: WatchedToken[];
+    83→  trending: WatchedToken[];
+    84→  whales: WatchedToken[];
+    85→}
+    86→
+    87→class AutopilotWebSocketServer {
+    88→  private wss: WebSocketServer | null = null;
+    89→  private clients: Set<WebSocket> = new Set();
+    90→  private port: number = 8765;
+    91→
+    92→  start(port: number = 8765): void {
+    93→    if (this.wss) {
+    94→      console.log('[WS] Server already running');
+    95→      return;
+    96→    }
+    97→
+    98→    this.port = port;
+    99→    this.wss = new WebSocketServer({ port });
+   100→
+   101→    this.wss.on('connection', (ws) => {
+   102→      this.clients.add(ws);
+   103→      console.log(`[WS] Client connected (${this.clients.size} total)`);
+   104→
+   105→      ws.on('close', () => {
+   106→        this.clients.delete(ws);
+   107→        console.log(`[WS] Client disconnected (${this.clients.size} total)`);
+   108→      });
+   109→
+   110→      ws.on('error', (err) => {
+   111→        console.error('[WS] Client error:', err.message);
+   112→        this.clients.delete(ws);
+   113→      });
+   114→    });
+   115→
+   116→    this.wss.on('error', (err) => {
+   117→      console.error('[WS] Server error:', err.message);
+   118→    });
+   119→
+   120→    console.log(`[WS] Server started on port ${port}`);
+   121→  }
+   122→
+   123→  stop(): void {
+   124→    if (!this.wss) return;
+   125→
+   126→    for (const client of this.clients) {
+   127→      client.close();
+   128→    }
+   129→    this.clients.clear();
+   130→    this.wss.close();
+   131→    this.wss = null;
+   132→    console.log('[WS] Server stopped');
+   133→  }
+   134→
+   135→  broadcast(event: AutopilotEvent): void {
+   136→    if (this.clients.size === 0) return;
+   137→
+   138→    const message = JSON.stringify(event);
+   139→    for (const client of this.clients) {
+   140→      if (client.readyState === WebSocket.OPEN) {
+   141→        client.send(message);
+   142→      }
+   143→    }
+   144→  }
+   145→
+   146→  // Convenience methods for specific event types
+   147→  broadcastPositions(positions: PositionData[]): void {
+   148→    this.broadcast({ type: 'position_update', positions });
+   149→  }
+   150→
+   151→  broadcastSignal(signal: SignalData): void {
+   152→    this.broadcast({ type: 'signal', signal });
+   153→  }
+   154→
+   155→  broadcastMarketStatus(status: MarketStatusData): void {
+   156→    this.broadcast({ type: 'market_status', status });
+   157→  }
+   158→
+   159→  broadcastStats(stats: StatsData): void {
+   160→    this.broadcast({ type: 'stats_update', stats });
+   161→  }
+   162→
+   163→  broadcastScanTick(tick: ScanTickData): void {
+   164→    this.broadcast({ type: 'scan_tick', tick });
+   165→  }
+   166→
+   167→  broadcastTokenList(tokens: TokenListData): void {
+   168→    this.broadcast({ type: 'token_list', tokens });
+   169→  }
+   170→
+   171→  getClientCount(): number {
+   172→    return this.clients.size;
+   173→  }
+   174→
+   175→  isRunning(): boolean {
+   176→    return this.wss !== null;
+   177→  }
+   178→}
+   179→
+   180→// Singleton instance
+   181→export const wsServer = new AutopilotWebSocketServer();
+   182→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

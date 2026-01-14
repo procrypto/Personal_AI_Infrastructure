@@ -1,0 +1,106 @@
+# Export Context Control Feature
+
+## Summary
+Add configurable context extraction for Topic Mode exports. Users can specify "X messages within Y weeks" to control how much conversation context surrounds each search result in exports.
+
+## User Requirements
+- Export-only feature (search result display stays the same)
+- Hybrid approach: "last X messages within Y weeks"
+- Symmetric (same context before/after each match)
+
+## Current State
+- Export (`App.tsx:584-650`) only exports matched messages, not surrounding context
+- Context extraction (`topicWorker.ts:175-209`) exists but is hardcoded (±10 author, ±5 time)
+- `SearchMatch` has `messageIndex` which can locate messages in the chat array
+- Worker maintains `currentIndex` with all chat message arrays
+
+## Implementation Plan
+
+### Step 1: Add Types (types.ts)
+
+Add new interfaces for export context:
+
+```typescript
+export interface ExportContextSettings {
+  messageCount: number;  // Max messages each side (default: 10)
+  timeWindow: number;    // Time constraint value (default: 2)
+  timeUnit: 'hours' | 'days' | 'weeks';  // Time unit (default: 'weeks')
+}
+
+export interface ExportContextRequest {
+  type: 'exportWithContext';
+  matches: Array<{ chatId: string; messageIndex: number }>;
+  settings: ExportContextSettings;
+}
+
+export interface ExportContextResult {
+  type: 'exportContextResult';
+  chats: Map<string, { chatId: string; chatName: string; messages: EnrichedMessage[] }>;
+}
+```
+
+### Step 2: Add UI Controls (App.tsx)
+
+Add state variables near other filter state (~line 140):
+```typescript
+const [exportMessageCount, setExportMessageCount] = useState<number>(10);
+const [exportTimeWindow, setExportTimeWindow] = useState<number>(2);
+const [exportTimeUnit, setExportTimeUnit] = useState<'hours' | 'days' | 'weeks'>('weeks');
+```
+
+Add controls near Export button (~line 1064). Compact inline controls:
+- Input: "Messages: [10]"
+- Input: "Within: [2]"
+- Select: "[weeks]"
+
+### Step 3: Add Worker Handler (topicWorker.ts)
+
+Add new function `extractExportContext()`:
+- Takes: chatMessages array, matchIndex, settings
+- Returns: array of messages within constraints
+- Logic:
+  1. Get match message timestamp
+  2. Calculate time boundary (match ± timeWindow in timeUnit)
+  3. Walk backward from match, collect up to messageCount messages within time boundary
+  4. Walk forward from match, collect up to messageCount messages within time boundary
+  5. Dedupe and sort chronologically
+
+Add message handler for `exportWithContext` request type.
+
+### Step 4: Modify Export Flow (App.tsx)
+
+Change `handleExportResults()`:
+1. Build list of matches with chatId/messageIndex from filteredResults
+2. Post message to worker: `{ type: 'exportWithContext', matches, settings }`
+3. Wait for `exportContextResult` response
+4. Create ZIP from returned chat groups (same format as before)
+
+### Files to Modify
+1. `src/types.ts` - Add new interfaces
+2. `src/topicWorker.ts` - Add context extraction and message handler
+3. `src/App.tsx` - Add UI controls and modify export handler
+
+## UI Placement
+
+In the search results toolbar, add controls between the filter buttons and Export button:
+
+```
+[Filter by user ▼] [Filter by group ▼] [Sort ▼] [Clear filters] [New search]
+                   Messages: [10] Within: [2] [weeks ▼] [Export]
+```
+
+Or more compactly, inline with Export:
+```
+... [Clear filters] [New search] Context: [10] msgs within [2] [weeks ▼] [Export]
+```
+
+## Verification
+1. Load a ZIP with search results
+2. Search for a term that has multiple matches
+3. Set context to "5 messages within 1 week"
+4. Click Export
+5. Open exported JSON and verify:
+   - Each match has surrounding context messages
+   - Context messages are within the time boundary
+   - No more than 5 messages each direction
+   - Messages are sorted chronologically

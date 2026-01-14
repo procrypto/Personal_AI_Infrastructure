@@ -1,0 +1,83 @@
+/**
+ * Autopilot Event Parser
+ *
+ * Pure functions and types for parsing autopilot WebSocket events.
+ * This module is the single source of truth for event types and parsing logic.
+ */
+
+import type {
+  AutopilotSignal,
+  AutopilotMarketStatus,
+  AutopilotStats,
+  AutopilotScanTick,
+  AutopilotTokenList,
+  AutopilotConfig,
+  AutopilotStrategies,
+  AutopilotLastAnalysis,
+} from "@/store/memoryStore/slices/autopilot-store/types";
+
+/**
+ * Backend position data format (entry-only, no current price)
+ */
+export interface BackendPositionData {
+  mint: string;
+  symbol: string;
+  action: "buy" | "sell";
+  entryPriceSol: number;
+  positionSizeSol: number;
+  entryTime: number;
+}
+
+/**
+ * Union type for all autopilot WebSocket events
+ */
+export type AutopilotEvent =
+  | { type: "position_update"; positions: BackendPositionData[] }
+  | { type: "signal"; signal: AutopilotSignal }
+  | { type: "market_status"; status: AutopilotMarketStatus }
+  | { type: "stats_update"; stats: AutopilotStats }
+  | { type: "scan_tick"; tick: AutopilotScanTick }
+  | { type: "token_list"; tokens: AutopilotTokenList }
+  | { type: "config"; config: AutopilotConfig }
+  | { type: "strategies"; strategies: AutopilotStrategies }
+  | { type: "last_analysis"; analysis: AutopilotLastAnalysis };
+
+/**
+ * Valid event type names for validation
+ */
+const VALID_EVENT_TYPES = [
+  "position_update",
+  "signal",
+  "market_status",
+  "stats_update",
+  "scan_tick",
+  "token_list",
+  "config",
+  "strategies",
+  "last_analysis",
+] as const;
+
+/**
+ * Pure function to parse autopilot WebSocket events.
+ * Returns null for pong messages, malformed data, or unknown event types.
+ */
+export function parseAutopilotEvent(data: unknown): AutopilotEvent | null {
+  // Skip pong messages
+  if (data && typeof data === "object" && "pong" in data) {
+    return null;
+  }
+
+  // Validate data is an object with a type field
+  if (!data || typeof data !== "object" || !("type" in data)) {
+    return null;
+  }
+
+  const event = data as AutopilotEvent;
+
+  // Validate known event types
+  if (!VALID_EVENT_TYPES.includes(event.type as (typeof VALID_EVENT_TYPES)[number])) {
+    return null;
+  }
+
+  return event;
+}

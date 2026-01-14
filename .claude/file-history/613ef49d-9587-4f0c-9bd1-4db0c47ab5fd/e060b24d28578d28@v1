@@ -1,0 +1,678 @@
+/**
+ * Magic Buy Management - Automatic Entry Strategies Based on Market Structure
+ *
+ * ============================================================================
+ * STRATEGY OVERVIEW
+ * ============================================================================
+ *
+ * "Magic Buy" is the entry counterpart to Magic Exits. While Magic Exits
+ * automatically close positions at structure levels (resistance, support breaks),
+ * Magic Buy automatically opens positions at favorable support levels.
+ *
+ * ============================================================================
+ * WHY STRUCTURE-BASED ENTRIES?
+ * ============================================================================
+ *
+ * Random entries or chasing momentum often leads to buying at poor levels.
+ * Structure-based entries solve this by entering at actual support:
+ *   - Enter where buyers previously stepped in (higher probability)
+ *   - Natural stop loss level (just below support)
+ *   - Better risk/reward ratio
+ *
+ * ============================================================================
+ * ENTRY TYPES
+ * ============================================================================
+ *
+ * 1. PULLBACK TO SUPPORT (Highest Probability)
+ *    Trigger: Price approaches rotationLow in uptrend (state = +1)
+ *    Rationale: Trend is already confirmed bullish. Buying the pullback to
+ *               support gives entry at a level where buyers are expected
+ *               while the trend backs the trade.
+ *    Risk: Lower - trend is confirmed
+ *    Strength: 0.7
+ *
+ * 2. SWING FAILURE PATTERN (SFP) AT SUPPORT
+ *    Trigger: Wick below rotationLow but close back above (false breakout)
+ *    Rationale: Price swept below support to grab liquidity (stop hunts),
+ *               then reversed. This is smart money accumulation. Entry after
+ *               the SFP catches the reversal with tight stop (just below wick).
+ *    Risk: Moderate - counter-trend entry possible
+ *    Strength: 0.75
+ *
+ * 3. SUPPORT BOUNCE CONFIRMATION
+ *    Trigger: Price tested support AND showed strength (closing higher)
+ *    Rationale: Waits for confirmation that support is holding before entry.
+ *               Less aggressive but more conservative.
+ *    Risk: Lower - confirms support before entry
+ *    Strength: 0.65
+ *
+ * ============================================================================
+ * ENTRY REQUIREMENTS
+ * ============================================================================
+ *
+ * All entries must satisfy these conditions:
+ *   1. No existing position for the token (prevents pyramiding)
+ *   2. Market filter not in DUMP state (respects SOL protection)
+ *   3. Rotation levels available (structure must be defined)
+ *   4. Entry type enabled in config
+ *   5. Cooldown period respected (prevents rapid re-entry after exit)
+ *
+ * ============================================================================
+ * INTEGRATION WITH ROTATIONS
+ * ============================================================================
+ *
+ * Magic Buy uses the same rotation levels as Magic Exits:
+ *   - rotationLow = support (entry zone)
+ *   - rotationHigh = resistance (TP target)
+ *   - state = trend direction (+1 = bullish)
+ *
+ * This creates coherence: Magic Buy enters at support, Magic Exits takes
+ * profit at resistance. Same structure model throughout.
+ */
+
+import type { TokenMarketData, OHLCV } from '../api/types.js';
+import type { PaperTrade } from './types.js';
+import { paperTracker } from './paper-tracker.js';
+import {
+  getRotationLevels,
+  estimateRotationFromMarketData,
+  analyzeRotations,
+  type RotationLevels,
+} from '../rules/rotations.js';
+import { marketFilter, MarketState } from './market-filter.js';
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+/**
+ * Configuration for magic buy strategies.
+ * Each entry type can be individually enabled/disabled with custom thresholds.
+ */
+export interface MagicBuyConfig {
+  // ========================================================================
+  // GLOBAL SETTINGS
+  // ========================================================================
+  /** Enable magic buy entries */
+  enabled: boolean;
+  /** Default position size in SOL for auto-entries */
+  positionSizeSol: number;
+  /** Cooldown in ms after exiting before re-entering same token */
+  reEntryCooldownMs: number;
+  /** Rule set ID for paper trades */
+  ruleSetId: string;
+
+  // ========================================================================
+  // PULLBACK ENTRY SETTINGS
+  // ========================================================================
+  /** Enable pullback to support entries */
+  pullbackEnabled: boolean;
+  /**
+   * How close to support to trigger entry (percentage).
+   * Lower = more aggressive (enter further from support).
+   * Higher = more conservative (must be right at support).
+   * Example: 1.0 means enter when within 1% of support.
+   */
+  pullbackTriggerPercent: number;
+  /** Require uptrend (state = +1) for pullback entries */
+  pullbackRequireUptrend: boolean;
+
+  // ========================================================================
+  // SFP ENTRY SETTINGS
+  // ========================================================================
+  /** Enable swing failure pattern entries */
+  sfpEnabled: boolean;
+  /** Minimum wick size below support to qualify as SFP (percentage) */
+  sfpMinWickPercent: number;
+
+  // ========================================================================
+  // BOUNCE CONFIRMATION SETTINGS
+  // ========================================================================
+  /** Enable support bounce confirmation entries */
+  bounceEnabled: boolean;
+  /** Minimum bounce from low to close (percentage) to confirm */
+  bounceMinPercent: number;
+}
+
+/**
+ * Result of checking entry conditions for a token.
+ */
+export interface EntryCheck {
+  /** Whether an entry should be executed */
+  shouldEnter: boolean;
+  /** Entry type that triggered */
+  entryType: 'pullback' | 'sfp' | 'bounce' | null;
+  /** Entry price */
+  entryPrice: number;
+  /** Signal strength for the entry */
+  strength: number;
+  /** Reason for entry (for logging and analytics) */
+  reason: string;
+  /** Rotation levels used for this check */
+  rotationLevels?: RotationLevels;
+  /** Human-readable details about why entry triggered */
+  details?: string;
+}
+
+/**
+ * Result of executing magic buy entries.
+ */
+export interface MagicBuyResult {
+  /** Tokens that were entered */
+  entries: Array<{
+    trade: PaperTrade;
+    entry: EntryCheck;
+  }>;
+  /** Tokens that were skipped with reasons */
+  skipped: Array<{
+    mint: string;
+    symbol: string;
+    reason: string;
+  }>;
+}
+
+// ============================================================================
+// DEFAULT CONFIGURATION
+// ============================================================================
+
+/**
+ * Default magic buy configuration.
+ *
+ * These defaults are tuned for meme coin trading:
+ *   - 0.1 SOL position size (small for paper trading)
+ *   - 5 minute cooldown after exit
+ *   - 1% buffer for pullback detection
+ *   - Pullback requires uptrend for safety
+ */
+export const DEFAULT_MAGIC_BUY_CONFIG: MagicBuyConfig = {
+  enabled: true,
+  positionSizeSol: 0.1,
+  reEntryCooldownMs: 5 * 60 * 1000, // 5 minutes
+  ruleSetId: 'magic-buy',
+
+  pullbackEnabled: true,
+  pullbackTriggerPercent: 1.0, // Enter when within 1% of support
+  pullbackRequireUptrend: true, // Only in confirmed uptrends
+
+  sfpEnabled: true,
+  sfpMinWickPercent: 0.5, // 0.5% wick below support
+
+  bounceEnabled: false, // More conservative, disabled by default
+  bounceMinPercent: 0.5, // 0.5% bounce from low
+};
+
+// ============================================================================
+// COOLDOWN TRACKING
+// ============================================================================
+
+/**
+ * Track when we last exited a position to enforce cooldown.
+ */
+const exitCooldowns = new Map<string, number>();
+
+/**
+ * Record an exit timestamp for cooldown tracking.
+ */
+export function recordExitForCooldown(mint: string): void {
+  exitCooldowns.set(mint, Date.now());
+}
+
+/**
+ * Check if cooldown period has passed for a mint.
+ */
+function isCooldownActive(mint: string, cooldownMs: number): boolean {
+  const lastExit = exitCooldowns.get(mint);
+  if (!lastExit) return false;
+  return Date.now() - lastExit < cooldownMs;
+}
+
+/**
+ * Clear cooldown for a mint (e.g., after successful re-entry).
+ */
+export function clearCooldown(mint: string): void {
+  exitCooldowns.delete(mint);
+}
+
+// ============================================================================
+// MAGIC BUY CHECKER
+// ============================================================================
+
+/**
+ * MagicBuyChecker - Monitors market data and triggers structure-based entries.
+ *
+ * Usage:
+ *   1. Create instance with config
+ *   2. Call checkEntry() with market data for a single token
+ *   3. Call executeEntries() to auto-enter positions that meet conditions
+ *
+ * The checker uses rotation levels from the rotations rule cache, or estimates
+ * them from market data if not cached. This ensures consistency with exit signals.
+ */
+export class MagicBuyChecker {
+  private config: MagicBuyConfig;
+
+  constructor(config: Partial<MagicBuyConfig> = {}) {
+    this.config = { ...DEFAULT_MAGIC_BUY_CONFIG, ...config };
+  }
+
+  /**
+   * Update configuration at runtime.
+   * Useful for adjusting thresholds without restarting.
+   */
+  updateConfig(config: Partial<MagicBuyConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
+   * Check if a token should be entered based on magic buy rules.
+   *
+   * Flow:
+   *   1. Check if entry is already blocked (existing position, cooldown, etc.)
+   *   2. Get rotation levels for this token
+   *   3. Check each enabled entry type in priority order
+   *   4. Return first triggered entry condition
+   *
+   * @param marketData - Current market data for the token
+   * @param ohlcv - Optional OHLCV data for more accurate analysis
+   * @returns EntryCheck with shouldEnter and entry details
+   */
+  checkEntry(marketData: TokenMarketData, ohlcv?: OHLCV[]): EntryCheck {
+    const currentPrice = marketData.price_sol;
+    const noEntry: EntryCheck = {
+      shouldEnter: false,
+      entryType: null,
+      entryPrice: currentPrice,
+      strength: 0,
+      reason: '',
+    };
+
+    if (!this.config.enabled) {
+      return { ...noEntry, reason: 'Magic buy disabled' };
+    }
+
+    const mint = marketData.mint;
+
+    // ========================================================================
+    // CHECK PRE-CONDITIONS
+    // ========================================================================
+
+    // Already have an open position?
+    const existingPosition = paperTracker.getOpenTradeForMint(mint);
+    if (existingPosition) {
+      return { ...noEntry, reason: 'Already have open position' };
+    }
+
+    // Cooldown after recent exit?
+    if (isCooldownActive(mint, this.config.reEntryCooldownMs)) {
+      return { ...noEntry, reason: 'Cooldown active after recent exit' };
+    }
+
+    // Market filter in dump mode?
+    const filterState = marketFilter.getCurrentState();
+    if (filterState === MarketState.DUMP) {
+      return { ...noEntry, reason: 'Market filter in DUMP mode - no entries' };
+    }
+
+    // ========================================================================
+    // GET ROTATION LEVELS
+    // ========================================================================
+    let levels = getRotationLevels(mint);
+    if (!levels) {
+      levels = estimateRotationFromMarketData(marketData);
+    }
+
+    if (!levels) {
+      return { ...noEntry, reason: 'No rotation levels available' };
+    }
+
+    // Get current bar high/low for SFP detection
+    let currentHigh = currentPrice * 1.001; // Default small buffer
+    let currentLow = currentPrice * 0.999;
+
+    if (ohlcv && ohlcv.length > 0) {
+      const latestBar = ohlcv[ohlcv.length - 1];
+      currentHigh = latestBar.high;
+      currentLow = latestBar.low;
+    }
+
+    // ========================================================================
+    // CHECK SFP ENTRY (Highest Priority - Most Time-Sensitive)
+    // ========================================================================
+    // SFP must be checked first because it's a time-sensitive signal.
+    // Once the candle closes, the SFP opportunity is gone.
+    if (this.config.sfpEnabled) {
+      const sfpCheck = this.checkSfpEntry(
+        marketData,
+        currentPrice,
+        currentHigh,
+        currentLow,
+        levels
+      );
+      if (sfpCheck.shouldEnter) return sfpCheck;
+    }
+
+    // ========================================================================
+    // CHECK PULLBACK ENTRY
+    // ========================================================================
+    if (this.config.pullbackEnabled) {
+      const pullbackCheck = this.checkPullbackEntry(marketData, currentPrice, levels);
+      if (pullbackCheck.shouldEnter) return pullbackCheck;
+    }
+
+    // ========================================================================
+    // CHECK BOUNCE CONFIRMATION ENTRY
+    // ========================================================================
+    if (this.config.bounceEnabled) {
+      const bounceCheck = this.checkBounceEntry(
+        marketData,
+        currentPrice,
+        currentHigh,
+        currentLow,
+        levels
+      );
+      if (bounceCheck.shouldEnter) return bounceCheck;
+    }
+
+    // No entry conditions met
+    return {
+      ...noEntry,
+      reason: 'No entry conditions met',
+      rotationLevels: levels,
+    };
+  }
+
+  /**
+   * Check Pullback to Support entry condition.
+   *
+   * STRATEGY RATIONALE:
+   * In an established uptrend (state = +1), buying pullbacks to support
+   * is the highest probability setup. The trend provides tailwind, and
+   * support provides defined risk (stop just below).
+   *
+   * TRIGGER CONDITIONS:
+   * 1. Price within pullbackTriggerPercent of rotationLow
+   * 2. If pullbackRequireUptrend is true, state must be +1
+   * 3. Price is above support (not broken down)
+   */
+  private checkPullbackEntry(
+    marketData: TokenMarketData,
+    currentPrice: number,
+    levels: RotationLevels
+  ): EntryCheck {
+    const { rotationLow, state } = levels;
+
+    // Check uptrend requirement
+    if (this.config.pullbackRequireUptrend && state !== 1) {
+      return {
+        shouldEnter: false,
+        entryType: null,
+        entryPrice: currentPrice,
+        strength: 0,
+        reason: 'Pullback requires uptrend (state = +1)',
+        rotationLevels: levels,
+      };
+    }
+
+    // Calculate distance to support as percentage
+    // Positive = above support
+    const distanceToSupport = ((currentPrice - rotationLow) / rotationLow) * 100;
+
+    // Must be above support and within trigger range
+    if (distanceToSupport > 0 && distanceToSupport <= this.config.pullbackTriggerPercent) {
+      return {
+        shouldEnter: true,
+        entryType: 'pullback',
+        entryPrice: currentPrice,
+        strength: 0.7,
+        reason: `Pullback to rotation support in ${state === 1 ? 'uptrend' : 'neutral'}`,
+        rotationLevels: levels,
+        details: `Price ${currentPrice.toFixed(8)} within ${distanceToSupport.toFixed(2)}% of support ${rotationLow.toFixed(8)}`,
+      };
+    }
+
+    return {
+      shouldEnter: false,
+      entryType: null,
+      entryPrice: currentPrice,
+      strength: 0,
+      reason: distanceToSupport <= 0 ? 'Below support' : 'Not close enough to support',
+      rotationLevels: levels,
+    };
+  }
+
+  /**
+   * Check Swing Failure Pattern (SFP) entry condition.
+   *
+   * STRATEGY RATIONALE:
+   * An SFP occurs when price wicks below support but closes back above.
+   * This indicates a "liquidity grab" - stops were triggered, but there
+   * was no genuine breakdown. Often precedes strong reversal as the
+   * stop hunters are now trapped short.
+   *
+   * TRIGGER CONDITIONS:
+   * 1. Current low is below rotationLow (wick below support)
+   * 2. Current price is at or above rotationLow (closed back inside)
+   * 3. Wick size exceeds minimum (sfpMinWickPercent)
+   */
+  private checkSfpEntry(
+    marketData: TokenMarketData,
+    currentPrice: number,
+    currentHigh: number,
+    currentLow: number,
+    levels: RotationLevels
+  ): EntryCheck {
+    const { rotationLow } = levels;
+
+    // Check if we have a wick below support
+    const wickBelowSupport = currentLow < rotationLow;
+    const closedAboveSupport = currentPrice >= rotationLow;
+
+    if (!wickBelowSupport || !closedAboveSupport) {
+      return {
+        shouldEnter: false,
+        entryType: null,
+        entryPrice: currentPrice,
+        strength: 0,
+        reason: wickBelowSupport ? 'Closed below support (not SFP)' : 'No wick below support',
+        rotationLevels: levels,
+      };
+    }
+
+    // Calculate wick size
+    const wickSize = ((rotationLow - currentLow) / rotationLow) * 100;
+
+    if (wickSize < this.config.sfpMinWickPercent) {
+      return {
+        shouldEnter: false,
+        entryType: null,
+        entryPrice: currentPrice,
+        strength: 0,
+        reason: `SFP wick too small (${wickSize.toFixed(2)}% < ${this.config.sfpMinWickPercent}%)`,
+        rotationLevels: levels,
+      };
+    }
+
+    // Valid SFP detected
+    return {
+      shouldEnter: true,
+      entryType: 'sfp',
+      entryPrice: currentPrice,
+      strength: 0.75,
+      reason: `SFP at support - false breakout / liquidity grab`,
+      rotationLevels: levels,
+      details: `Wick ${wickSize.toFixed(2)}% below support ${rotationLow.toFixed(8)}, closed at ${currentPrice.toFixed(8)}`,
+    };
+  }
+
+  /**
+   * Check Support Bounce Confirmation entry condition.
+   *
+   * STRATEGY RATIONALE:
+   * More conservative than pullback - waits for price to test support
+   * AND show strength (bounce) before entering. Confirms support is
+   * actually holding, reducing false entries.
+   *
+   * TRIGGER CONDITIONS:
+   * 1. Current low touched support (within small buffer)
+   * 2. Current price is above the low by bounceMinPercent
+   * 3. Shows strength (closing toward high of current range)
+   */
+  private checkBounceEntry(
+    marketData: TokenMarketData,
+    currentPrice: number,
+    currentHigh: number,
+    currentLow: number,
+    levels: RotationLevels
+  ): EntryCheck {
+    const { rotationLow } = levels;
+
+    // Check if low touched support (within 0.5% buffer)
+    const touchedSupport = currentLow <= rotationLow * 1.005;
+    const aboveSupport = currentPrice > rotationLow;
+
+    if (!touchedSupport || !aboveSupport) {
+      return {
+        shouldEnter: false,
+        entryType: null,
+        entryPrice: currentPrice,
+        strength: 0,
+        reason: !touchedSupport ? 'Low did not touch support' : 'Currently below support',
+        rotationLevels: levels,
+      };
+    }
+
+    // Calculate bounce percentage from low
+    const bouncePercent = ((currentPrice - currentLow) / currentLow) * 100;
+
+    if (bouncePercent < this.config.bounceMinPercent) {
+      return {
+        shouldEnter: false,
+        entryType: null,
+        entryPrice: currentPrice,
+        strength: 0,
+        reason: `Bounce too weak (${bouncePercent.toFixed(2)}% < ${this.config.bounceMinPercent}%)`,
+        rotationLevels: levels,
+      };
+    }
+
+    // Valid bounce confirmation
+    return {
+      shouldEnter: true,
+      entryType: 'bounce',
+      entryPrice: currentPrice,
+      strength: 0.65,
+      reason: `Support bounce confirmation`,
+      rotationLevels: levels,
+      details: `Bounced ${bouncePercent.toFixed(2)}% from low ${currentLow.toFixed(8)} after testing support ${rotationLow.toFixed(8)}`,
+    };
+  }
+
+  /**
+   * Execute magic buy entries for all qualifying tokens.
+   *
+   * This is the main entry point for the run loop - scans market data
+   * and opens positions for tokens that meet entry conditions.
+   *
+   * @param marketDataMap - Map of mint -> market data
+   * @param ohlcvMap - Optional map of mint -> OHLCV data
+   * @param quiet - Suppress console output
+   * @returns MagicBuyResult with entries and skipped tokens
+   */
+  async executeEntries(
+    marketDataMap: Map<string, TokenMarketData>,
+    ohlcvMap?: Map<string, OHLCV[]>,
+    quiet: boolean = false
+  ): Promise<MagicBuyResult> {
+    const result: MagicBuyResult = {
+      entries: [],
+      skipped: [],
+    };
+
+    if (!this.config.enabled) {
+      return result;
+    }
+
+    for (const [mint, marketData] of marketDataMap) {
+      const ohlcv = ohlcvMap?.get(mint);
+      const entryCheck = this.checkEntry(marketData, ohlcv);
+
+      if (entryCheck.shouldEnter) {
+        // Open paper trade
+        const trade = paperTracker.openTrade({
+          mint,
+          symbol: marketData.symbol,
+          action: 'buy',
+          priceSol: entryCheck.entryPrice,
+          priceUsd: marketData.price_usd,
+          positionSizeSol: this.config.positionSizeSol,
+          ruleSetId: this.config.ruleSetId,
+          signalStrength: entryCheck.strength,
+          reason: entryCheck.reason,
+        });
+
+        result.entries.push({ trade, entry: entryCheck });
+
+        // Clear cooldown on successful entry
+        clearCooldown(mint);
+
+        // Log the entry (unless quiet mode)
+        if (!quiet) {
+          const entryLabel = this.getEntryLabel(entryCheck.entryType);
+          console.log(
+            `\n[MAGIC ${entryLabel}] ${marketData.symbol} @ ${entryCheck.entryPrice.toFixed(8)} SOL`
+          );
+          if (entryCheck.details) {
+            console.log(`  ${entryCheck.details}`);
+          }
+        }
+      } else {
+        // Track why we didn't enter (for debugging)
+        result.skipped.push({
+          mint,
+          symbol: marketData.symbol,
+          reason: entryCheck.reason,
+        });
+      }
+    }
+
+    // Persist new trades
+    if (result.entries.length > 0) {
+      await paperTracker.save();
+    }
+
+    return result;
+  }
+
+  /**
+   * Get human-readable label for entry type.
+   */
+  private getEntryLabel(entryType: EntryCheck['entryType']): string {
+    switch (entryType) {
+      case 'pullback':
+        return 'PULLBACK';
+      case 'sfp':
+        return 'SFP';
+      case 'bounce':
+        return 'BOUNCE';
+      default:
+        return 'BUY';
+    }
+  }
+
+  /**
+   * Get current configuration.
+   */
+  getConfig(): MagicBuyConfig {
+    return { ...this.config };
+  }
+}
+
+// ============================================================================
+// SINGLETON INSTANCE
+// ============================================================================
+
+/**
+ * Default magic buy checker instance.
+ * Used by the CLI run loop for automatic entry management.
+ */
+export const magicBuy = new MagicBuyChecker();

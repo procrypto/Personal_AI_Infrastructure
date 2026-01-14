@@ -1,0 +1,104 @@
+---
+phase: 06-backend-feed-consumption
+plan: 01
+type: execute
+---
+
+<objective>
+Wire OHLCV feeds into the polling loop and implement feed freshness detection to skip redundant API calls.
+
+Purpose: Eliminate redundant API polling when WebSocket feeds are active, reducing latency and server load.
+Output: Polling loop uses feed data when fresh, falls back to API when stale.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/04-nats-data-feeds/04-01-SUMMARY.md
+
+# Key files:
+@src/cli.ts
+@src/websocket-server.ts
+
+**Tech stack available:** ws library, existing DataFeedMessage pattern
+**Established patterns:** Feed-to-AutoSource bridge, handleDataFeed switch
+**Constraining decisions:**
+- Phase 4: Keep API polling as fallback until frontend integration validated
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add feed freshness tracking to WebSocket server</name>
+  <files>src/websocket-server.ts</files>
+  <action>
+Add timestamp tracking for feed data freshness:
+1. Add `feedLastUpdated` Map keyed by feed type (market_data, ohlcv, cvd, trending, whale)
+2. Update handleDataFeed to record timestamp when each feed type is received
+3. Add `isFeedFresh(feedType: string, maxAgeMs: number)` method that returns true if feed was updated within maxAgeMs
+4. Add `getFeedStats()` method returning last update times for all feed types
+5. Default freshness thresholds: market_data 30s, ohlcv 60s, trending/whale 5m
+
+Keep existing storage Maps unchanged - only add timestamp tracking alongside.
+  </action>
+  <verify>TypeScript compiles without errors: `npm run build`</verify>
+  <done>
+- feedLastUpdated Map tracks all feed types
+- isFeedFresh() returns correct boolean based on age
+- getFeedStats() returns feed activity summary
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Wire OHLCV feed into polling loop's candleDataMap</name>
+  <files>src/cli.ts</files>
+  <action>
+Modify the OHLCV fetching loop in runLoop (around line 684-696) to check feed data first:
+1. Before the `for (const trade of openTrades)` loop, check if OHLCV feed is fresh via `wsServer.isFeedFresh('ohlcv', 60000)`
+2. If fresh: populate candleDataMap from wsServer.getOHLCV() for each open trade mint
+3. If not fresh (or missing): fall back to existing localApi.getOHLCV() call
+4. Add log line when using feed data: `[Feed] Using OHLCV feed for ${count} positions`
+5. Keep API fallback for positions not in feed data
+
+Pattern: Check feed first, API second. Log which path is used for visibility.
+  </action>
+  <verify>
+1. `npm run build` succeeds
+2. `npm test` passes (65 tests)
+3. Start run loop, verify log shows feed status
+  </verify>
+  <done>
+- OHLCV feed data used when fresh (feed < 60s old)
+- API polling used as fallback when feed stale or missing
+- Log indicates which data source is being used
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run build` succeeds without errors
+- [ ] `npm test` passes all 65 tests
+- [ ] Feed freshness methods work correctly
+- [ ] OHLCV feed is checked before API polling
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Feed-first, API-fallback pattern working
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/06-backend-feed-consumption/06-01-SUMMARY.md` following the summary template.
+</output>

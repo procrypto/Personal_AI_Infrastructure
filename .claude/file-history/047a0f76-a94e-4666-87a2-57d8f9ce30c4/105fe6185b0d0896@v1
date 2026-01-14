@@ -1,0 +1,229 @@
+/**
+ * Generic Trades Backfill Endpoint
+ *
+ * Fetches bounded trade history for a list of wallets.
+ * Returns raw trade rows (not widget-specific computed artifacts).
+ *
+ * ⚠️  This fetches PRODUCTION data. Strict limits are enforced.
+ * Limits are enforced here in local-api (not by ClickHouse). Use sourceTable to
+ * choose between:
+ *   - "materializer_trades" (full history, default)
+ *   - "recent_1d" (lightweight view)
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, buildInList } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants — Strict Limits
+// =============================================================================
+
+const MAX_TRADERS = 100;
+const MAX_LOOKBACK_DAYS = 7;
+const MAX_LIMIT_TOTAL = 5_000;
+const MAX_LIMIT_PER_TRADER = 500;
+
+// Defaults (can be overridden per request; capped by MAX_* above)
+const DEFAULT_LOOKBACK_DAYS = 1;
+const DEFAULT_LIMIT_TOTAL = 5_000;
+const DEFAULT_LIMIT_PER_TRADER = 500;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type SourceTable = "recent_1d" | "materializer_trades";
+
+type TradesBackfillRequest = {
+    traders: string[];
+    lookbackDays?: number;
+    limitTotal?: number;
+    limitPerTrader?: number;
+    sourceTable?: SourceTable;
+    minSolAmount?: number;  // Filter trades below this SOL value (0-10)
+    since?: string;         // Pagination cursor (nanosecond timestamp)
+};
+
+type TradeRow = {
+    maker: string;
+    mint: string;
+    signature: string;
+    timestamp: string;
+    direction: string;
+    sol_amount: string;
+    sol_amount_usd: string;
+    market_cap_usd: string;
+    token_symbol: string;
+    token_name: string;
+};
+
+type TradesBackfillResponse =
+    | { ok: true; trades: TradeRow[]; count: number; oldestTimestamp: string | null }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, value));
+
+const getTableName = (source: SourceTable): string => {
+    switch (source) {
+        case "recent_1d":
+            return "materializer_trades_recent_1d";
+        case "materializer_trades":
+            return "materializer_trades";
+        default:
+            return "materializer_trades_recent_1d";
+    }
+};
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerTradesBackfillRoutes = (app: Elysia) => {
+    const handler = async ({ body }: { body: unknown }) => {
+        const validation = validateTradesBackfillRequest(body as TradesBackfillRequest);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildTradesBackfillSql(validation.clamped);
+
+        console.log(
+            `[trades_backfill] Querying ${validation.clamped.traders.length} wallets, ${validation.clamped.lookbackDays}d lookback, table=${validation.clamped.tableName}, minSol=${validation.clamped.minSolAmount}, since=${validation.clamped.since ?? "none"}`
+        );
+
+        const result = await clickhouseQuery<TradeRow>(sql);
+
+        if (!result.success) {
+            return {
+                ok: false,
+                error: result.error,
+            } satisfies TradesBackfillResponse;
+        }
+
+        return formatTradesBackfillResponse(result.data);
+    };
+
+    app.post("/custom/wallet-trades-snapshot", handler);
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+type ClampedParams = {
+    traders: string[];
+    lookbackDays: number;
+    limitTotal: number;
+    limitPerTrader: number;
+    tableName: string;
+    minSolAmount: number;
+    since: string | null;
+};
+
+export const validateTradesBackfillRequest = (
+    req: TradesBackfillRequest
+):
+    | { ok: true; clamped: ClampedParams }
+    | { ok: false; error: string } => {
+    if (!req.traders || !Array.isArray(req.traders) || req.traders.length === 0) {
+        return {
+            ok: false,
+            error: "Missing or empty 'traders' array",
+        };
+    }
+
+    const traders = [...new Set(req.traders)].slice(0, MAX_TRADERS);
+
+    if (req.traders.length > MAX_TRADERS) {
+        console.warn(
+            `[trades_backfill] Too many traders (${req.traders.length}), clamped to ${MAX_TRADERS}`
+        );
+    }
+
+    const lookbackDays = clamp(
+        req.lookbackDays ?? DEFAULT_LOOKBACK_DAYS,
+        1,
+        MAX_LOOKBACK_DAYS
+    );
+    const limitTotal = clamp(
+        req.limitTotal ?? DEFAULT_LIMIT_TOTAL,
+        1,
+        MAX_LIMIT_TOTAL
+    );
+    const limitPerTrader =
+        req.limitPerTrader === undefined
+            ? DEFAULT_LIMIT_PER_TRADER
+            : clamp(req.limitPerTrader, 1, MAX_LIMIT_PER_TRADER);
+
+    const sourceTable = req.sourceTable ?? "materializer_trades";
+    const tableName = getTableName(sourceTable);
+
+    // New parameters: minSolAmount (0-10 SOL) and since (nanosecond timestamp)
+    const minSolAmount = clamp(req.minSolAmount ?? 0, 0, 10);
+    const since = req.since ?? null;
+
+    return {
+        ok: true,
+        clamped: { traders, lookbackDays, limitTotal, limitPerTrader, tableName, minSolAmount, since },
+    };
+};
+
+export const buildTradesBackfillSql = (params: ClampedParams): string => {
+    const tradersInList = buildInList(params.traders);
+
+    // Build optional WHERE clauses
+    const minSolClause = params.minSolAmount > 0 
+        ? `AND sol_amount >= ${params.minSolAmount}` 
+        : "";
+    const sinceClause = params.since 
+        ? `AND timestamp < ${params.since}` 
+        : "";
+
+    return `
+        SELECT
+            maker,
+            mint,
+            signature,
+            timestamp,
+            direction,
+            sol_amount,
+            sol_amount_usd,
+            market_cap_usd,
+            token_symbol,
+            token_name
+        FROM ${params.tableName}
+        WHERE maker IN (${tradersInList})
+          AND toDate(toDateTime(toInt64(timestamp / 1000000000))) >= today() - INTERVAL ${params.lookbackDays} DAY
+          ${minSolClause}
+          ${sinceClause}
+        ORDER BY timestamp DESC
+        LIMIT ${params.limitPerTrader} BY maker
+        LIMIT ${params.limitTotal}
+    `;
+};
+
+export const formatTradesBackfillResponse = (rows: TradeRow[]): TradesBackfillResponse => {
+    console.log(`[trades_backfill] Returned ${rows.length} trades`);
+
+    // Extract oldest timestamp for pagination cursor
+    const oldestTimestamp = rows.length > 0 
+        ? rows[rows.length - 1].timestamp 
+        : null;
+
+    return {
+        ok: true,
+        trades: rows,
+        count: rows.length,
+        oldestTimestamp,
+    };
+};
+
+
+
+
+

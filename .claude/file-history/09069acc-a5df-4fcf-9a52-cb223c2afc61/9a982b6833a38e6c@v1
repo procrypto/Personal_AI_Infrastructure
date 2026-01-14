@@ -1,0 +1,112 @@
+/**
+ * Tester Profile Store
+ *
+ * CRUD operations and queries for QA tester profiles stored in Vercel KV.
+ * Used for assignment scoring and workload management.
+ */
+
+import { kv } from './kv-client.js';
+import { KV_KEYS } from './kv-client.js';
+import type { TesterProfile } from '../types.js';
+
+/**
+ * Create or update a tester profile (upsert pattern).
+ * Used for syncing testers from Linear. Preserves historical stats if tester exists.
+ */
+export async function upsertTester(
+  data: Omit<TesterProfile, 'currentLoad' | 'totalCompleted' | 'avgCompletionTimeMs' | 'lastActiveAt'> & {
+    currentLoad?: number;
+    totalCompleted?: number;
+    avgCompletionTimeMs?: number;
+  }
+): Promise<TesterProfile> {
+  const existing = await getTester(data.id);
+
+  const tester: TesterProfile = {
+    // Preserve existing stats if not explicitly provided
+    currentLoad: data.currentLoad ?? existing?.currentLoad ?? 0,
+    totalCompleted: data.totalCompleted ?? existing?.totalCompleted ?? 0,
+    avgCompletionTimeMs: data.avgCompletionTimeMs ?? existing?.avgCompletionTimeMs ?? 0,
+    ...data,
+    lastActiveAt: new Date().toISOString(),
+  };
+
+  await kv.hset(KV_KEYS.tester(data.id), tester as unknown as Record<string, unknown>);
+  return tester;
+}
+
+/**
+ * Get a tester by ID.
+ * Returns null if tester doesn't exist.
+ */
+export async function getTester(id: string): Promise<TesterProfile | null> {
+  const data = await kv.hgetall(KV_KEYS.tester(id));
+  if (!data || Object.keys(data).length === 0) return null;
+  return data as unknown as TesterProfile;
+}
+
+/**
+ * Update a tester profile (partial update).
+ * Cannot change id or linearUserId after creation.
+ */
+export async function updateTester(
+  id: string,
+  updates: Partial<Omit<TesterProfile, 'id' | 'linearUserId'>>
+): Promise<TesterProfile | null> {
+  const existing = await getTester(id);
+  if (!existing) return null;
+
+  const updated: TesterProfile = {
+    ...existing,
+    ...updates,
+    lastActiveAt: new Date().toISOString(),
+  };
+
+  await kv.hset(KV_KEYS.tester(id), updated as unknown as Record<string, unknown>);
+  return updated;
+}
+
+/**
+ * List all testers.
+ * Uses scan pattern - may be slow with many testers. Use sparingly.
+ */
+export async function listTesters(): Promise<TesterProfile[]> {
+  const testers: TesterProfile[] = [];
+  for await (const key of kv.scanIterator({ match: 'testers:*' })) {
+    const data = await kv.hgetall(key);
+    if (data && Object.keys(data).length > 0) {
+      testers.push(data as unknown as TesterProfile);
+    }
+  }
+  return testers;
+}
+
+/**
+ * Get testers who are currently available for assignment.
+ */
+export async function getAvailableTesters(): Promise<TesterProfile[]> {
+  const all = await listTesters();
+  return all.filter(t => t.availability === 'available');
+}
+
+/**
+ * Increment tester's current workload count.
+ * Call when assigning a ticket to a tester.
+ */
+export async function incrementTesterLoad(id: string): Promise<void> {
+  const tester = await getTester(id);
+  if (tester) {
+    await updateTester(id, { currentLoad: tester.currentLoad + 1 });
+  }
+}
+
+/**
+ * Decrement tester's current workload count.
+ * Call when a ticket is completed or unassigned.
+ */
+export async function decrementTesterLoad(id: string): Promise<void> {
+  const tester = await getTester(id);
+  if (tester && tester.currentLoad > 0) {
+    await updateTester(id, { currentLoad: tester.currentLoad - 1 });
+  }
+}

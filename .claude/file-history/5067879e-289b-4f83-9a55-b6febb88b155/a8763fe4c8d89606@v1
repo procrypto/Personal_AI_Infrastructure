@@ -1,0 +1,123 @@
+# web-terminal - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2025-01-10 (pre-existing documentation)
+- **Last updated**: 2025-01-10
+- **Discovery source**: Existing ai.md + BACKEND_API_AND_DATA.md
+- **Documentation quality**: Excellent
+
+---
+
+## System Identity
+
+**What it is**: Rust-based real-time cryptocurrency/token market data backend for BONKbot.
+
+**What it does**:
+- Processes Solana blockchain events from Geyser streams (GB/s scale)
+- Materializes aggregated market data (OHLCV, holder stats, trading metrics)
+- Serves data via REST APIs and WebSockets
+- Stores in RocksDB (hot state) and ClickHouse (historical)
+
+**Critical constraints**: Low latency and high throughput are paramount.
+
+---
+
+## Key Capabilities
+
+### Data It Provides
+| Capability | Interface | Notes |
+|------------|-----------|-------|
+| Real-time trades | WebSocket (`trades2.*`) | Enriched with flags (dev, sniper, bundler) |
+| Market data | WebSocket (`market_data.*`) | Price, mcap, volume, holders |
+| OHLCV candles | REST + WebSocket | Multiple resolutions (1s to 1w) |
+| Holder statistics | REST + WebSocket | Top holders, PnL, positions |
+| Token events | WebSocket | Lifecycle events, dev actions |
+| X-Ray stages | WebSocket | New pair, graduating, graduated |
+| Wallet tracking | REST + WebSocket | Trade monitoring for specific wallets |
+| Discovery/trending | REST + WebSocket | Trending tokens, whale moves |
+
+### Data Sources It Consumes
+| Source | Type | Notes |
+|--------|------|-------|
+| Geyser RPC | Stream | Raw Solana blockchain events |
+| PUM3 | NATS | Processed on-chain events |
+| Pyth | Oracle | SOL/USD price feed |
+
+---
+
+## Architecture Quick Reference
+
+### Services
+| Service | Purpose |
+|---------|---------|
+| `wt-initializer` | Geyser event processing |
+| `wt-materializer` | State aggregation, RocksDB |
+| `wt-ch-writer` | ClickHouse persistence |
+| `wt-web-server` | REST + WebSocket serving |
+| `wt-nats` | Message hub |
+
+### Data Flow
+```
+Geyser → Initializer → NATS → Materializer → RocksDB (state)
+                                    ↓
+                              NATS topics → web-server → Frontend
+                                    ↓
+                              ch-writer → ClickHouse (history)
+```
+
+---
+
+## Working Here
+
+### Entry Points for Common Tasks
+| Task | Location |
+|------|----------|
+| Add REST endpoint | `bin/web-server/src/api/` |
+| Add WebSocket topic | `crates/primitives/src/nats/topics.rs` |
+| Add ClickHouse table | `crates/storage/src/clickhouse/` |
+| Add Geyser processor | `bin/initializer/src/processors/` |
+| Modify materialization | `bin/materializer/src/core/event_handler.rs` |
+
+### Patterns to Follow
+- `Result<T, E>` for all fallible operations
+- Use `?` operator, avoid unwrap except at top-level
+- Structured logging with `tracing`
+- Performance-first: minimize allocations in hot paths
+
+### Things to Avoid
+- Hardcoding instance names in docs
+- Duplicating content from code/scripts
+- Pushing directly to main
+- Skipping PR review process
+
+---
+
+## Cross-System Connections
+
+### Upstream (What It Consumes)
+| System | What We Get | Interface |
+|--------|-------------|-----------|
+| Geyser | Raw blockchain events | gRPC stream |
+| PUM3 | Processed events | NATS topics |
+
+### Downstream (What Consumes Us)
+| System | What They Get | Interface |
+|--------|---------------|-----------|
+| Frontend | Real-time market data | WebSocket |
+| web-api | Market data queries | REST (assumed) |
+
+---
+
+## Key Documentation
+- `ai.md` - Agent entry point
+- `docs/BACKEND_API_AND_DATA.md` - Complete API/data reference
+- `docs/DEPLOYMENT_RUNBOOK.md` - Operations guide
+- `CONTRIBUTING.md` - Development standards
+
+---
+
+## Session Notes
+
+*Accumulated learnings from working with this system:*
+
+(Add notes here as you work with the system)

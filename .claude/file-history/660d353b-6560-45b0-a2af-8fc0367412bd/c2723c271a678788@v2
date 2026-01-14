@@ -1,0 +1,368 @@
+# BONKbot API Reference
+
+Base URL: `http://localhost:8800` (development) | Production URL varies by deployment
+
+## Authentication
+
+BONKbot uses a cookie-based authentication system with multiple token types:
+
+| Cookie | Purpose | HttpOnly |
+|--------|---------|----------|
+| `refresh_token` | Long-lived refresh token | Yes |
+| `auth_token` | Short-lived auth token | Yes |
+| `data_access_token` | Market data access | No |
+| `signer_id_token` | Signer service identity | No |
+
+### Authentication Flow
+
+1. User identifies via email, Solana wallet, or Telegram
+2. Server issues tokens as HTTP-only cookies
+3. Subsequent requests include cookies automatically
+4. Use `/v1/auth/refresh` to refresh expired tokens
+
+---
+
+## Endpoints
+
+### Auth Controller (`/v1/auth`)
+
+#### GET `/v1/auth/env-config`
+
+Get environment configuration (non-production only).
+
+**Response:**
+```json
+{
+  "signerMiniAppDomain": "string",
+  "botName": "string",
+  "dbEnv": "string"
+}
+```
+
+#### GET `/v1/auth/authbot-url`
+
+Get Telegram authbot URL for authentication.
+
+**Query Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `staging` | boolean | No | Use staging authbot |
+
+**Response:**
+```json
+{
+  "url": "https://t.me/bonkbot/app?startapp=tgAuthBot"
+}
+```
+
+#### POST `/v1/auth/refresh`
+
+Refresh authentication tokens.
+
+**Response:** `200 OK` with refreshed cookies
+
+#### POST `/v1/auth/logout`
+
+Clear all authentication cookies.
+
+**Response:** `200 OK`
+
+#### GET `/v1/auth/auth-solana-wallet-message`
+
+Get message to sign for Solana wallet authentication.
+
+**Response:**
+```json
+{
+  "message": "Sign this message to authenticate with BONKbot..."
+}
+```
+
+#### POST `/v1/auth/send-email-verification`
+
+Send email verification code.
+
+**Request Body:**
+```json
+{
+  "email": "user@example.com",
+  "referralCode": "optional-referral-code"
+}
+```
+
+**Response:**
+```json
+{
+  "otpToken": "token-for-verification"
+}
+```
+
+#### POST `/v1/auth/identify/email-verification`
+
+Complete email verification and identify user.
+
+**Request Body:**
+```json
+{
+  "token": "otp-token-from-email",
+  "otp": "123456"
+}
+```
+
+**Response:**
+```json
+{
+  "authIdentity": {
+    "telemetryId": "user-telemetry-id",
+    "authProvider": "email",
+    "authProviderUserId": "user@example.com"
+  }
+}
+```
+
+#### POST `/v1/auth/identify/solana-wallet`
+
+Authenticate via Solana wallet signature.
+
+**Request Body:**
+```json
+{
+  "message": "signed-message",
+  "signature": "wallet-signature",
+  "publicKey": "wallet-public-key",
+  "referralCode": "optional-referral"
+}
+```
+
+#### POST `/v1/auth/identify/telegram`
+
+Authenticate via Telegram signer token.
+
+**Request Body:**
+```json
+{
+  "signerCToken": "signer-c-token",
+  "referralCode": "optional-referral"
+}
+```
+
+#### POST `/v1/auth/authenticate-user`
+
+Authenticate user with signer token (requires passkey verification).
+
+**Request Body:**
+```json
+{
+  "signerCToken": "signer-c-token"
+}
+```
+
+---
+
+### Swap Controller (`/v1/swap`)
+
+#### POST `/v1/swap/chain/solana/token/:tokenMint/order`
+
+Execute a token swap.
+
+**Path Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `tokenMint` | string | Token mint address |
+
+**Request Body:**
+```json
+{
+  "type": "marketBuy | marketSell",
+  "amount": "1000000000",
+  "clientNonce": "unique-client-nonce",
+  "ignorePriceImpact": false,
+  "slippageBps": 100,
+  "priorityFee": "10000",
+  "mevProtectionLevel": "standard",
+  "signerWalletId": "wallet-id",
+  "signerWallets": ["wallet-id-1", "wallet-id-2"],
+  "amountVarianceBps": 50,
+  "autoStratId": "optional-auto-strat-id"
+}
+```
+
+**Response (Success):**
+```json
+{
+  "needsWhitelistApproval": false,
+  "tokenName": "Token Name",
+  "tokenTicker": "TKN",
+  "inputAmount": "1.5"
+}
+```
+
+**Response (Error):**
+```json
+{
+  "errorType": "NO_ROUTES_FOUND | EXCEEDS_PRICE_IMPACT | NOT_ENOUGH_SOL | ...",
+  "errorMessage": "Human readable error message",
+  "errors": [
+    {
+      "errorType": "...",
+      "errorMessage": "...",
+      "signerWalletId": "wallet-id or null"
+    }
+  ]
+}
+```
+
+**Error Types:**
+| Type | Description |
+|------|-------------|
+| `NO_ROUTES_FOUND` | No swap route available |
+| `EXCEEDS_PRICE_IMPACT` | Price impact too high |
+| `NOT_ENOUGH_SOL` | Insufficient SOL balance |
+| `POOL_MIGRATING` | Token pool is migrating |
+| `STABLE_COINS_NOT_SUPPORTED` | Stablecoin swaps not supported |
+| `TOKEN_NOT_FOUND` | Token not found |
+| `INTERNAL_ERROR` | Server error |
+
+#### GET `/v1/swap/chain/solana/token/:tokenMint/getQuote`
+
+Get a swap quote without executing.
+
+**Path Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `tokenMint` | string | Token mint address |
+
+**Query Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `amount` | bigint | Yes | - | Amount in base units |
+| `direction` | string | No | `buy` | `buy` or `sell` |
+
+**Response:**
+```json
+{
+  "inputAmount": "1000000000",
+  "outputAmount": "500000000",
+  "priceImpact": "0.5",
+  "route": "..."
+}
+```
+
+---
+
+### User Controller (`/v1/user`)
+
+User settings and portfolio management endpoints.
+
+---
+
+### Orders Controller (`/v1/orders`)
+
+Query and manage limit orders.
+
+---
+
+### Limit Order Controller (`/v1/limit-order`)
+
+Create and manage limit orders with price triggers.
+
+---
+
+### Auto Strat Controller (`/v1/auto-strat`)
+
+DCA and rebalancing strategy management.
+
+---
+
+### Referral Controller (`/v1/referral`)
+
+Referral program information and rewards.
+
+---
+
+### Signer Wallet Controller (`/v1/signer-wallet`)
+
+Wallet management operations.
+
+---
+
+### Tokens Controller (`/v1/tokens`)
+
+Token information and metadata.
+
+---
+
+### Watchlist Token Controller (`/v1/watchlist-token`)
+
+User token watchlist management.
+
+---
+
+### Web Terminal Settings Controller (`/v1/web-terminal-settings`)
+
+Web terminal user preferences.
+
+---
+
+### Healthcheck Controller (`/v1/healthcheck`)
+
+#### GET `/v1/healthcheck`
+
+Service health status.
+
+**Response:**
+```json
+{
+  "status": "ok"
+}
+```
+
+---
+
+## Error Handling
+
+All error responses follow this structure:
+
+```json
+{
+  "errorMessage": "Human readable error message",
+  "errorType": "ERROR_CODE"
+}
+```
+
+### HTTP Status Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Success |
+| 400 | Bad request / validation error |
+| 401 | Unauthorized / invalid token |
+| 404 | Resource not found |
+| 500 | Internal server error |
+
+---
+
+## Rate Limiting
+
+Certain endpoints are rate-limited:
+- `/v1/auth/send-email-verification`
+- `/v1/auth/identify/*`
+
+Rate limit responses return `429 Too Many Requests`.
+
+---
+
+## NATS Topics
+
+The API publishes events to these NATS topics:
+
+| Topic | Event |
+|-------|-------|
+| `swap-status` | Swap completion/failure |
+| `limit-order-*` | Order state changes |
+| `user-portfolio` | Portfolio updates |
+| `notifications` | Notification triggers |
+
+---
+
+*Generated by DocGen - Last updated: 2026-01-12*

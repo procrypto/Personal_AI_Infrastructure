@@ -1,0 +1,57 @@
+886-
+887-        // Broadcast updated stats
+888:        const stats = paperTracker.getStats();
+889:        wsServer.broadcastStats({
+890-          totalTrades: stats.totalTrades,
+891-          openTrades: stats.openTrades,
+892-          closedTrades: stats.closedTrades,
+893-          wins: stats.wins,
+894-          losses: stats.losses,
+895-          winRate: stats.winRate,
+896-          totalPnlSol: stats.totalPnlSol,
+897-          totalPnlUsd: stats.totalPnlUsd,
+898-          avgPnlPercent: stats.avgPnlPercent,
+899-        });
+900-      };
+901-
+902-      // Run immediately, then on interval
+903-      await runLoop();
+904-      setInterval(runLoop, config.pollIntervalMs);
+--
+908-    case 'status': {
+909-      const openTrades = paperTracker.getOpenTrades();
+910:      const stats = paperTracker.getStats();
+911-      const ruleSets = configStore.getRuleSets();
+912-      const watchlist = configStore.getWatchlist();
+913-
+914-      console.log('\n=== PORTFOLIO STATUS ===\n');
+915-
+916-      // Open positions with live P&L
+917-      if (openTrades.length === 0) {
+918-        console.log('Open Positions: none\n');
+919-      } else {
+920-        console.log('Open Positions:');
+921-        let totalUnrealizedSol = 0;
+922-        let totalUnrealizedUsd = 0;
+923-        let totalExposure = 0;
+924-
+925-        for (const trade of openTrades) {
+--
+987-
+988-    case 'stats': {
+989:      const stats = paperTracker.getStats();
+990-      console.log('\nTrading Statistics:');
+991-      console.log(`  Total Trades: ${stats.totalTrades}`);
+992-      console.log(`  Open: ${stats.openTrades} | Closed: ${stats.closedTrades}`);
+993-      console.log(`  Wins: ${stats.wins} | Losses: ${stats.losses}`);
+994-      console.log(`  Win Rate: ${(stats.winRate * 100).toFixed(1)}%`);
+995-      console.log(`  Total P&L: ${stats.totalPnlSol.toFixed(4)} SOL ($${stats.totalPnlUsd.toFixed(2)})`);
+996-      console.log(`  Avg P&L: ${stats.avgPnlPercent.toFixed(2)}%`);
+997-      if (stats.bestTrade) {
+998-        console.log(`  Best: ${stats.bestTrade.symbol} +${stats.bestTrade.pnlPercent?.toFixed(2)}%`);
+999-      }
+1000-      if (stats.worstTrade) {
+1001-        console.log(`  Worst: ${stats.worstTrade.symbol} ${stats.worstTrade.pnlPercent?.toFixed(2)}%`);
+1002-      }
+1003-      break;
+1004-    }

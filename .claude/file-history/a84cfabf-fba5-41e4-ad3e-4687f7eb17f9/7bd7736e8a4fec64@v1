@@ -1,0 +1,135 @@
+---
+phase: 22-watchlist-style-screener-volume-trends
+plan: 01
+type: execute
+---
+
+<objective>
+Consolidate screener data sources to use websocket data consistently across all three columns.
+
+Purpose: Ensure data layer is solid before UI refactor - all columns should use websocket sources with consistent data types.
+Output: Unified data types and verified websocket subscriptions for Watchlist, Trending, and Whales columns.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/18-data-fixes/18-01-SUMMARY.md
+
+# Key source files
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts
+@apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+@apps/web-terminal/src/store/memoryStore/slices/websocket-messages-store/types.ts
+
+# Reference: Watchlist widget data patterns
+@apps/web-terminal/src/ui/dashboard/widgets/watchlist-widget-table-view.tsx
+
+# Prior decisions
+- Watchlist tokens use watchlist websocket store for instant symbols (Phase 18)
+- Trending uses discovery_trending_list websocket store
+- Whales uses Discovery API with 1s refresh
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Audit current data sources and types</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts</files>
+  <action>
+    Review and document the current data flow for each column:
+    1. Watchlist: verify uses `websocketMessages.watchlist.itemsMap` (WatchlistTokenData)
+    2. Trending: verify uses `websocketMessages.discovery_trending_list.itemsMap` (DiscoveryTrendingListTokenData)
+    3. Whales: verify uses Discovery API `useWhaleMoves()` (WhaleMoveData)
+
+    Ensure all three return consistent fields for the UI:
+    - mint, symbol, market_data (with trading_stats_5m, trading_stats_1h, trading_stats_6h)
+
+    If types are inconsistent, create a unified `ScreenerTokenData` type that all columns map to.
+  </action>
+  <verify>Read the hook and confirm data sources match expected patterns</verify>
+  <done>Data sources documented, any type mismatches identified</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create unified ScreenerTokenData type</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/types.ts</files>
+  <action>
+    Create a `ScreenerTokenData` type that unifies what all three columns need:
+    ```typescript
+    export type ScreenerTokenData = {
+      mint: string;
+      symbol: string;
+      name?: string;
+      market_data: {
+        market_cap_usd: string;
+        price_sol: string;
+        price_usd: string;
+        trading_stats_5m: TradingStats;
+        trading_stats_1h: TradingStats;
+        trading_stats_6h: TradingStats;
+        trading_stats_24h: TradingStats;
+      };
+      // Signal/position state (from autopilot)
+      hasPosition?: boolean;
+      signalStrength?: SignalStrength;
+    };
+    ```
+
+    Add mapper functions if needed to convert from source types to ScreenerTokenData.
+    Export the type from the hooks index.
+  </action>
+  <verify>TypeScript compiles without errors</verify>
+  <done>ScreenerTokenData type created and exported</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Update useAutopilotDiscoveryTokens to return unified type</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts, apps/web-terminal/src/hooks/useAutopilot/index.ts</files>
+  <action>
+    Update the hook to:
+    1. Map each data source to ScreenerTokenData format
+    2. Ensure all three columns (watchlist, trending, whales) return the same shape
+    3. Keep existing enrichment from NATS market_data subscriptions
+    4. Maintain the instant symbol loading from Phase 18
+
+    The hook should return:
+    ```typescript
+    {
+      watchlistTokens: ScreenerTokenData[];
+      trendingTokens: ScreenerTokenData[];
+      whaleTokens: ScreenerTokenData[];
+    }
+    ```
+
+    Do NOT change the data fetching logic - only the output mapping.
+  </action>
+  <verify>`npm run typecheck` passes</verify>
+  <done>Hook returns unified ScreenerTokenData[] for all three columns</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run typecheck` passes
+- [ ] All three columns still display tokens (no regressions)
+- [ ] Data types are consistent across columns
+</verification>
+
+<success_criteria>
+- ScreenerTokenData type created with all needed fields
+- useAutopilotDiscoveryTokens returns unified type for all columns
+- Existing functionality preserved (symbols, prices, signal integration)
+- TypeScript compiles cleanly
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/22-watchlist-style-screener-volume-trends/22-01-SUMMARY.md`
+</output>

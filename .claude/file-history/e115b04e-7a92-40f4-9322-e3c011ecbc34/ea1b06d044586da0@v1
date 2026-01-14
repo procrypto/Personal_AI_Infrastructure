@@ -1,0 +1,122 @@
+/**
+ * ClickHouse Cloud Queries API Client
+ *
+ * Uses the same connection approach as TrenchBench:
+ *   POST https://queries.clickhouse.cloud/service/{service_id}/run?format=JSONEachRow
+ *   Authorization: Basic base64(key_id:key_secret)
+ *   Body: { "sql": "..." }
+ *
+ * ⚠️  This connects to PRODUCTION ClickHouse.
+ */
+
+import { config } from "../config";
+
+type ClickHouseResult<T> =
+    | { success: true; data: T[] }
+    | { success: false; error: string };
+
+export type InsertResult =
+    | { success: true; inserted: number }
+    | { success: false; error: string };
+
+// Track if we've logged the connection info
+let hasLoggedConnection = false;
+
+/**
+ * Log ClickHouse connection info on first query.
+ * Shows environment and partial service ID for identification without leaking credentials.
+ */
+const logConnectionOnce = () => {
+    if (hasLoggedConnection) return;
+    hasLoggedConnection = true;
+
+    const { serviceId } = config.clickhouse;
+    const partialId = serviceId.length > 8 ? `${serviceId.slice(0, 8)}...` : serviceId || "(not set)";
+    console.log(`[ClickHouse] Connected to ${config.environment} instance (service: ${partialId})`);
+};
+
+/**
+ * Execute a raw SQL query against ClickHouse Cloud.
+ *
+ * @param sql - The SQL query to execute
+ * @returns Parsed rows or an error
+ */
+export const clickhouseQuery = async <T = Record<string, unknown>>(
+    sql: string
+): Promise<ClickHouseResult<T>> => {
+    // Log connection info on first query
+    logConnectionOnce();
+
+    const { keyId, keySecret, serviceId } = config.clickhouse;
+
+    const url = `https://queries.clickhouse.cloud/service/${serviceId}/run?format=JSONEachRow`;
+    const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Basic ${auth}`,
+            },
+            body: JSON.stringify({ sql }),
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error("[ClickHouse] API error:", response.status, text);
+            return {
+                success: false,
+                error: `ClickHouse API error ${response.status}: ${text.slice(0, 200)}`,
+            };
+        }
+
+        // JSONEachRow format: one JSON object per line
+        const text = await response.text();
+        const lines = text.trim().split("\n").filter(Boolean);
+        const data = lines.map(line => JSON.parse(line) as T);
+
+        return { success: true, data };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[ClickHouse] Request failed:", message);
+        return { success: false, error: message };
+    }
+};
+
+/**
+ * Escape a string for use in ClickHouse SQL (prevents SQL injection).
+ */
+export const escapeString = (value: string): string => {
+    // Replace single quotes with escaped single quotes
+    return value.replace(/'/g, "\\'");
+};
+
+/**
+ * Build a comma-separated list of quoted strings for IN clause.
+ */
+export const buildInList = (values: string[]): string => {
+    return values.map(v => `'${escapeString(v)}'`).join(",");
+};
+
+/**
+ * Validate a Solana public key (base58, 32-44 characters).
+ */
+export const isSolanaPubkey = (value: string): boolean => {
+    if (value.length < 32 || value.length > 44) {
+        return false;
+    }
+    // Base58 alphabet (no 0, O, I, l)
+    const base58Regex = /^[1-9A-HJ-NP-Za-km-z]+$/;
+    return base58Regex.test(value);
+};
+
+/**
+ * Clamp a number between min and max.
+ */
+export const clamp = (value: number, min: number, max: number): number => {
+    return Math.max(min, Math.min(max, value));
+};
+
+
+

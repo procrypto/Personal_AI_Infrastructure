@@ -1,0 +1,94 @@
+     1→/**
+     2→ * Screener Token Types
+     3→ *
+     4→ * Unified types for the autopilot screener columns (Watchlist, Trending, Whales).
+     5→ * These types map different data sources to a consistent interface for the UI.
+     6→ *
+     7→ * Data sources:
+     8→ * - Watchlist: WebSocket watchlist store (WatchlistTokenData) - full market_data
+     9→ * - Trending: WebSocket discovery_trending_list store (DiscoveryTrendingListTokenData) - full market_data
+    10→ * - Whales: REST API /discovery/whale_moves (WhaleMoves) - limited data
+    11→ */
+    12→
+    13→import type { SignalStrength } from "./useTokenSignalStrength";
+    14→
+    15→/**
+    16→ * Trading statistics for a specific time window.
+    17→ * Used for price change calculations (current price vs earliest_price).
+    18→ */
+    19→export type TradingStats = {
+    20→  earliest_price_sol: string;
+    21→  earliest_price_usd: string;
+    22→  buys: number;
+    23→  sells: number;
+    24→  buy_volume_sol: string;
+    25→  buy_volume_usd: string;
+    26→  sell_volume_sol: string;
+    27→  sell_volume_usd: string;
+    28→  buyers: number;
+    29→  sellers: number;
+    30→  traders: number;
+    31→};
+    32→
+    33→/**
+    34→ * Screener market data - subset of TokenMarketData relevant for screener display.
+    35→ * All fields optional to accommodate different data sources.
+    36→ */
+    37→export type ScreenerMarketData = {
+    38→  // Core price data
+    39→  price_sol?: string | number;
+    40→  price_usd?: string | number;
+    41→  market_cap_usd?: string | number;
+    42→
+    43→  // Symbol (can come from market_data or token itself)
+    44→  symbol?: string;
+    45→  name?: string;
+    46→  image?: string;
+    47→
+    48→  // Volume data (24h)
+    49→  volume_24h_usd?: string;
+    50→  liquidity_usd?: string;
+    51→
+    52→  // Trading stats for price change calculations
+    53→  trading_stats_5m?: TradingStats;
+    54→  trading_stats_1h?: TradingStats;
+    55→  trading_stats_6h?: TradingStats;
+    56→  trading_stats_24h?: TradingStats;
+    57→};
+    58→
+    59→/**
+    60→ * Unified screener token type for all three columns.
+    61→ * Maps different data sources to a consistent interface.
+    62→ */
+    63→export type ScreenerTokenData = {
+    64→  // Required - all sources provide these
+    65→  mint: string;
+    66→  symbol: string;
+    67→  source: "watchlist" | "trending" | "whales";
+    68→
+    69→  // Optional metadata
+    70→  name?: string;
+    71→  image?: string;
+    72→
+    73→  // Market data - populated from WebSocket stores or mapped from API
+    74→  market_data?: ScreenerMarketData;
+    75→
+    76→  // Autopilot integration
+    77→  hasPosition?: boolean;
+    78→  signalStrength?: SignalStrength;
+    79→};
+    80→
+    81→/**
+    82→ * Return type for useAutopilotDiscoveryTokens hook.
+    83→ * All three columns return the same ScreenerTokenData type.
+    84→ */
+    85→export type ScreenerTokenList = {
+    86→  watchlist: ScreenerTokenData[];
+    87→  trending: ScreenerTokenData[];
+    88→  whales: ScreenerTokenData[];
+    89→};
+    90→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

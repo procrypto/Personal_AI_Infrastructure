@@ -1,0 +1,509 @@
+/// <reference lib="webworker" />
+
+import JSZip from 'jszip';
+import type { EnrichedMessage, IndexedChat, TopicIndex, SearchRequest, SearchMatch, ContextWindow, SearchResultWithContext, ExportContextRequest, ExportContextSettings, ExportChatGroup, ExportContextResult } from './types';
+import { expandQuery } from './semanticSets';
+
+declare const self: DedicatedWorkerGlobalScope;
+
+// Global state to store the loaded index
+let currentIndex: TopicIndex | null = null;
+
+interface LoadZipRequest {
+    type: 'loadZip';
+    file: File;
+}
+
+type Request = LoadZipRequest | SearchRequest | ExportContextRequest;
+
+interface ChatFileData {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    messages: EnrichedMessage[];
+    dateRange?: { start: string | null; end: string | null };
+    selectedUsers?: string[];
+}
+
+const isValidChatFile = (data: unknown): data is ChatFileData => {
+    if (typeof data !== 'object' || data === null) return false;
+    const obj = data as Record<string, unknown>;
+    return (
+        typeof obj.chatId === 'string' &&
+        typeof obj.chatName === 'string' &&
+        Array.isArray(obj.messages)
+    );
+};
+
+const extractParticipants = (messages: EnrichedMessage[]): string[] => {
+    const participants = new Set<string>();
+    for (const msg of messages) {
+        const fromId = msg.from_id ?? msg.actor_id ?? msg.userId;
+        if (typeof fromId === 'string' && fromId.length > 0) {
+            // Strip 'user' prefix if present
+            const normalized = fromId.startsWith('user') ? fromId.slice(4) : fromId;
+            if (normalized.length > 0) {
+                participants.add(normalized);
+            }
+        }
+    }
+    return Array.from(participants);
+};
+
+const extractDateRange = (messages: EnrichedMessage[]): { start: string | null; end: string | null } => {
+    let minDate: string | null = null;
+    let maxDate: string | null = null;
+
+    for (const msg of messages) {
+        const dateStr = msg.date as string | undefined;
+        if (dateStr) {
+            if (!minDate || dateStr < minDate) minDate = dateStr;
+            if (!maxDate || dateStr > maxDate) maxDate = dateStr;
+        }
+    }
+
+    return { start: minDate, end: maxDate };
+};
+
+const loadZipProcess = async (file: File): Promise<void> => {
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'extracting',
+        current: 0,
+        total: 1,
+        message: 'Opening ZIP file...',
+    });
+
+    const zip = new JSZip();
+    const contents = await zip.loadAsync(file);
+
+    // Find all JSON files in the ZIP
+    const jsonFiles: string[] = [];
+    contents.forEach((relativePath, zipEntry) => {
+        if (!zipEntry.dir && relativePath.endsWith('.json')) {
+            jsonFiles.push(relativePath);
+        }
+    });
+
+    if (jsonFiles.length === 0) {
+        self.postMessage({
+            type: 'topicProgress',
+            phase: 'ready',
+            current: 0,
+            total: 0,
+            message: 'No JSON files found in ZIP',
+        });
+        return;
+    }
+
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'extracting',
+        current: 0,
+        total: jsonFiles.length,
+        message: `Found ${jsonFiles.length} JSON files, extracting...`,
+    });
+
+    const indexedChats: IndexedChat[] = [];
+    let totalMessages = 0;
+
+    for (let i = 0; i < jsonFiles.length; i++) {
+        const fileName = jsonFiles[i];
+        self.postMessage({
+            type: 'topicProgress',
+            phase: 'indexing',
+            current: i + 1,
+            total: jsonFiles.length,
+            message: `Indexing ${i + 1}/${jsonFiles.length}: ${fileName}`,
+        });
+
+        try {
+            const zipEntry = contents.file(fileName);
+            if (!zipEntry) continue;
+
+            const content = await zipEntry.async('string');
+            const data = JSON.parse(content) as unknown;
+
+            if (!isValidChatFile(data)) {
+                console.warn(`Skipping invalid chat file: ${fileName}`);
+                continue;
+            }
+
+            const participants = extractParticipants(data.messages);
+            const dateRange = data.dateRange ?? extractDateRange(data.messages);
+
+            const indexed: IndexedChat = {
+                chatId: data.chatId,
+                chatName: data.chatName,
+                chatType: data.chatType,
+                messageCount: data.messages.length,
+                dateRange,
+                participants,
+                messages: data.messages,
+            };
+
+            indexedChats.push(indexed);
+            totalMessages += data.messages.length;
+        } catch (err) {
+            console.warn(`Failed to parse ${fileName}:`, err);
+        }
+    }
+
+    const index: TopicIndex = {
+        chats: indexedChats,
+        totalMessages,
+        loadedAt: new Date().toISOString(),
+    };
+
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'ready',
+        current: jsonFiles.length,
+        total: jsonFiles.length,
+        message: `Indexed ${indexedChats.length} chats with ${totalMessages.toLocaleString()} messages`,
+    });
+
+    // Store the index globally for search
+    currentIndex = index;
+
+    self.postMessage({
+        type: 'topicIndexResult',
+        index,
+    });
+};
+
+// Extract context around a match
+const extractContext = (
+    messages: EnrichedMessage[],
+    matchIndex: number,
+    windowSize: number = 10
+): { contextMessages: EnrichedMessage[]; contextType: 'author' | 'time'; authorId?: string } => {
+    const match = messages[matchIndex];
+    const authorId = (match.from_id ?? match.actor_id ?? match.userId) as string | undefined;
+
+    // Try author-based first if we have an author ID
+    if (authorId) {
+        const authorMessages: EnrichedMessage[] = [];
+        const start = Math.max(0, matchIndex - windowSize);
+        const end = Math.min(messages.length, matchIndex + windowSize + 1);
+
+        for (let i = start; i < end; i++) {
+            const msgAuthorId = (messages[i].from_id ?? messages[i].actor_id ?? messages[i].userId) as string | undefined;
+            if (msgAuthorId === authorId) {
+                authorMessages.push(messages[i]);
+            }
+        }
+
+        // If author has enough context, use it (at least 3 messages including the match)
+        if (authorMessages.length >= 3) {
+            return { contextMessages: authorMessages, contextType: 'author', authorId };
+        }
+    }
+
+    // Fallback to time-based (±5 messages around match)
+    const timeMessages = messages.slice(
+        Math.max(0, matchIndex - 5),
+        Math.min(messages.length, matchIndex + 6)
+    );
+    return { contextMessages: timeMessages, contextType: 'time' };
+};
+
+const isWithinDateRange = (
+    msgDate: string | undefined,
+    range: { start: string | null; end: string | null } | undefined
+): boolean => {
+    if (!range || (!range.start && !range.end)) return true; // No filter
+    if (!msgDate) return true; // Include messages without dates
+
+    const date = new Date(msgDate).getTime();
+    if (range.start && date < new Date(range.start).getTime()) return false;
+    if (range.end && date > new Date(range.end).getTime()) return false;
+    return true;
+};
+
+const searchProcess = (request: SearchRequest): void => {
+    if (!currentIndex) {
+        self.postMessage({
+            type: 'topicProgress',
+            phase: 'ready',
+            current: 0,
+            total: 0,
+            message: 'No index loaded. Please load a ZIP first.',
+        });
+        return;
+    }
+
+    const { query, useSemanticExpansion, searchMode, dateRange } = request;
+
+    // Split query by comma to support multiple keywords
+    const keywords = query.split(',').map(k => k.trim()).filter(k => k.length > 0);
+
+    // Build keyword groups - each keyword expands to its own set of terms
+    // For AND mode, we need to track which terms belong to which keyword
+    const keywordGroups: { keyword: string; terms: string[]; lowerTerms: string[] }[] = [];
+    const allTerms = new Set<string>();
+
+    for (const keyword of keywords) {
+        const terms = useSemanticExpansion ? expandQuery(keyword) : [keyword];
+        const lowerTerms = terms.map(t => t.toLowerCase());
+        keywordGroups.push({ keyword, terms, lowerTerms });
+        terms.forEach(t => allTerms.add(t));
+    }
+
+    const matches: SearchMatch[] = [];
+
+    // Search all messages in all chats
+    for (const chat of currentIndex.chats) {
+        for (let i = 0; i < chat.messages.length; i++) {
+            const message = chat.messages[i];
+
+            // Skip if outside date range
+            if (!isWithinDateRange(message.date as string | undefined, dateRange)) {
+                continue;
+            }
+
+            const messageText = extractMessageText(message);
+            const lowerText = messageText.toLowerCase();
+
+            // For AND mode: track which keyword groups have at least one match
+            // For OR mode: any match counts
+            const matchedTerms: string[] = [];
+            const matchedKeywordGroups = new Set<number>();
+            let score = 0;
+
+            for (let groupIdx = 0; groupIdx < keywordGroups.length; groupIdx++) {
+                const group = keywordGroups[groupIdx];
+                for (let j = 0; j < group.terms.length; j++) {
+                    const term = group.terms[j];
+                    const lowerTerm = group.lowerTerms[j];
+
+                    if (lowerText.includes(lowerTerm)) {
+                        matchedTerms.push(term);
+                        matchedKeywordGroups.add(groupIdx);
+                        // Score based on term frequency
+                        const regex = new RegExp(lowerTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+                        const count = (lowerText.match(regex) || []).length;
+                        score += count;
+                    }
+                }
+            }
+
+            // Check if this message matches based on search mode
+            const isMatch = searchMode === 'and'
+                ? matchedKeywordGroups.size === keywordGroups.length // ALL keyword groups must match
+                : matchedTerms.length > 0; // ANY term matches
+
+            if (isMatch) {
+                matches.push({
+                    chatId: chat.chatId,
+                    chatName: chat.chatName,
+                    messageIndex: i,
+                    message,
+                    matchedTerms: [...new Set(matchedTerms)], // dedupe
+                    score,
+                });
+            }
+        }
+    }
+
+    // Sort matches by score (highest first)
+    matches.sort((a, b) => b.score - a.score);
+
+    // Extract context for each match
+    const results: ContextWindow[] = [];
+    for (const match of matches) {
+        // Find the chat to get all messages
+        const chat = currentIndex.chats.find(c => c.chatId === match.chatId);
+        if (!chat) continue;
+
+        const context = extractContext(chat.messages, match.messageIndex);
+        results.push({
+            match,
+            contextMessages: context.contextMessages,
+            contextType: context.contextType,
+            authorId: context.authorId,
+        });
+    }
+
+    const result: SearchResultWithContext = {
+        type: 'searchResultWithContext',
+        query,
+        expandedTerms: Array.from(allTerms),
+        results,
+        totalMatches: matches.length,
+    };
+
+    self.postMessage(result);
+};
+
+// Extract text from message (handles both string and array formats)
+const extractMessageText = (message: EnrichedMessage): string => {
+    const text = message.text;
+    if (typeof text === 'string') {
+        return text;
+    }
+    if (Array.isArray(text)) {
+        return text
+            .map(item => (typeof item === 'string' ? item : (item as { text?: string }).text || ''))
+            .join(' ');
+    }
+    return '';
+};
+
+// Convert time window to milliseconds
+const timeWindowToMs = (value: number, unit: ExportContextSettings['timeUnit']): number => {
+    const msPerHour = 60 * 60 * 1000;
+    switch (unit) {
+        case 'hours': return value * msPerHour;
+        case 'days': return value * 24 * msPerHour;
+        case 'weeks': return value * 7 * 24 * msPerHour;
+    }
+};
+
+// Extract export context: up to N messages within time window on each side
+const extractExportContext = (
+    messages: EnrichedMessage[],
+    matchIndex: number,
+    settings: ExportContextSettings
+): EnrichedMessage[] => {
+    const matchMessage = messages[matchIndex];
+    const matchDateStr = matchMessage.date as string | undefined;
+
+    // If no date on match, just use message count limit
+    const matchTime = matchDateStr ? new Date(matchDateStr).getTime() : null;
+    const timeWindowMs = timeWindowToMs(settings.timeWindow, settings.timeUnit);
+
+    const result: EnrichedMessage[] = [];
+
+    // Collect messages BEFORE the match (walking backward)
+    const beforeMessages: EnrichedMessage[] = [];
+    for (let i = matchIndex - 1; i >= 0 && beforeMessages.length < settings.messageCount; i--) {
+        const msg = messages[i];
+        const msgDateStr = msg.date as string | undefined;
+
+        // Check time constraint if both messages have dates
+        if (matchTime && msgDateStr) {
+            const msgTime = new Date(msgDateStr).getTime();
+            if (matchTime - msgTime > timeWindowMs) break; // Outside time window, stop
+        }
+
+        beforeMessages.unshift(msg); // Add to front to maintain order
+    }
+
+    // Add before messages, then match, then after messages
+    result.push(...beforeMessages);
+    result.push(matchMessage);
+
+    // Collect messages AFTER the match (walking forward)
+    for (let i = matchIndex + 1; i < messages.length && result.length - beforeMessages.length - 1 < settings.messageCount; i++) {
+        const msg = messages[i];
+        const msgDateStr = msg.date as string | undefined;
+
+        // Check time constraint if both messages have dates
+        if (matchTime && msgDateStr) {
+            const msgTime = new Date(msgDateStr).getTime();
+            if (msgTime - matchTime > timeWindowMs) break; // Outside time window, stop
+        }
+
+        result.push(msg);
+    }
+
+    return result;
+};
+
+// Process export with context request
+const exportWithContextProcess = (request: ExportContextRequest): void => {
+    if (!currentIndex) {
+        self.postMessage({
+            type: 'topicProgress',
+            phase: 'ready',
+            current: 0,
+            total: 0,
+            message: 'No index loaded. Please load a ZIP first.',
+        });
+        return;
+    }
+
+    const { matches, settings } = request;
+
+    // Group matches by chatId and track unique message indices per chat
+    const chatMatchMap = new Map<string, Set<number>>();
+    for (const match of matches) {
+        if (!chatMatchMap.has(match.chatId)) {
+            chatMatchMap.set(match.chatId, new Set());
+        }
+        chatMatchMap.get(match.chatId)!.add(match.messageIndex);
+    }
+
+    const chatGroups: ExportChatGroup[] = [];
+
+    // Process each chat
+    for (const [chatId, matchIndices] of chatMatchMap) {
+        const chat = currentIndex.chats.find(c => c.chatId === chatId);
+        if (!chat) continue;
+
+        // Collect all messages with context for this chat
+        const allMessagesInChat = new Set<number>();
+
+        for (const matchIndex of matchIndices) {
+            // Extract context for this match
+            const contextMessages = extractExportContext(chat.messages, matchIndex, settings);
+
+            // Find indices of context messages in the original array
+            for (const contextMsg of contextMessages) {
+                const idx = chat.messages.indexOf(contextMsg);
+                if (idx >= 0) {
+                    allMessagesInChat.add(idx);
+                }
+            }
+        }
+
+        // Sort indices and get messages in order
+        const sortedIndices = Array.from(allMessagesInChat).sort((a, b) => a - b);
+        const messagesForExport = sortedIndices.map(idx => chat.messages[idx]);
+
+        chatGroups.push({
+            chatId: chat.chatId,
+            chatName: chat.chatName,
+            messages: messagesForExport,
+        });
+    }
+
+    const result: ExportContextResult = {
+        type: 'exportContextResult',
+        chats: chatGroups,
+    };
+
+    self.postMessage(result);
+};
+
+self.onerror = (event: ErrorEvent) => {
+    self.postMessage({
+        type: 'topicProgress',
+        phase: 'ready',
+        current: 0,
+        total: 0,
+        message: `Worker error: ${event.message}`,
+    });
+};
+
+self.onmessage = (event: MessageEvent<Request>) => {
+    const payload = event.data;
+    if (payload.type === 'loadZip') {
+        loadZipProcess(payload.file).catch((error: Error) => {
+            self.postMessage({
+                type: 'topicProgress',
+                phase: 'ready',
+                current: 0,
+                total: 0,
+                message: `Error: ${error.message}`,
+            });
+        });
+    } else if (payload.type === 'search') {
+        searchProcess(payload);
+    } else if (payload.type === 'exportWithContext') {
+        exportWithContextProcess(payload);
+    }
+};
+
+self.postMessage({ type: 'topicWorkerReady' });

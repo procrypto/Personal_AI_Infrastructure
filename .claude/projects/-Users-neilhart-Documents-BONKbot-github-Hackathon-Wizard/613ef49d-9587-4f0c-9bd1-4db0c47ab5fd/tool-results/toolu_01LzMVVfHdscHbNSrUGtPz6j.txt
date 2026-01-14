@@ -1,0 +1,204 @@
+     1→import Emittery from "emittery";
+     2→import { Healthcheck } from "@/websocket/healthcheck/Healthcheck";
+     3→import { GlobalStore } from "@/store/memoryStore/types";
+     4→import { StoreApi } from "zustand";
+     5→import { PersistentGlobalStore } from "@/store/persistentStore/types";
+     6→import { refreshAuthToken } from "@/api/auth/refreshAuthToken";
+     7→import { KEEP_ALIVE_INTERVAL } from "@/websocket/healthcheck/constants";
+     8→import { isDataTokenExpired, getDataAccessToken } from "@/utils/auth-tokens";
+     9→
+    10→/**
+    11→ * The interval at which we send pings to the server to keep the connection
+    12→ * alive.
+    13→ */
+    14→
+    15→// Map of event names to their event data
+    16→type EventMap = {
+    17→  connected: undefined;
+    18→  disconnected: CloseEvent;
+    19→};
+    20→
+    21→// Pong message type for base websockets
+    22→type BaseWebsocketPong = { pong: null; timestamp: number };
+    23→
+    24→/**
+    25→ * Base websocket class that provides connection management and healthcheck
+    26→ * functionality. This is similar to NatsWebsocket but without topic support.
+    27→ */
+    28→export abstract class BaseWebsocket {
+    29→  ws: WebSocket | undefined;
+    30→  store: StoreApi<GlobalStore>;
+    31→  persistentStore: StoreApi<PersistentGlobalStore>;
+    32→  healthcheck: Healthcheck<BaseWebsocketPong> | undefined;
+    33→  url: string;
+    34→  on: Emittery<EventMap>["on"];
+    35→  off: Emittery<EventMap>["off"];
+    36→
+    37→  private keepAliveInterval: number;
+    38→  private emitter: Emittery<EventMap>;
+    39→  private readyPromise: Promise<void> | null = null;
+    40→
+    41→  constructor({
+    42→    store,
+    43→    url,
+    44→    persistentStore,
+    45→    keepAliveInterval = KEEP_ALIVE_INTERVAL,
+    46→  }: {
+    47→    url: string;
+    48→    keepAliveInterval?: number;
+    49→    store: StoreApi<GlobalStore>;
+    50→    persistentStore: StoreApi<PersistentGlobalStore>;
+    51→  }) {
+    52→    this.url = url;
+    53→    this.store = store;
+    54→    this.persistentStore = persistentStore;
+    55→    this.keepAliveInterval = keepAliveInterval;
+    56→    this.emitter = new Emittery<EventMap>();
+    57→    this.on = this.emitter.on.bind(this.emitter);
+    58→    this.off = this.emitter.off.bind(this.emitter);
+    59→  }
+    60→
+    61→  ready(): Promise<void> {
+    62→    // If already connected, return resolved promise
+    63→    if (this.ws?.readyState === WebSocket.OPEN) {
+    64→      return Promise.resolve();
+    65→    }
+    66→
+    67→    // If we already have a pending ready promise, return it
+    68→    if (this.readyPromise) {
+    69→      return this.readyPromise;
+    70→    }
+    71→
+    72→    // Create a new promise that resolves once the connection is open
+    73→    this.readyPromise = new Promise(resolve => {
+    74→      // Resolve once connected, then remove the listener
+    75→      const off = this.on("connected", () => {
+    76→        off();
+    77→        resolve();
+    78→      });
+    79→    });
+    80→
+    81→    return this.readyPromise;
+    82→  }
+    83→
+    84→  /**
+    85→   * Disconnect from the websocket server.
+    86→   */
+    87→  disconnect() {
+    88→    if (this.ws?.readyState === WebSocket.CLOSING) {
+    89→      return;
+    90→    }
+    91→
+    92→    this.teardownConnectHandlers();
+    93→
+    94→    this.readyPromise = null;
+    95→
+    96→    // Close the websocket if it exists and isn't already closed
+    97→    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+    98→      this.ws.close();
+    99→    }
+   100→
+   101→    // for proper cleanup
+   102→    this.ws = undefined;
+   103→  }
+   104→
+   105→  protected setupConnectHandlers() {
+   106→    this.ws?.addEventListener("open", this.startHealthcheck);
+   107→    this.ws?.addEventListener("close", this.handleConnectionClosed);
+   108→  }
+   109→
+   110→  private teardownConnectHandlers() {
+   111→    this.ws?.removeEventListener("open", this.startHealthcheck);
+   112→    this.ws?.removeEventListener("close", this.handleConnectionClosed);
+   113→  }
+   114→
+   115→  private handleConnectionClosed = (e: CloseEvent) => {
+   116→    this.emitter.emit("disconnected", e);
+   117→  };
+   118→
+   119→  private startHealthcheck = () => {
+   120→    if (!this.ws) return;
+   121→
+   122→    this.emitter.emit("connected");
+   123→
+   124→    const healthcheck = new BaseWebsocketHealthcheck({
+   125→      ws: this.ws,
+   126→      keepAliveInterval: this.keepAliveInterval,
+   127→    });
+   128→
+   129→    this.healthcheck = healthcheck;
+   130→
+   131→    this.healthcheck.on("healthcheck-failed", () => {
+   132→      this.store.getState().connectionManager.setConnectionUnstable(true);
+   133→    });
+   134→
+   135→    this.healthcheck.on("stabilized", () => {
+   136→      this.store.getState().connectionManager.setConnectionUnstable(false);
+   137→      this.store.getState().connectionManager.setHideWarningByUser(false);
+   138→    });
+   139→
+   140→    this.healthcheck.start();
+   141→  };
+   142→
+   143→  protected async ensureValidDataToken(): Promise<string> {
+   144→    // If token is expired or expires soon, refresh it
+   145→    if (isDataTokenExpired()) {
+   146→      console.log(
+   147→        `[${new Date().toISOString()}] WS DEBUG: dataToken expired or expiring soon, refreshing before connect`
+   148→      );
+   149→
+   150→      try {
+   151→        await refreshAuthToken();
+   152→        console.log(
+   153→          `[${new Date().toISOString()}] WS DEBUG: dataToken refreshed successfully before websocket connect`
+   154→        );
+   155→      } catch (error) {
+   156→        console.error(
+   157→          "Failed to refresh dataToken before websocket connect:",
+   158→          error
+   159→        );
+   160→        // Continue with existing token - the connection will fail and get handled elsewhere
+   161→      }
+   162→    }
+   163→
+   164→    const token = getDataAccessToken();
+   165→    if (!token) {
+   166→      throw new Error("No data access token available");
+   167→    }
+   168→
+   169→    return token;
+   170→  }
+   171→
+   172→  abstract connect(...args: unknown[]): void;
+   173→}
+   174→
+   175→/**
+   176→ * Healthcheck implementation for base websockets
+   177→ */
+   178→class BaseWebsocketHealthcheck extends Healthcheck<BaseWebsocketPong> {
+   179→  isPong(msg: unknown): msg is BaseWebsocketPong {
+   180→    if (
+   181→      typeof msg === "object" &&
+   182→      msg !== null &&
+   183→      "pong" in msg &&
+   184→      "timestamp" in msg
+   185→    ) {
+   186→      return true;
+   187→    }
+   188→    return false;
+   189→  }
+   190→
+   191→  isPongHealthy(_pong: BaseWebsocketPong): boolean {
+   192→    // TODO: Implement once we have an `is_healthy` field
+   193→    return true;
+   194→  }
+   195→
+   196→  getPingMessage() {
+   197→    return JSON.stringify({ action: "ping" });
+   198→  }
+   199→}
+   200→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

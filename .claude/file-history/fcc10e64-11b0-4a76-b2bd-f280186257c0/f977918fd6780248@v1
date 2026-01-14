@@ -1,0 +1,216 @@
+/**
+ * AutopilotWebsocket
+ *
+ * WebSocket client for the token-analysis-autopilot backend.
+ * Connects to local autopilot service (no auth token needed).
+ *
+ * Extends BaseWebsocket for connection management and healthcheck.
+ */
+
+import { BaseWebsocket } from "@/websocket/base/BaseWebsocket";
+import type { TokenMarketData } from "@/store/memoryStore/slices/websocket-messages-store/types";
+
+// Command types that can be sent to autopilot backend
+export type AutopilotCommand =
+  | { command: "toggle_sources"; enabled: boolean }
+  | { command: "toggle_trending"; enabled: boolean }
+  | { command: "toggle_whales"; enabled: boolean }
+  | { command: "toggle_filter"; enabled: boolean }
+  | { command: "set_mode"; mode: "paper" | "live" }
+  | { command: "set_position_size"; sizeSol: number }
+  | { command: "refresh_sources" }
+  | { command: "get_config" }
+  | { command: "get_strategies" }
+  | { command: "toggle_strategy"; strategyId: string; enabled: boolean }
+  | { command: "close_all_positions" }
+  | { command: "close_position"; mint: string };
+
+// Data feed types for v2.0 architecture (frontend -> CLI)
+// Frontend forwards NATS market data to CLI backend
+// Protocol matches backend engineer spec (uses 'type' field, not 'feed')
+
+// OHLCV candle data format expected by backend
+export type OHLCVCandle = {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timestamp: number;
+};
+
+// Trade data format expected by backend
+export type TradeData = {
+  mint: string;
+  side: "buy" | "sell";
+  price: number;
+  amount: number;
+  timestamp: number;
+};
+
+// CVD data format matching backend spec exactly
+export type CVDData = {
+  mint: string;
+  timestamp: number;
+  cvd: number; // Current cumulative volume delta
+  cvdChange: number; // Change over period
+  buyVolume: number; // Buy volume in period
+  sellVolume: number; // Sell volume in period
+  netDelta: number; // buyVolume - sellVolume for period
+  periodMs: number; // Period length (e.g., 60000 for 1m)
+};
+
+// Feed types using 'type' field per backend protocol
+export type MarketDataFeed = {
+  type: "market_data_feed";
+  data: TokenMarketData;
+};
+
+export type OhlcvFeed = {
+  type: "ohlcv_update";
+  mint: string;
+  ohlcv: OHLCVCandle[];
+};
+
+export type TradeFeed = {
+  type: "trade_feed";
+  trade: TradeData;
+};
+
+export type CvdFeed = {
+  type: "cvd_update";
+  data: CVDData;
+};
+
+// Trending token data for autopilot source tracking
+export type TrendingFeedItem = {
+  mint: string;
+  symbol: string;
+  name: string;
+  rank: number;
+  volume_usd: number;
+};
+
+export type TrendingFeed = {
+  type: "trending_feed";
+  tokens: TrendingFeedItem[];
+  resolution: "5m" | "1h" | "6h" | "24h";
+};
+
+// Whale moves data for autopilot source tracking
+export type WhaleMoveFeedItem = {
+  mint: string;
+  symbol: string;
+  whale_count: number;
+  volume_usd: number;
+};
+
+export type WhaleFeed = {
+  type: "whale_feed";
+  tokens: WhaleMoveFeedItem[];
+};
+
+export type AutopilotFeed =
+  | MarketDataFeed
+  | OhlcvFeed
+  | TradeFeed
+  | CvdFeed
+  | TrendingFeed
+  | WhaleFeed;
+
+export class AutopilotWebsocket extends BaseWebsocket {
+  private hasMessageListener = false;
+  private removeListener: (() => void) | null = null;
+
+  /**
+   * Check if WebSocket is connected and ready to send.
+   */
+  get isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Connect to autopilot backend.
+   * No auth token needed - this is a local service.
+   */
+  async connect() {
+    // If already connected, skip
+    if (
+      this.ws?.readyState === WebSocket.OPEN ||
+      this.ws?.readyState === WebSocket.CONNECTING
+    ) {
+      return;
+    }
+
+    // No auth token needed for local autopilot backend
+    const ws = new WebSocket(this.url);
+    this.ws = ws;
+    this.setupConnectHandlers();
+  }
+
+  /**
+   * Send a command to the autopilot backend.
+   */
+  sendCommand(command: AutopilotCommand) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(command));
+    } else {
+      console.warn("[Autopilot] Cannot send command - not connected");
+    }
+  }
+
+  /**
+   * Send a data feed to the autopilot backend.
+   * Used for v2.0 architecture where frontend forwards NATS data to CLI.
+   */
+  sendFeed(feed: AutopilotFeed) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(feed));
+    } else {
+      console.warn("[Autopilot] Cannot send feed - not connected");
+    }
+  }
+
+  /**
+   * Subscribe to data from the autopilot websocket.
+   * Returns a cleanup function to remove the listener.
+   */
+  subscribeToData(onMessage: (data: unknown) => void) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket must be connected before subscribing to data");
+    }
+
+    // Ensure only one message handler is attached at a time
+    if (this.hasMessageListener && this.removeListener) {
+      this.removeListener();
+      this.hasMessageListener = false;
+      this.removeListener = null;
+    }
+
+    const messageHandler = (event: MessageEvent) => {
+      const data = event.data;
+      if (typeof data !== "string") return;
+      if (data.length === 0 || data.charCodeAt(0) !== 123) return; // '{'
+
+      // Skip pong messages from healthcheck
+      if (data.indexOf('"pong"') !== -1) return;
+
+      try {
+        const parsed = JSON.parse(data);
+        onMessage(parsed);
+        // Any data message is also a pong
+        this.healthcheck?.resetPongs();
+      } catch (e) {
+        console.error("[Autopilot] Error parsing websocket message:", e, data);
+      }
+    };
+
+    this.ws.addEventListener("message", messageHandler);
+    this.hasMessageListener = true;
+    this.removeListener = () => {
+      this.ws?.removeEventListener("message", messageHandler);
+    };
+
+    return this.removeListener;
+  }
+}

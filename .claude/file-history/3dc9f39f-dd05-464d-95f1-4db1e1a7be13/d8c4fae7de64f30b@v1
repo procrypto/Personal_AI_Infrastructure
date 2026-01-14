@@ -1,0 +1,144 @@
+---
+phase: 03-ci-cd-pipeline
+plan: 01
+subsystem: infra
+tags: [github-actions, cloud-run, wif, artifact-registry, ci-cd]
+
+# Dependency graph
+requires:
+  - phase: 02-containerization
+    provides: Multi-stage Dockerfile for Cloud Run deployment
+provides:
+  - GitHub Actions workflow for beta deployments
+  - WIF authentication pattern (no service account keys)
+  - Artifact Registry build and push
+  - Cloud Run deployment with env vars and secrets
+affects: [03-02-prod-deploy, 04-cloud-run-deployment]
+
+# Tech tracking
+tech-stack:
+  added: [github-actions, google-github-actions/auth@v2, google-github-actions/deploy-cloudrun@v2]
+  patterns: [workload-identity-federation, secret-manager-injection, commit-sha-tagging]
+
+key-files:
+  created: [.github/workflows/deploy.yml]
+  modified: []
+
+key-decisions:
+  - "Use WIF over service account keys (more secure, no key rotation needed)"
+  - "Tag images with commit SHA for traceability"
+  - "Reference secrets from Secret Manager in Cloud Run (not GitHub Secrets)"
+
+patterns-established:
+  - "WIF auth: google-github-actions/auth@v2 with id-token: write permission"
+  - "Cloud Run deploy: google-github-actions/deploy-cloudrun@v2 with env_vars and secrets"
+
+issues-created: []
+
+# Metrics
+duration: 4min
+completed: 2026-01-13
+
+# Debugging
+debugging:
+  sessions: 0
+  time-spent: 0min
+  patterns: []
+---
+
+# Phase 3 Plan 1: Beta Deployment Workflow Summary
+
+**GitHub Actions workflow with WIF auth, Artifact Registry push, and Cloud Run deployment for beta environment on main branch push**
+
+## Performance
+
+- **Duration:** 4 min
+- **Started:** 2026-01-13T18:48:18Z
+- **Completed:** 2026-01-13T18:52:10Z
+- **Tasks:** 2
+- **Files modified:** 1
+
+## Accomplishments
+
+- Created GitHub Actions workflow for automated beta deployments
+- Configured Workload Identity Federation auth (no service account keys)
+- Set up Artifact Registry build/push with commit SHA tagging
+- Configured Cloud Run deployment with APP_ENV=beta and Secret Manager secrets
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Create workflows directory and beta deploy.yml** - `0c78f2b` (feat)
+2. **Task 2: Validate workflow syntax** - No commit (validation only)
+
+**Plan metadata:** (this commit)
+
+## Files Created/Modified
+
+- `.github/workflows/deploy.yml` - Beta deployment workflow with WIF auth, AR push, Cloud Run deploy
+
+## Decisions Made
+
+- **WIF over service account keys:** More secure, no key rotation, follows GCP best practices
+- **Commit SHA tagging:** Images tagged with `${{ github.sha }}` for traceability to source commit
+- **Secret Manager for secrets:** CLICKHOUSE_* vars injected from Secret Manager at runtime (not GitHub Secrets)
+- **Latest tag included:** Also pushes `:latest` tag for convenience
+
+## Configuration Required
+
+Before first deployment, user must:
+
+1. **Set up Workload Identity Federation:**
+   - Create WIF pool and provider in GCP
+   - Update `workload_identity_provider` with actual value
+   - Format: `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID`
+
+2. **Create service account:**
+   - Create `github-actions@bonkbotbeta.iam.gserviceaccount.com`
+   - Grant roles: Cloud Run Admin, Artifact Registry Writer, Service Account User
+   - Configure WIF to allow impersonation from GitHub repo
+
+3. **Create Artifact Registry repository:**
+   - Create `trenchbench-api` repository in `us-central1`
+   - Type: Docker
+
+4. **Create secrets in Secret Manager:**
+   - `CLICKHOUSE_KEY_ID`
+   - `CLICKHOUSE_KEY_SECRET`
+   - `CLICKHOUSE_SERVICE_ID`
+   - Grant Cloud Run service account access to secrets
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Debugging Sessions
+
+None - all verifications passed on first attempt.
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions
+
+**Notes:** Workflow creates complete beta deployment pipeline. User configuration required for WIF and secrets before first deployment.
+
+## Next Phase Readiness
+
+- Beta deployment workflow complete
+- Pattern established for production workflow (03-02)
+- Next: 03-02-PLAN.md (Production deployment workflow)
+
+---
+*Phase: 03-ci-cd-pipeline*
+*Completed: 2026-01-13*

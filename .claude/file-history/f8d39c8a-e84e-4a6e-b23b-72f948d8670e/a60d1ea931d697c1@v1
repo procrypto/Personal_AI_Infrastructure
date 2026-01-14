@@ -1,0 +1,302 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { useMemo, useState, useCallback } from "react";
+import {
+  createColumnHelper,
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  flexRender,
+  type SortingState,
+  type Row,
+} from "@tanstack/react-table";
+import { useNavigate } from "@tanstack/react-router";
+import { cn } from "@/lib/utils";
+import { TokenImage } from "@/components/token-image";
+import { getBonkbotImageUrl } from "@/utils/asset-mappers";
+import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+import { WatchlistToggle } from "@/components/watchlist-toggle/watchlist-toggle";
+import { TableSort } from "@/components/table/table-sort";
+import type { ScreenerTokenData } from "@/hooks/useAutopilot/types";
+import type { SignalStrength } from "@/hooks/useAutopilot";
+import { HideTokenButton } from "./hide-token-button";
+
+// Map confluence count to background opacity (using brand palette)
+function getSignalOpacity(
+  confluenceCount: number,
+  isFlashing: boolean
+): number {
+  if (isFlashing) return 0.7;
+  if (confluenceCount >= 6) return 0.5;
+  if (confluenceCount === 5) return 0.4;
+  if (confluenceCount === 4) return 0.35;
+  if (confluenceCount === 3) return 0.3;
+  if (confluenceCount === 2) return 0.2;
+  if (confluenceCount === 1) return 0.1;
+  return 0;
+}
+
+// Get signal background style based on confluence
+function getSignalStyle(signalStrength?: SignalStrength): React.CSSProperties | undefined {
+  if (!signalStrength || signalStrength.type === "none") {
+    return undefined;
+  }
+
+  const opacity = getSignalOpacity(signalStrength.confluenceCount, false);
+
+  if (signalStrength.type === "buy") {
+    return { backgroundColor: `rgba(180, 229, 89, ${opacity})` };
+  } else {
+    return { backgroundColor: `rgba(239, 68, 68, ${opacity})` };
+  }
+}
+
+// Calculate 1h price change from market_data
+function calculate1hChange(token: ScreenerTokenData): number {
+  const currentPrice = Number(token.market_data?.price_usd || 0);
+  const earliestPrice = Number(
+    token.market_data?.trading_stats_1h?.earliest_price_usd || currentPrice
+  );
+
+  if (earliestPrice === 0) return 0;
+  return ((currentPrice - earliestPrice) / earliestPrice) * 100;
+}
+
+const columnHelper = createColumnHelper<ScreenerTokenData>();
+
+type ScreenerTableProps = {
+  tokens: ScreenerTokenData[];
+  columnType: "watchlist" | "trending" | "whales";
+  signalStrengthMap: Map<string, SignalStrength>;
+  title: string;
+  icon: React.ElementType;
+  iconColor: string;
+};
+
+export const ScreenerTable = ({
+  tokens,
+  columnType,
+  signalStrengthMap,
+  title,
+  icon: Icon,
+  iconColor,
+}: ScreenerTableProps) => {
+  const navigate = useNavigate();
+  const [sorting, setSorting] = useState<SortingState>([]);
+
+  // Navigate to trading page on row click
+  const handleRowClick = useCallback(
+    (row: Row<ScreenerTokenData>) => {
+      navigate({ to: "/trading/$mint", params: { mint: row.original.mint } });
+    },
+    [navigate]
+  );
+
+  // Define columns
+  const columns = useMemo(
+    () => [
+      // Token column
+      columnHelper.accessor((row) => row.symbol, {
+        id: "symbol",
+        header: "Token",
+        cell: ({ row }) => {
+          const token = row.original;
+          const { imgSrc, isCrossOrigin } = getBonkbotImageUrl(token.mint);
+
+          return (
+            <div className="flex items-center gap-1.5 overflow-hidden">
+              <TokenImage
+                symbol={token.symbol}
+                imgSrc={token.image || imgSrc}
+                isCrossOrigin={isCrossOrigin}
+                alt=""
+                className="size-3.5 min-w-3.5 rounded"
+              />
+              <span className="text-text-primary truncate text-xs font-medium">
+                ${token.symbol}
+              </span>
+            </div>
+          );
+        },
+        size: 100,
+        enableSorting: true,
+      }),
+      // MCap column
+      columnHelper.accessor(
+        (row) => Number(row.market_data?.market_cap_usd || 0),
+        {
+          id: "mcap",
+          header: "MCap",
+          cell: ({ getValue }) => (
+            <FormattedNumber preset="usd" value={getValue()} />
+          ),
+          size: 70,
+          enableSorting: true,
+        }
+      ),
+      // 1h % column
+      columnHelper.accessor((row) => calculate1hChange(row), {
+        id: "change1h",
+        header: "1h %",
+        cell: ({ getValue }) => (
+          <FormattedNumber
+            value={getValue()}
+            showPositiveSign
+            preset="percentage"
+            showColor
+          />
+        ),
+        size: 60,
+        enableSorting: true,
+      }),
+      // Action column
+      columnHelper.display({
+        id: "action",
+        header: "",
+        cell: ({ row }) => {
+          const token = row.original;
+
+          if (columnType === "watchlist") {
+            return (
+              <WatchlistToggle
+                mint={token.mint}
+                ticker={token.symbol}
+                disableTooltip
+              />
+            );
+          }
+
+          return (
+            <HideTokenButton mint={token.mint} symbol={token.symbol} />
+          );
+        },
+        size: 32,
+        enableSorting: false,
+      }),
+    ],
+    [columnType]
+  );
+
+  const table = useReactTable({
+    data: tokens,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getRowId: (row) => row.mint,
+  });
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Column header with icon and count */}
+      <div className="text-text-secondary mb-1.5 flex items-center gap-1.5 text-[10px] font-medium">
+        <Icon className={cn("h-3 w-3", iconColor)} />
+        {title} ({tokens.length})
+      </div>
+
+      {tokens.length === 0 ? (
+        <div className="text-text-tertiary border-border-primary/30 rounded border border-dashed p-2 text-center text-[10px]">
+          No tokens
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full">
+            {/* Table header */}
+            <thead className="sticky top-0 z-10">
+              {table.getHeaderGroups().map((headerGroup) => (
+                <tr
+                  key={headerGroup.id}
+                  className="bg-bg-secondary border-border-primary/30 border-b"
+                >
+                  {headerGroup.headers.map((header) => {
+                    const canSort = header.column.getCanSort();
+                    const sortDirection = header.column.getIsSorted();
+
+                    return (
+                      <th
+                        key={header.id}
+                        className={cn(
+                          "text-text-tertiary px-1.5 py-1 text-left text-[9px] font-medium",
+                          canSort && "cursor-pointer select-none"
+                        )}
+                        style={{ width: header.getSize() }}
+                        onClick={
+                          canSort
+                            ? header.column.getToggleSortingHandler()
+                            : undefined
+                        }
+                      >
+                        <div className="flex items-center gap-0.5">
+                          {flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                          {canSort && (
+                            <TableSort
+                              sortDirection={sortDirection}
+                              className="size-2.5"
+                            />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              ))}
+            </thead>
+
+            {/* Table body */}
+            <tbody>
+              {table.getRowModel().rows.map((row, index) => {
+                const signalStrength = signalStrengthMap.get(row.original.mint);
+                const hasSignal =
+                  signalStrength && signalStrength.type !== "none";
+                const signalStyle = getSignalStyle(signalStrength);
+
+                return (
+                  <tr
+                    key={row.id}
+                    onClick={() => handleRowClick(row)}
+                    className={cn(
+                      "cursor-pointer transition-colors",
+                      "hover:bg-bg-quartiary",
+                      // Alternating greys when no signal
+                      !hasSignal &&
+                        (index % 2 === 0
+                          ? "bg-bg-tertiary"
+                          : "bg-bg-primary-hover")
+                    )}
+                    style={hasSignal ? signalStyle : undefined}
+                  >
+                    {row.getVisibleCells().map((cell, cellIndex) => (
+                      <td
+                        key={cell.id}
+                        className={cn(
+                          "px-1.5 py-1 text-xs",
+                          // Curved cells - rounded on first/last
+                          cellIndex === 0 && "rounded-l",
+                          cellIndex === row.getVisibleCells().length - 1 &&
+                            "rounded-r",
+                          // Inherit background for signal styling
+                          "bg-inherit"
+                        )}
+                        style={{ width: cell.column.getSize() }}
+                      >
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ScreenerTable;

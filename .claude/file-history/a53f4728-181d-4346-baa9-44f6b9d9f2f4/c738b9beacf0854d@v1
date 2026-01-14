@@ -1,0 +1,109 @@
+---
+phase: 02-dual-path-engine
+plan: 01
+type: execute
+---
+
+<objective>
+Create SignalProcessor class with pre-computed metrics path for simple rules.
+
+Purpose: Enable fast, synchronous signal generation from incoming market data without API calls.
+Output: SignalProcessor class that evaluates simple rules (price_change, volume_spike, buy_sell_ratio, trader_count) against TokenMarketData.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/01-data-reception/01-01-SUMMARY.md
+@.planning/phases/01-data-reception/01-02-SUMMARY.md
+
+# Key source files:
+@src/rules/engine.ts
+@src/rules/types.ts
+@src/rules/price-change.ts
+@src/websocket-server.ts
+@src/data/validator.ts
+@src/data/normalizer.ts
+
+**Tech stack available:** TypeScript, vitest, ws
+**Established patterns:**
+- Rule interface with `analyze(context): Signal | null`
+- ValidationResult pattern for error reporting
+- Normalizers with Partial<T> → T
+- Sync-only for sub-100ms latency
+- Lowercase mint for consistent keying
+
+**Constraining decisions:**
+- Phase 1: Data flows via WebSocket, stored in Maps (marketData, ohlcvData)
+- Phase 1: Getter methods return undefined for missing data
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create SignalProcessor class</name>
+  <files>src/signal/processor.ts</files>
+  <action>
+Create SignalProcessor class that:
+1. Accepts RuleEngine instance in constructor
+2. Has `processMarketData(data: TokenMarketData): Signal[]` method
+3. Validates incoming data using validateTokenMarketData
+4. Normalizes data using normalizeTokenMarketData
+5. Calls engine.analyzeWithMarketData(normalizedData) for signal generation
+6. Returns array of signals (empty if validation fails or no signals)
+
+Keep it simple - this is the fast path. No async, no API calls.
+Export from src/signal/index.ts barrel file.
+  </action>
+  <verify>TypeScript compiles without errors: `npx tsc --noEmit`</verify>
+  <done>SignalProcessor class exists with processMarketData method, exports from index.ts</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add simple rule filtering</name>
+  <files>src/signal/processor.ts, src/rules/types.ts</files>
+  <action>
+Add rule filtering to only run simple rules (those that don't need OHLCV):
+
+1. Add `requiresOHLCV?: boolean` field to RuleConfig interface in types.ts
+2. Update SignalProcessor to filter rules before running:
+   - Get rules from engine via getRules()
+   - Filter to only rules where config.requiresOHLCV !== true
+   - Run only these filtered rules against market data
+3. Mark RotationsRuleConfig with requiresOHLCV: true in types.ts
+
+This ensures processMarketData only runs rules that can evaluate with TokenMarketData alone.
+  </action>
+  <verify>TypeScript compiles: `npx tsc --noEmit` and `npm test` passes</verify>
+  <done>SignalProcessor filters to simple rules, RotationsRuleConfig marked as requiring OHLCV</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` succeeds
+- [ ] `npm test` passes (existing tests still work)
+- [ ] src/signal/processor.ts exists with SignalProcessor class
+- [ ] src/signal/index.ts exports SignalProcessor
+- [ ] RuleConfig has requiresOHLCV field
+</verification>
+
+<success_criteria>
+- SignalProcessor class created with processMarketData method
+- Simple rules filtered from complex rules
+- All existing tests pass
+- TypeScript compiles without errors
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-dual-path-engine/02-01-SUMMARY.md`
+</output>

@@ -1,0 +1,97 @@
+/**
+ * Price Change Rule
+ *
+ * Triggers when price changes by a threshold percentage within a timeframe.
+ * Uses market data earliest_price_sol_* fields for accurate % change calculation.
+ */
+
+import type { Rule, PriceChangeRuleConfig, Signal, AnalysisContext } from './types.js';
+
+export class PriceChangeRule implements Rule<PriceChangeRuleConfig> {
+  constructor(public config: PriceChangeRuleConfig) {}
+
+  analyze(context: AnalysisContext): Signal | null {
+    if (!this.config.enabled) return null;
+
+    const { token } = context;
+    const { timeframe, threshold, direction } = this.config;
+
+    // Get current and earliest price for the timeframe
+    const currentPrice = token.price_sol;
+    const earliestPriceKey = `earliest_price_sol_${timeframe}` as keyof typeof token;
+    const earliestPrice = token[earliestPriceKey] as number | undefined;
+
+    if (!earliestPrice || earliestPrice === 0) {
+      return null; // Not enough data
+    }
+
+    // Calculate percentage change
+    const percentChange = ((currentPrice - earliestPrice) / earliestPrice) * 100;
+    const absChange = Math.abs(percentChange);
+
+    // Check if threshold is met
+    if (absChange < threshold) {
+      return null; // Below threshold
+    }
+
+    // Check direction
+    const isUp = percentChange > 0;
+    const isDown = percentChange < 0;
+
+    if (direction === 'up' && !isUp) return null;
+    if (direction === 'down' && !isDown) return null;
+
+    // Signal strength based on how much it exceeds threshold
+    const strength = Math.min(absChange / (threshold * 2), 1);
+
+    // Determine signal type
+    let signalType: 'buy' | 'sell' | 'alert' = 'alert';
+    if (this.config.type === 'buy' && isUp) signalType = 'buy';
+    if (this.config.type === 'sell' && isDown) signalType = 'sell';
+    if (this.config.type === 'both') {
+      signalType = isUp ? 'buy' : 'sell';
+    }
+
+    return {
+      ruleId: this.config.id,
+      ruleName: this.config.name,
+      mint: token.mint,
+      symbol: token.symbol,
+      type: signalType,
+      strength,
+      reason: `Price ${isUp ? 'up' : 'down'} ${absChange.toFixed(2)}% in ${timeframe} (threshold: ${threshold}%)`,
+      data: {
+        currentPrice,
+        earliestPrice,
+        percentChange,
+        timeframe,
+        threshold,
+      },
+      timestamp: Date.now(),
+    };
+  }
+}
+
+// Factory function for easy creation
+export function createPriceChangeRule(
+  id: string,
+  name: string,
+  options: {
+    timeframe: PriceChangeRuleConfig['timeframe'];
+    threshold: number;
+    direction: PriceChangeRuleConfig['direction'];
+    type?: 'buy' | 'sell' | 'both';
+  }
+): PriceChangeRule {
+  return new PriceChangeRule({
+    id,
+    name,
+    description: `Triggers when price changes ${options.threshold}% ${options.direction} in ${options.timeframe}`,
+    enabled: true,
+    type: options.type ?? 'both',
+    ruleType: 'price_change',
+    timeframe: options.timeframe,
+    threshold: options.threshold,
+    direction: options.direction,
+  });
+}

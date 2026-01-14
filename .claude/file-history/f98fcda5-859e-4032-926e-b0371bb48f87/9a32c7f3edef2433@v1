@@ -1,0 +1,168 @@
+/**
+ * Data Normalization Layer
+ *
+ * Pure, synchronous functions to normalize incoming market data.
+ * Fills missing fields with sensible defaults, ensures consistent formatting.
+ */
+
+import type { TokenMarketData, OHLCV, Trade } from '../api/types.js';
+import type { DataFeedMessage } from '../websocket-server.js';
+
+/**
+ * Normalize TokenMarketData
+ * - Lowercases mint for consistent keying
+ * - Fills missing optional fields with zeros/defaults
+ */
+export function normalizeTokenMarketData(data: Partial<TokenMarketData>): TokenMarketData {
+  return {
+    // Required fields (must exist)
+    mint: (data.mint || '').toLowerCase(),
+    symbol: data.symbol || '',
+    name: data.name || data.symbol || '',
+    price_sol: data.price_sol ?? 0,
+    price_usd: data.price_usd ?? 0,
+    market_cap_sol: data.market_cap_sol ?? 0,
+    market_cap_usd: data.market_cap_usd ?? 0,
+    holders: data.holders ?? '0',
+
+    // Volume metrics - default to 0
+    buy_volume_sol_5m: data.buy_volume_sol_5m ?? 0,
+    sell_volume_sol_5m: data.sell_volume_sol_5m ?? 0,
+    buy_volume_sol_1h: data.buy_volume_sol_1h ?? 0,
+    sell_volume_sol_1h: data.sell_volume_sol_1h ?? 0,
+    buy_volume_sol_6h: data.buy_volume_sol_6h ?? 0,
+    sell_volume_sol_6h: data.sell_volume_sol_6h ?? 0,
+    buy_volume_sol_24h: data.buy_volume_sol_24h ?? 0,
+    sell_volume_sol_24h: data.sell_volume_sol_24h ?? 0,
+    volume_24h_sol: data.volume_24h_sol ?? 0,
+
+    // Buy/sell counts - default to 0
+    buys_5m: data.buys_5m ?? 0,
+    buys_1h: data.buys_1h ?? 0,
+    buys_6h: data.buys_6h ?? 0,
+    buys_24h: data.buys_24h ?? 0,
+    sells_5m: data.sells_5m ?? 0,
+    sells_1h: data.sells_1h ?? 0,
+    sells_6h: data.sells_6h ?? 0,
+    sells_24h: data.sells_24h ?? 0,
+
+    // Trader counts - default to 0
+    buyers_5m: data.buyers_5m ?? 0,
+    buyers_1h: data.buyers_1h ?? 0,
+    buyers_6h: data.buyers_6h ?? 0,
+    buyers_24h: data.buyers_24h ?? 0,
+    sellers_5m: data.sellers_5m ?? 0,
+    sellers_1h: data.sellers_1h ?? 0,
+    sellers_6h: data.sellers_6h ?? 0,
+    sellers_24h: data.sellers_24h ?? 0,
+    traders_5m: data.traders_5m ?? 0,
+    traders_1h: data.traders_1h ?? 0,
+    traders_6h: data.traders_6h ?? 0,
+    traders_24h: data.traders_24h ?? 0,
+
+    // Price history for % change calculations
+    earliest_price_sol_5m: data.earliest_price_sol_5m ?? data.price_sol ?? 0,
+    earliest_price_sol_1h: data.earliest_price_sol_1h ?? data.price_sol ?? 0,
+    earliest_price_sol_6h: data.earliest_price_sol_6h ?? data.price_sol ?? 0,
+    earliest_price_sol_24h: data.earliest_price_sol_24h ?? data.price_sol ?? 0,
+
+    // Additional fields
+    liquidity_sol: data.liquidity_sol ?? 0,
+    liquidity_usd: data.liquidity_usd ?? 0,
+    total_supply: data.total_supply ?? 0,
+    circulating_supply: data.circulating_supply ?? 0,
+  };
+}
+
+/**
+ * Normalize OHLCV array
+ * - Sorts by timestamp ascending
+ * - Fills missing volume with 0
+ * - Filters out incomplete candles (missing OHLC values)
+ */
+export function normalizeOHLCV(data: Partial<OHLCV>[]): OHLCV[] {
+  return data
+    .filter((candle): candle is OHLCV => {
+      // Reject incomplete candles - must have all OHLC values
+      return (
+        typeof candle.timestamp === 'number' &&
+        typeof candle.open === 'number' &&
+        typeof candle.high === 'number' &&
+        typeof candle.low === 'number' &&
+        typeof candle.close === 'number'
+      );
+    })
+    .map(candle => ({
+      timestamp: candle.timestamp,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume: candle.volume ?? 0,
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/**
+ * Normalize Trade data
+ * - Lowercases mint for consistent keying
+ * - Fills missing optional fields with defaults
+ */
+export function normalizeTrade(data: Partial<Trade>): Trade {
+  return {
+    // Required fields
+    mint: (data.mint || '').toLowerCase(),
+    direction: data.direction || 'buy',
+    sol_amount: data.sol_amount ?? 0,
+    timestamp: data.timestamp ?? Date.now(),
+
+    // Optional fields with defaults
+    maker: data.maker ?? '',
+    token_amount: data.token_amount ?? 0,
+    sol_amount_usd: data.sol_amount_usd ?? 0,
+    market_cap_sol: data.market_cap_sol ?? 0,
+    market_cap_usd: data.market_cap_usd ?? 0,
+    signature: data.signature ?? '',
+
+    // Boolean flags - default to false
+    is_dev: data.is_dev ?? false,
+    is_insider: data.is_insider ?? false,
+    is_sniper: data.is_sniper ?? false,
+    is_bundler: data.is_bundler ?? false,
+
+    // Platform - default to unknown
+    platform: data.platform ?? 'unknown',
+  };
+}
+
+/**
+ * Normalize a DataFeedMessage
+ * Routes to appropriate normalizer based on message type
+ * Returns normalized message ready for storage
+ */
+export function normalizeDataFeed(message: DataFeedMessage): DataFeedMessage {
+  switch (message.type) {
+    case 'market_data_feed':
+      return {
+        type: 'market_data_feed',
+        data: normalizeTokenMarketData(message.data),
+      };
+
+    case 'ohlcv_update':
+      return {
+        type: 'ohlcv_update',
+        mint: message.mint.toLowerCase(),
+        ohlcv: normalizeOHLCV(message.ohlcv),
+      };
+
+    case 'trade_feed':
+      return {
+        type: 'trade_feed',
+        trade: normalizeTrade(message.trade),
+      };
+
+    default:
+      // Exhaustive check - should never reach here
+      return message;
+  }
+}

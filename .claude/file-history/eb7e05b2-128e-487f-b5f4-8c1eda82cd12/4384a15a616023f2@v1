@@ -1,0 +1,144 @@
+# Phase 9: Data Flow Investigation Report
+
+**Date:** 2026-01-08
+**Status:** Complete
+
+## Executive Summary
+
+Three display issues in the autopilot widget traced to missing NATS subscriptions for non-position token data. Architecture decision: **Hybrid approach** - Frontend enriches display with NATS prices, CLI continues signal generation.
+
+## Issue Analysis
+
+### Issue 1: Token Stats Always 0.0% (change1h)
+
+**Symptom:** Token list shows 0.0% change for all tokens.
+
+**Root Cause:**
+- `AutopilotWatchedToken.change1h` is marked as "Optional - populated from NATS, not autopilot backend" (types.ts:91-93)
+- `useAutopilotSubscription` only subscribes to NATS for **position mints** (line 22-24)
+- TokenList tokens never get NATS subscriptions
+- Backend sends token structure (mint, symbol, source) but NOT price data
+
+**Data Flow:**
+```
+CLI Backend → token_list event → setTokenList(tokens)
+                                 ↓
+                         tokens have NO price data
+                                 ↓
+                         Widget shows 0.0%
+```
+
+**Fix Required:** Extend `useAutopilotSubscription` to subscribe NATS for tokenList mints.
+
+### Issue 2: Stats P&L Not Updating (totalPnlSol)
+
+**Symptom:** Stats panel shows static P&L values.
+
+**Root Cause:**
+- `stats.totalPnlSol` comes directly from `stats_update` WebSocket event
+- CLI backend sends aggregate stats, but it calculates P&L from entry prices only
+- CLI lacks real-time current prices (no NATS connection)
+- Stats are stale because backend can't compute live P&L
+
+**Data Flow:**
+```
+CLI Backend → stats_update event → setStats(stats)
+                                   ↓
+                           stats.totalPnlSol from CLI
+                                   ↓
+                           Static value (CLI has no live prices)
+```
+
+**Fix Required:** Frontend calculates `totalPnlSol` by summing `pnlSol` from `useAutopilotPositions()`.
+
+**Note:** This pattern already exists - positions use NATS for live P&L calculation. Stats panel should derive total from positions, not backend.
+
+### Issue 3: Market Status SOL +0.00% (solPriceChangePercent)
+
+**Symptom:** Market status badge shows "SOL +0.00%" always.
+
+**Root Cause:**
+- `marketStatus.solPriceChangePercent` comes from `market_status` WebSocket event
+- CLI backend would need SOL price feed to compute this
+- CLI doesn't have real-time SOL price data
+
+**Data Flow:**
+```
+CLI Backend → market_status event → setMarketStatus(status)
+                                    ↓
+                            solPriceChangePercent = 0 (no data)
+                                    ↓
+                            Widget shows +0.00%
+```
+
+**Fix Required:** Frontend subscribes to SOL/USDC NATS topic, computes price change locally.
+
+## Architecture Decision
+
+### Decision: Hybrid Approach
+
+**Frontend responsibilities:**
+- Display data enrichment via NATS (token prices, SOL price)
+- Live P&L calculation (already implemented for positions)
+- Aggregate stats derived from live position data (totalPnlSol)
+
+**CLI Backend responsibilities:**
+- Signal generation (analysis loop, strategy rules)
+- Position tracking (entries, exits)
+- Structural data (token lists, strategies, config)
+
+### Rationale
+
+1. **Matches existing pattern:** Position P&L already uses NATS via `useAutopilotPositions`
+2. **No CLI changes needed:** Keeps signal generation in CLI (Python logic)
+3. **Real-time display:** Frontend NATS gives instant price updates
+4. **Clear separation:** CLI = brain (decisions), Frontend = display (enrichment)
+
+### Future Work: Data Pipeline Optimization
+
+**Logged for future milestone:** CLI NATS Integration
+
+Currently, CLI queries ClickHouse for token screening data while frontend already receives the same data via NATS WebSocket streams. This creates duplicate data pipeline costs.
+
+**Options for future consideration:**
+1. **CLI connects to NATS directly** - CLI subscribes to NATS instead of querying ClickHouse
+2. **Frontend signal consolidation** - Move strategy rules to frontend TypeScript
+
+This optimization is deferred to keep v1.3 scope focused on fixing display issues.
+
+## Implementation Plan (Phase 10)
+
+Based on hybrid architecture, Phase 10 will:
+
+1. **Token Price Enrichment**
+   - Extend `useAutopilotSubscription` to subscribe NATS for tokenList mints
+   - Create `useAutopilotTokensWithPrices` hook (similar to `useAutopilotPositions`)
+   - Populate `change1h` from NATS market_data
+
+2. **Stats P&L Calculation**
+   - Calculate `totalPnlSol` in frontend from position data
+   - Either modify `useAutopilotData` or create derived state
+   - Keep other stats from CLI (winRate, avgPnlPercent based on closed trades)
+
+3. **Market Status SOL Price**
+   - Subscribe to SOL/USDC NATS topic
+   - Compute 24h price change percentage
+   - Update market status display
+
+## Diagnostic Logging
+
+Added to `connectAutopilotWebsocket.ts`:
+- `console.log("[Autopilot] stats_update event:", ...)` - Verify backend stats data
+- `console.log("[Autopilot] market_status event:", ...)` - Verify backend market data
+
+These logs help confirm what CLI actually sends vs what frontend needs.
+
+## Files Modified
+
+- `apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts` - Diagnostic logging
+
+## Conclusion
+
+All three display issues stem from the same root cause: frontend expected NATS-enriched data but only subscribed for position mints. The hybrid approach extends NATS usage to token lists and SOL price while keeping CLI responsible for signal generation.
+
+Phase 10 will implement these fixes.

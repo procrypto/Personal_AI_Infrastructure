@@ -1,0 +1,148 @@
+/**
+ * useAutopilotData
+ *
+ * Main hook for accessing autopilot data from the Zustand store.
+ * Provides all autopilot data plus a sendCommand function for controls.
+ *
+ * Returns derived stats that compute totalPnlSol from live position data
+ * instead of using the static backend value.
+ *
+ * Also computes SOL price change percentage from NATS data for market status.
+ */
+
+import { useMemo, useRef, useEffect } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { useAutopilotPositions } from "./useAutopilotPositions";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+
+/**
+ * Main hook for accessing all autopilot data.
+ * Returns positions with live P&L, signals, stats, and controls.
+ */
+export const useAutopilotData = () => {
+  // Positions with live P&L from NATS market data
+  const positions = useAutopilotPositions();
+
+  // Calculate unrealized P&L from open positions (real-time from NATS market data)
+  const unrealizedPnlSol = useMemo(() => {
+    return positions.reduce((sum, pos) => sum + (pos.pnlSol ?? 0), 0);
+  }, [positions]);
+
+  // Get SOL price from store for market status calculation (stored as string)
+  const solPriceUsdStr = useGlobalStore(state => state.solanaPrice.usd);
+  const solPriceUsd = solPriceUsdStr ? parseFloat(solPriceUsdStr) : null;
+
+  // Track initial SOL price to calculate change since widget opened
+  const initialSolPriceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (
+      solPriceUsd &&
+      !isNaN(solPriceUsd) &&
+      initialSolPriceRef.current === null
+    ) {
+      initialSolPriceRef.current = solPriceUsd;
+    }
+  }, [solPriceUsd]);
+
+  // Calculate SOL price change percentage
+  const solPriceChangePercent = useMemo(() => {
+    if (!solPriceUsd || isNaN(solPriceUsd) || !initialSolPriceRef.current)
+      return 0;
+    return (
+      ((solPriceUsd - initialSolPriceRef.current) /
+        initialSolPriceRef.current) *
+      100
+    );
+  }, [solPriceUsd]);
+
+  // All other data from autopilot store
+  const {
+    isConnected,
+    signals,
+    marketStatus,
+    stats,
+    scanTick,
+    lastAnalysis,
+    tokenList,
+    config,
+    strategies,
+  } = useGlobalStore(
+    useShallow(state => ({
+      isConnected: state.autopilot.isConnected,
+      signals: state.autopilot.signals,
+      marketStatus: state.autopilot.marketStatus,
+      stats: state.autopilot.stats,
+      scanTick: state.autopilot.scanTick,
+      lastAnalysis: state.autopilot.lastAnalysis,
+      tokenList: state.autopilot.tokenList,
+      config: state.autopilot.config,
+      strategies: state.autopilot.strategies,
+    }))
+  );
+
+  /**
+   * Send a command to the autopilot backend.
+   */
+  const sendCommand = (command: AutopilotCommand) => {
+    autopilotWebsocket.sendCommand(command);
+  };
+
+  // Derived stats with lifetime P&L (realized from backend + unrealized from open positions)
+  // Backend's totalPnlSol = realized P&L from closed trades
+  // Frontend's unrealizedPnlSol = live P&L from open positions via NATS
+  const derivedStats = useMemo(() => {
+    return {
+      ...stats,
+      totalPnlSol: stats.totalPnlSol + unrealizedPnlSol,
+    };
+  }, [stats, unrealizedPnlSol]);
+
+  // Derived market status with computed SOL price change
+  // Note: Shows "change since widget opened" not "24h change" (true 24h would need historical data)
+  const derivedMarketStatus = useMemo(() => {
+    return {
+      ...marketStatus,
+      solPriceChangePercent,
+    };
+  }, [marketStatus, solPriceChangePercent]);
+
+  return {
+    // Connection status
+    isConnected,
+
+    // Positions with live P&L (calculated from NATS market data)
+    positions,
+
+    // Signals history
+    signals,
+
+    // Market status (derived: solPriceChangePercent computed from NATS)
+    marketStatus: derivedMarketStatus,
+
+    // Trading statistics (derived: totalPnlSol = realized + unrealized)
+    stats: derivedStats,
+
+    // Unrealized P&L from open positions only (for header display)
+    unrealizedPnlSol,
+
+    // Scan metadata
+    scanTick,
+
+    // Last analyzed token (for debugging/visibility)
+    lastAnalysis,
+
+    // Token lists by source
+    tokenList,
+
+    // Configuration
+    config,
+
+    // Available and active strategies
+    strategies,
+
+    // Command sender
+    sendCommand,
+  };
+};

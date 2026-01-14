@@ -1,0 +1,121 @@
+---
+phase: 09-ci-hardening
+plan: 01
+subsystem: infra
+tags: [docker, github-actions, cloud-run, healthcheck, buildx]
+
+# Dependency graph
+requires:
+  - phase: 03-ci-cd-pipeline
+    provides: GitHub Actions workflows for beta and prod
+provides:
+  - Dockerfile HEALTHCHECK for container orchestrator integration
+  - Docker Buildx with GitHub Actions cache for faster builds
+  - Cloud Run resource limits (memory, CPU, instances)
+  - Post-deploy health verification step
+affects: [10-workflow-secrets]
+
+# Tech tracking
+tech-stack:
+  added: [docker/setup-buildx-action@v3, docker/build-push-action@v6]
+  patterns: [gha-cache, cloud-run-resource-flags, post-deploy-verification]
+
+key-files:
+  modified:
+    - Dockerfile
+    - .github/workflows/deploy.yml
+    - .github/workflows/deploy-prod.yml
+
+key-decisions:
+  - "Used curl for HEALTHCHECK over bun fetch (simpler, standard)"
+  - "512Mi memory, 1 CPU, 0-10 instances for Cloud Run (sensible defaults)"
+  - "15s sleep before health check allows cold start stabilization"
+
+patterns-established:
+  - "Post-deploy health verification catches failed deployments"
+  - "GHA cache with type=gha enables layer caching between builds"
+
+issues-created: []
+
+# Metrics
+duration: 2 min
+completed: 2026-01-13
+
+# Debugging
+debugging:
+  sessions: 0
+  time-spent: 0min
+  patterns: []
+---
+
+# Phase 9 Plan 1: CI Hardening Summary
+
+**Dockerfile HEALTHCHECK with curl, Docker Buildx with GHA caching, Cloud Run resource limits (512Mi/1CPU/0-10), post-deploy health verification**
+
+## Performance
+
+- **Duration:** 2 min
+- **Started:** 2026-01-13T22:43:36Z
+- **Completed:** 2026-01-13T22:46:10Z
+- **Tasks:** 2
+- **Files modified:** 3
+
+## Accomplishments
+
+- Added Dockerfile HEALTHCHECK instruction (30s interval, 5s timeout, 10s start-period, 3 retries)
+- Implemented Docker Buildx with GitHub Actions cache for faster subsequent builds
+- Configured Cloud Run resource limits (512Mi memory, 1 CPU, 0-10 instances)
+- Added post-deploy health verification step checking /health endpoint
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Add Dockerfile HEALTHCHECK instruction** - `e088ffa` (feat)
+2. **Task 2: Update workflows with Buildx caching, resources, health checks** - `d6408a8` (feat)
+
+**Plan metadata:** (pending) (docs: complete plan)
+
+## Files Created/Modified
+
+- `Dockerfile` - Added curl install and HEALTHCHECK instruction
+- `.github/workflows/deploy.yml` - Added Buildx setup, build-push-action with caching, resource flags, health check
+- `.github/workflows/deploy-prod.yml` - Same improvements as beta workflow
+
+## Decisions Made
+
+- **curl over bun fetch for HEALTHCHECK:** Standard approach, simpler debugging, well-understood
+- **512Mi/1CPU/0-10 instances:** Conservative defaults for API service, scalable via flags
+- **15s sleep before health check:** Allows Cloud Run cold start to stabilize before verification
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Debugging Sessions
+
+None - all verifications passed on first attempt.
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions (FM7)
+
+**Notes:** Clean execution, all verification checks passed.
+
+## Next Step
+
+Phase complete, ready for Phase 10: Workflow Secrets
+
+---
+*Phase: 09-ci-hardening*
+*Completed: 2026-01-13*

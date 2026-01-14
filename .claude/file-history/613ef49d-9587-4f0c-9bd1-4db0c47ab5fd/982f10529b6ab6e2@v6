@@ -1,0 +1,776 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { useState, useEffect, useCallback, useRef } from "react";
+import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+import { Bot, AlertTriangle, TrendingUp, TrendingDown, Activity, Zap, Target, ShieldAlert, Clock, Eye, Flame, Wallet, Settings, RefreshCw, Power, Layers, CheckCircle2, Circle } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Switch } from "@/components/switch";
+import { Tooltip } from "@/components/tooltip";
+
+// Types matching the backend WebSocket events
+interface PositionData {
+  mint: string;
+  symbol: string;
+  action: "buy" | "sell";
+  entryPriceSol: number;
+  currentPriceSol: number;
+  positionSizeSol: number;
+  pnlPercent: number;
+  pnlSol: number;
+  entryTime: number;
+}
+
+interface SignalData {
+  timestamp: number;
+  mint: string;
+  symbol: string;
+  signalType: "magic_buy" | "magic_exit" | "dump_exit" | "rule_signal";
+  action: "buy" | "sell" | "close";
+  reason: string;
+  pnlPercent?: number;
+  entryType?: string;
+}
+
+interface MarketStatusData {
+  state: "NORMAL" | "CAUTION" | "DUMP";
+  solPriceChangePercent: number;
+  blockEntries: boolean;
+  exitAll: boolean;
+}
+
+interface StatsData {
+  totalTrades: number;
+  openTrades: number;
+  closedTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnlSol: number;
+  totalPnlUsd: number;
+  avgPnlPercent: number;
+}
+
+interface ScanTickData {
+  timestamp: number;
+  scanNumber: number;
+  tokenCount: number;
+  openPositions: number;
+}
+
+interface WatchedToken {
+  mint: string;
+  symbol: string;
+  source: "watchlist" | "trending" | "whales";
+  priceSol?: number;
+  priceUsd?: number;
+  change1h?: number;
+  change24h?: number;
+  volume24h?: number;
+  mcap?: number;
+  hasPosition?: boolean;
+}
+
+interface TokenListData {
+  watchlist: WatchedToken[];
+  trending: WatchedToken[];
+  whales: WatchedToken[];
+}
+
+interface ConfigData {
+  autoSourcesEnabled: boolean;
+  trendingEnabled: boolean;
+  whalesEnabled: boolean;
+  marketFilterEnabled: boolean;
+  mode: "paper" | "live";
+  positionSizeSol: number;
+  pollIntervalMs: number;
+}
+
+interface StrategyInfo {
+  id: string;
+  name: string;
+  description: string;
+  mode: "all" | "any";
+  ruleCount: number;
+  summary: string;
+}
+
+interface StrategiesData {
+  available: StrategyInfo[];
+  active: string[];
+}
+
+type AutopilotCommand =
+  | { command: "toggle_sources"; enabled: boolean }
+  | { command: "toggle_trending"; enabled: boolean }
+  | { command: "toggle_whales"; enabled: boolean }
+  | { command: "toggle_filter"; enabled: boolean }
+  | { command: "set_mode"; mode: "paper" | "live" }
+  | { command: "set_position_size"; sizeSol: number }
+  | { command: "refresh_sources" }
+  | { command: "get_config" }
+  | { command: "get_strategies" }
+  | { command: "toggle_strategy"; strategyId: string; enabled: boolean };
+
+type AutopilotEvent =
+  | { type: "position_update"; positions: PositionData[] }
+  | { type: "signal"; signal: SignalData }
+  | { type: "market_status"; status: MarketStatusData }
+  | { type: "stats_update"; stats: StatsData }
+  | { type: "scan_tick"; tick: ScanTickData }
+  | { type: "token_list"; tokens: TokenListData }
+  | { type: "config"; config: ConfigData }
+  | { type: "strategies"; strategies: StrategiesData };
+
+// Determine WebSocket URL based on protocol (use proxy for HTTPS)
+const getAutopilotWsUrl = () => {
+  if (typeof window === "undefined") return "ws://localhost:8765";
+  // Use vite proxy when on HTTPS to avoid mixed content
+  if (window.location.protocol === "https:") {
+    return `wss://${window.location.host}/autopilot-ws`;
+  }
+  return "ws://localhost:8765";
+};
+
+// WebSocket hook for autopilot backend
+function useAutopilotWebSocket(wsUrl: string = getAutopilotWsUrl()) {
+  const [positions, setPositions] = useState<PositionData[]>([]);
+  const [signals, setSignals] = useState<SignalData[]>([]);
+  const [marketStatus, setMarketStatus] = useState<MarketStatusData>({
+    state: "NORMAL",
+    solPriceChangePercent: 0,
+    blockEntries: false,
+    exitAll: false,
+  });
+  const [stats, setStats] = useState<StatsData>({
+    totalTrades: 0,
+    openTrades: 0,
+    closedTrades: 0,
+    wins: 0,
+    losses: 0,
+    winRate: 0,
+    totalPnlSol: 0,
+    totalPnlUsd: 0,
+    avgPnlPercent: 0,
+  });
+  const [scanTick, setScanTick] = useState<ScanTickData | null>(null);
+  const [tokenList, setTokenList] = useState<TokenListData>({
+    watchlist: [],
+    trending: [],
+    whales: [],
+  });
+  const [config, setConfig] = useState<ConfigData>({
+    autoSourcesEnabled: true,
+    trendingEnabled: true,
+    whalesEnabled: true,
+    marketFilterEnabled: true,
+    mode: "paper",
+    positionSizeSol: 0.1,
+    pollIntervalMs: 30000,
+  });
+  const [strategies, setStrategies] = useState<StrategiesData>({
+    available: [],
+    active: [],
+  });
+  const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const sendCommand = useCallback((command: AutopilotCommand) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(command));
+    }
+  }, []);
+
+  const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setIsConnected(true);
+        console.log("[Autopilot] WebSocket connected");
+      };
+
+      ws.onclose = () => {
+        setIsConnected(false);
+        console.log("[Autopilot] WebSocket disconnected, reconnecting...");
+        // Reconnect after 3 seconds
+        reconnectTimeoutRef.current = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = (err) => {
+        console.error("[Autopilot] WebSocket error:", err);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as AutopilotEvent;
+
+          switch (data.type) {
+            case "position_update":
+              setPositions(data.positions);
+              break;
+            case "signal":
+              setSignals((prev) => [data.signal, ...prev].slice(0, 50)); // Keep last 50 signals
+              break;
+            case "market_status":
+              setMarketStatus(data.status);
+              break;
+            case "stats_update":
+              setStats(data.stats);
+              break;
+            case "scan_tick":
+              setScanTick(data.tick);
+              break;
+            case "token_list":
+              setTokenList(data.tokens);
+              break;
+            case "config":
+              setConfig(data.config);
+              break;
+            case "strategies":
+              setStrategies(data.strategies);
+              break;
+          }
+        } catch (err) {
+          console.error("[Autopilot] Failed to parse message:", err);
+        }
+      };
+    } catch (err) {
+      console.error("[Autopilot] Failed to connect:", err);
+      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+    }
+  }, [wsUrl]);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      wsRef.current?.close();
+    };
+  }, [connect]);
+
+  return { positions, signals, marketStatus, stats, scanTick, tokenList, config, strategies, isConnected, sendCommand };
+}
+
+// Market Status Badge Component
+const MarketStatusBadge = ({ status }: { status: MarketStatusData }) => {
+  const stateConfig = {
+    NORMAL: { color: "bg-green-500/20 text-green-400 border-green-500/30", icon: Activity, label: "NORMAL" },
+    CAUTION: { color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30", icon: AlertTriangle, label: "CAUTION" },
+    DUMP: { color: "bg-red-500/20 text-red-400 border-red-500/30", icon: ShieldAlert, label: "DUMP" },
+  };
+
+  const config = stateConfig[status.state];
+  const Icon = config.icon;
+
+  return (
+    <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-1.5", config.color)}>
+      <Icon className="h-4 w-4" />
+      <span className="text-xs font-semibold">{config.label}</span>
+      <span className="text-xs opacity-75">
+        SOL {status.solPriceChangePercent >= 0 ? "+" : ""}
+        {status.solPriceChangePercent.toFixed(2)}%
+      </span>
+    </div>
+  );
+};
+
+// Position Card Component
+const PositionCard = ({ position }: { position: PositionData }) => {
+  const isProfit = position.pnlPercent >= 0;
+  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+      <div className="flex items-center gap-3">
+        <div
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+            isProfit ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"
+          )}
+        >
+          {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+        </div>
+        <div>
+          <span className="text-text-primary text-sm font-medium">${position.symbol}</span>
+          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+            <Clock className="h-3 w-3" />
+            {holdTime}m
+          </div>
+        </div>
+      </div>
+      <div className="text-right">
+        <div className={cn("text-sm font-semibold", isProfit ? "text-green-400" : "text-red-400")}>
+          {isProfit ? "+" : ""}
+          {position.pnlPercent.toFixed(2)}%
+        </div>
+        <div className="text-text-secondary text-[10px]">
+          {position.positionSizeSol.toFixed(2)} SOL
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Signal Item Component
+const SignalItem = ({ signal }: { signal: SignalData }) => {
+  const signalConfig = {
+    magic_buy: { color: "text-cyan-400", icon: Target, label: "BUY" },
+    magic_exit: { color: "text-purple-400", icon: Zap, label: "EXIT" },
+    dump_exit: { color: "text-red-400", icon: ShieldAlert, label: "DUMP" },
+    rule_signal: { color: "text-blue-400", icon: Activity, label: "SIGNAL" },
+  };
+
+  const config = signalConfig[signal.signalType];
+  const Icon = config.icon;
+  const time = new Date(signal.timestamp).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  return (
+    <div className="border-border-primary/50 flex items-center gap-2 border-b py-2 last:border-0">
+      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+      <span className="text-text-secondary text-[10px]">{time}</span>
+      <span className={cn("text-xs font-medium", config.color)}>{config.label}</span>
+      <span className="text-text-primary text-xs">${signal.symbol}</span>
+      {signal.pnlPercent !== undefined && (
+        <span className={cn("text-xs", signal.pnlPercent >= 0 ? "text-green-400" : "text-red-400")}>
+          {signal.pnlPercent >= 0 ? "+" : ""}
+          {signal.pnlPercent.toFixed(1)}%
+        </span>
+      )}
+    </div>
+  );
+};
+
+// Token Row Component
+const TokenRow = ({ token }: { token: WatchedToken }) => {
+  const change = token.change1h ?? 0;
+  const isPositive = change >= 0;
+
+  return (
+    <div className={cn(
+      "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+      token.hasPosition ? "bg-cyan-500/10 border border-cyan-500/20" : "bg-bg-tertiary/30"
+    )}>
+      <div className="flex items-center gap-2">
+        <span className="text-text-primary font-medium">${token.symbol}</span>
+        {token.hasPosition && (
+          <span className="text-[8px] text-cyan-400 font-semibold">OPEN</span>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        {token.priceUsd !== undefined && (
+          <span className="text-text-secondary">
+            ${token.priceUsd < 0.01 ? token.priceUsd.toExponential(2) : token.priceUsd.toFixed(4)}
+          </span>
+        )}
+        <span className={cn("font-medium", isPositive ? "text-green-400" : "text-red-400")}>
+          {isPositive ? "+" : ""}{change.toFixed(1)}%
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// Token List Section Component
+const TokenListSection = ({
+  title,
+  icon: Icon,
+  tokens,
+  iconColor
+}: {
+  title: string;
+  icon: React.ElementType;
+  tokens: WatchedToken[];
+  iconColor: string;
+}) => {
+  if (tokens.length === 0) return null;
+
+  return (
+    <div className="flex-shrink-0">
+      <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+        <Icon className={cn("h-3.5 w-3.5", iconColor)} />
+        {title} ({tokens.length})
+      </div>
+      <div className="max-h-32 space-y-1 overflow-auto">
+        {tokens.map((token) => (
+          <TokenRow key={token.mint} token={token} />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Controls Panel Component
+const ControlsPanel = ({
+  config,
+  sendCommand,
+  isConnected,
+}: {
+  config: ConfigData;
+  sendCommand: (cmd: AutopilotCommand) => void;
+  isConnected: boolean;
+}) => {
+  const [showControls, setShowControls] = useState(false);
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+      {/* Header - always visible */}
+      <button
+        onClick={() => setShowControls(!showControls)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+        disabled={!isConnected}
+      >
+        <div className="flex items-center gap-2">
+          <Settings className="h-3.5 w-3.5 text-text-secondary" />
+          <span className="text-text-secondary font-medium">Controls</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+            config.mode === "paper" ? "bg-yellow-500/20 text-yellow-400" : "bg-green-500/20 text-green-400"
+          )}>
+            {config.mode.toUpperCase()}
+          </span>
+          <span className="text-text-tertiary">{showControls ? "▲" : "▼"}</span>
+        </div>
+      </button>
+
+      {/* Expandable controls */}
+      {showControls && (
+        <div className="border-t border-border-primary/50 px-3 py-2 space-y-3">
+          {/* Mode Toggle - Disabled until LOIS integration */}
+          <Tooltip
+            content="Live trading integration coming soon. Invite only 🔒"
+            side="left"
+          >
+            <div className="flex items-center justify-between opacity-50 cursor-not-allowed">
+              <div className="flex items-center gap-2">
+                <Power className="h-3.5 w-3.5 text-text-secondary" />
+                <span className="text-xs text-text-secondary">Live Trading</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={false}
+                disabled
+              />
+            </div>
+          </Tooltip>
+
+          {/* Auto Sources Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Eye className="h-3.5 w-3.5 text-blue-400" />
+              <span className="text-xs text-text-secondary">Auto Sources</span>
+            </div>
+            <Switch
+              size="sm"
+              checked={config.autoSourcesEnabled}
+              onCheckedChange={(checked) => sendCommand({ command: "toggle_sources", enabled: checked })}
+            />
+          </div>
+
+          {/* Trending Toggle */}
+          {config.autoSourcesEnabled && (
+            <div className="flex items-center justify-between pl-5">
+              <div className="flex items-center gap-2">
+                <Flame className="h-3 w-3 text-orange-400" />
+                <span className="text-[11px] text-text-tertiary">Trending</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.trendingEnabled}
+                onCheckedChange={(checked) => sendCommand({ command: "toggle_trending", enabled: checked })}
+              />
+            </div>
+          )}
+
+          {/* Whales Toggle */}
+          {config.autoSourcesEnabled && (
+            <div className="flex items-center justify-between pl-5">
+              <div className="flex items-center gap-2">
+                <Wallet className="h-3 w-3 text-green-400" />
+                <span className="text-[11px] text-text-tertiary">Whale Moves</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.whalesEnabled}
+                onCheckedChange={(checked) => sendCommand({ command: "toggle_whales", enabled: checked })}
+              />
+            </div>
+          )}
+
+          {/* Market Filter Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="h-3.5 w-3.5 text-purple-400" />
+              <span className="text-xs text-text-secondary">Market Filter</span>
+            </div>
+            <Switch
+              size="sm"
+              checked={config.marketFilterEnabled}
+              onCheckedChange={(checked) => sendCommand({ command: "toggle_filter", enabled: checked })}
+            />
+          </div>
+
+          {/* Refresh Sources Button */}
+          <button
+            onClick={() => sendCommand({ command: "refresh_sources" })}
+            className="flex w-full items-center justify-center gap-2 rounded bg-bg-tertiary/50 px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-tertiary transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Refresh Sources
+          </button>
+
+          {/* Position Size Display */}
+          <div className="flex items-center justify-between text-[10px] text-text-tertiary pt-1 border-t border-border-primary/30">
+            <span>Position Size</span>
+            <span>{config.positionSizeSol} SOL</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Strategies Panel Component
+const StrategiesPanel = ({
+  strategies,
+  sendCommand,
+  isConnected,
+}: {
+  strategies: StrategiesData;
+  sendCommand: (cmd: AutopilotCommand) => void;
+  isConnected: boolean;
+}) => {
+  const [showStrategies, setShowStrategies] = useState(false);
+  const activeSet = new Set(strategies.active);
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+      {/* Header - always visible */}
+      <button
+        onClick={() => setShowStrategies(!showStrategies)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+        disabled={!isConnected}
+      >
+        <div className="flex items-center gap-2">
+          <Layers className="h-3.5 w-3.5 text-text-secondary" />
+          <span className="text-text-secondary font-medium">Strategies</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+            strategies.active.length > 0 ? "bg-green-500/20 text-green-400" : "bg-gray-500/20 text-gray-400"
+          )}>
+            {strategies.active.length} ACTIVE
+          </span>
+          <span className="text-text-tertiary">{showStrategies ? "▲" : "▼"}</span>
+        </div>
+      </button>
+
+      {/* Expandable strategies list */}
+      {showStrategies && (
+        <div className="border-t border-border-primary/50 px-3 py-2 space-y-2">
+          {strategies.available.length === 0 ? (
+            <div className="text-text-tertiary text-xs text-center py-2">
+              No strategies available
+            </div>
+          ) : (
+            strategies.available.map((strategy) => {
+              const isActive = activeSet.has(strategy.id);
+              return (
+                <button
+                  key={strategy.id}
+                  onClick={() => sendCommand({ command: "toggle_strategy", strategyId: strategy.id, enabled: !isActive })}
+                  className={cn(
+                    "w-full flex items-start gap-2 rounded px-2 py-2 text-left transition-colors",
+                    isActive
+                      ? "bg-green-500/10 border border-green-500/30 hover:bg-green-500/20"
+                      : "bg-bg-tertiary/50 border border-transparent hover:bg-bg-tertiary"
+                  )}
+                >
+                  <div className="flex-shrink-0 mt-0.5">
+                    {isActive ? (
+                      <CheckCircle2 className="h-4 w-4 text-green-400" />
+                    ) : (
+                      <Circle className="h-4 w-4 text-text-tertiary" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        "text-xs font-medium",
+                        isActive ? "text-green-400" : "text-text-primary"
+                      )}>
+                        {strategy.name}
+                      </span>
+                      <span className={cn(
+                        "text-[9px] px-1 py-0.5 rounded",
+                        strategy.mode === "all"
+                          ? "bg-blue-500/20 text-blue-400"
+                          : "bg-purple-500/20 text-purple-400"
+                      )}>
+                        {strategy.mode.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-text-tertiary truncate">
+                      {strategy.summary}
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Stats Panel Component
+const StatsPanel = ({ stats }: { stats: StatsData }) => {
+  const isProfit = stats.totalPnlSol >= 0;
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 grid grid-cols-4 gap-2 rounded-lg border p-3">
+      <div className="text-center">
+        <div className="text-text-primary text-lg font-bold">{stats.closedTrades}</div>
+        <div className="text-text-secondary text-[10px]">Trades</div>
+      </div>
+      <div className="text-center">
+        <div className={cn("text-lg font-bold", stats.winRate >= 0.5 ? "text-green-400" : "text-red-400")}>
+          {(stats.winRate * 100).toFixed(0)}%
+        </div>
+        <div className="text-text-secondary text-[10px]">Win Rate</div>
+      </div>
+      <div className="text-center">
+        <div className="text-text-primary text-lg font-bold">
+          {stats.wins}W/{stats.losses}L
+        </div>
+        <div className="text-text-secondary text-[10px]">Record</div>
+      </div>
+      <div className="text-center">
+        <div className={cn("text-lg font-bold", isProfit ? "text-green-400" : "text-red-400")}>
+          {isProfit ? "+" : ""}
+          <FormattedNumber value={stats.totalPnlSol} decimals={2} />
+        </div>
+        <div className="text-text-secondary text-[10px]">P&L (SOL)</div>
+      </div>
+    </div>
+  );
+};
+
+// Main Autopilot Widget Component
+export const AutopilotWidget = () => {
+  const { positions, signals, marketStatus, stats, scanTick, tokenList, config, strategies, isConnected, sendCommand } = useAutopilotWebSocket();
+
+  const totalTokens = tokenList.watchlist.length + tokenList.trending.length + tokenList.whales.length;
+
+  return (
+    <div className="flex h-full flex-col gap-3 overflow-hidden">
+      {/* Header - Market Status */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot className={cn("h-5 w-5", isConnected ? "text-green-400" : "text-red-400")} />
+          <span className="text-text-primary text-sm font-semibold">Token Autopilot</span>
+          {scanTick && (
+            <span className="text-text-secondary text-[10px]">
+              #{scanTick.scanNumber} | {totalTokens} tokens
+            </span>
+          )}
+        </div>
+        <MarketStatusBadge status={marketStatus} />
+      </div>
+
+      {/* Connection Status (shown when disconnected) */}
+      {!isConnected && (
+        <div className="bg-yellow-500/10 border-yellow-500/30 flex items-center gap-2 rounded-lg border px-3 py-2">
+          <AlertTriangle className="h-4 w-4 text-yellow-400" />
+          <span className="text-xs text-yellow-400">Connecting to autopilot backend...</span>
+        </div>
+      )}
+
+      {/* Controls Panel */}
+      <ControlsPanel config={config} sendCommand={sendCommand} isConnected={isConnected} />
+
+      {/* Strategies Panel */}
+      <StrategiesPanel strategies={strategies} sendCommand={sendCommand} isConnected={isConnected} />
+
+      {/* Stats Panel */}
+      <StatsPanel stats={stats} />
+
+      {/* Open Positions */}
+      {positions.length > 0 && (
+        <div className="flex-shrink-0">
+          <div className="text-text-secondary mb-2 flex items-center gap-2 text-xs font-medium">
+            <Target className="h-3.5 w-3.5" />
+            Open Positions ({positions.length})
+          </div>
+          <div className="max-h-40 space-y-2 overflow-auto">
+            {positions.map((pos) => (
+              <PositionCard key={pos.mint} position={pos} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Watched Token Lists - Main scrollable area */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+        {/* Watchlist */}
+        <TokenListSection
+          title="Watchlist"
+          icon={Eye}
+          tokens={tokenList.watchlist}
+          iconColor="text-blue-400"
+        />
+
+        {/* Trending */}
+        <TokenListSection
+          title="Trending"
+          icon={Flame}
+          tokens={tokenList.trending}
+          iconColor="text-orange-400"
+        />
+
+        {/* Whale Moves */}
+        <TokenListSection
+          title="Whale Moves"
+          icon={Wallet}
+          tokens={tokenList.whales}
+          iconColor="text-green-400"
+        />
+
+        {/* Empty state if no tokens */}
+        {totalTokens === 0 && isConnected && (
+          <div className="text-text-secondary border-border-primary/50 rounded-lg border border-dashed p-4 text-center text-xs">
+            No tokens being watched. Enable auto-sources or add to watchlist.
+          </div>
+        )}
+      </div>
+
+      {/* Signal Feed - Collapsible at bottom */}
+      {signals.length > 0 && (
+        <div className="flex-shrink-0 border-t border-border-primary/30 pt-2">
+          <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+            <Zap className="h-3.5 w-3.5" />
+            Recent Signals
+          </div>
+          <div className="max-h-24 overflow-auto">
+            <div className="space-y-0">
+              {signals.slice(0, 5).map((signal, idx) => (
+                <SignalItem key={`${signal.timestamp}-${idx}`} signal={signal} />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AutopilotWidget;

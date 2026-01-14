@@ -1,0 +1,167 @@
+/**
+ * QA Coordination Event Bus
+ *
+ * Type-safe event bus for decoupling core coordination logic from surface notifications.
+ * Singleton pattern ensures a single bus instance across the application.
+ *
+ * Usage:
+ *   const bus = getEventBus();
+ *   const sub = bus.subscribe('ticket:created', (payload) => { ... });
+ *   await bus.dispatch('ticket:created', { ticket });
+ *   sub.unsubscribe();
+ */
+
+import type {
+  NotificationEvent,
+  TicketCreatedPayload,
+  TicketAssignedPayload,
+  TicketStatusChangedPayload,
+  TicketEscalatedPayload,
+  SessionStartedPayload,
+  SessionCompletedPayload,
+  AlertTriggeredPayload,
+} from '../types.js';
+
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
+/** Map event names to their payload types */
+type EventPayloadMap = {
+  'ticket:created': TicketCreatedPayload;
+  'ticket:assigned': TicketAssignedPayload;
+  'ticket:claimed': TicketAssignedPayload; // Same shape as assigned
+  'ticket:status_changed': TicketStatusChangedPayload;
+  'ticket:escalated': TicketEscalatedPayload;
+  'session:started': SessionStartedPayload;
+  'session:completed': SessionCompletedPayload;
+  'alert:triggered': AlertTriggeredPayload;
+};
+
+/** Callback type with proper typing */
+type EventCallback<T extends NotificationEvent> = (
+  payload: EventPayloadMap[T]
+) => void | Promise<void>;
+
+/** Registry entry for unsubscription */
+interface Subscription {
+  unsubscribe: () => void;
+}
+
+/** Subscriber storage */
+type SubscriberMap = {
+  [K in NotificationEvent]?: Map<number, EventCallback<K>>;
+};
+
+// ============================================================================
+// Event Bus Implementation
+// ============================================================================
+
+/**
+ * Type-safe event bus for QA coordination notifications.
+ * Singleton pattern ensures a single bus instance across the application.
+ */
+class EventBus {
+  private static instance: EventBus | null = null;
+  private subscribers: SubscriberMap = {};
+  private nextId = 1;
+
+  private constructor() {
+    // Private constructor for singleton
+  }
+
+  /**
+   * Get the singleton EventBus instance
+   */
+  static getInstance(): EventBus {
+    if (!EventBus.instance) {
+      EventBus.instance = new EventBus();
+    }
+    return EventBus.instance;
+  }
+
+  /**
+   * Reset the singleton (for testing)
+   */
+  static resetInstance(): void {
+    EventBus.instance = null;
+  }
+
+  /**
+   * Subscribe to an event. Returns a Subscription with unsubscribe method.
+   */
+  subscribe<T extends NotificationEvent>(
+    event: T,
+    callback: EventCallback<T>
+  ): Subscription {
+    if (!this.subscribers[event]) {
+      this.subscribers[event] = new Map();
+    }
+
+    const id = this.nextId++;
+    // Type assertion needed due to TypeScript limitations with mapped types
+    (this.subscribers[event] as Map<number, EventCallback<T>>).set(id, callback);
+
+    return {
+      unsubscribe: () => {
+        const eventSubscribers = this.subscribers[event];
+        if (eventSubscribers) {
+          eventSubscribers.delete(id);
+          // Clean up empty maps to prevent memory leaks
+          if (eventSubscribers.size === 0) {
+            delete this.subscribers[event];
+          }
+        }
+      },
+    };
+  }
+
+  /**
+   * Dispatch an event to all subscribers. Async callbacks are awaited in parallel.
+   */
+  async dispatch<T extends NotificationEvent>(
+    event: T,
+    payload: EventPayloadMap[T]
+  ): Promise<void> {
+    const eventSubscribers = this.subscribers[event];
+    if (!eventSubscribers || eventSubscribers.size === 0) {
+      return;
+    }
+
+    const callbacks = Array.from(eventSubscribers.values());
+    await Promise.all(
+      callbacks.map(async (callback) => {
+        try {
+          await callback(payload as EventPayloadMap[typeof event]);
+        } catch (error) {
+          // Log but don't throw - one subscriber failure shouldn't break others
+          console.error(`Event bus error in ${event} handler:`, error);
+        }
+      })
+    );
+  }
+
+  /**
+   * Get subscriber count for an event (for debugging/testing)
+   */
+  getSubscriberCount(event: NotificationEvent): number {
+    return this.subscribers[event]?.size ?? 0;
+  }
+}
+
+// ============================================================================
+// Exports
+// ============================================================================
+
+/** Get the singleton EventBus instance */
+export function getEventBus(): EventBus {
+  return EventBus.getInstance();
+}
+
+/** Reset the singleton (for testing) */
+export function resetEventBus(): void {
+  EventBus.resetInstance();
+}
+
+// Re-export types for convenience
+export type { EventPayloadMap, EventCallback, Subscription };

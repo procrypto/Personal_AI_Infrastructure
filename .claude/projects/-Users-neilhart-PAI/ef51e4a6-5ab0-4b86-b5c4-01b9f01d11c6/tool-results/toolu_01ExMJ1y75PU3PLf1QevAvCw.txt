@@ -1,0 +1,485 @@
+     1→# Testing Patterns Template
+     2→
+     3→Template for `.planning/codebase/TESTING.md` - captures test framework and patterns.
+     4→
+     5→**Purpose:** Document how tests are written and run. Guide for adding tests that match existing patterns.
+     6→
+     7→---
+     8→
+     9→## File Template
+    10→
+    11→```markdown
+    12→# Testing Patterns
+    13→
+    14→**Analysis Date:** [YYYY-MM-DD]
+    15→
+    16→## Test Framework
+    17→
+    18→**Runner:**
+    19→- [Framework: e.g., "Jest 29.x", "Vitest 1.x"]
+    20→- [Config: e.g., "jest.config.js in project root"]
+    21→
+    22→**Assertion Library:**
+    23→- [Library: e.g., "built-in expect", "chai"]
+    24→- [Matchers: e.g., "toBe, toEqual, toThrow"]
+    25→
+    26→**Run Commands:**
+    27→```bash
+    28→[e.g., "npm test" or "npm run test"]              # Run all tests
+    29→[e.g., "npm test -- --watch"]                     # Watch mode
+    30→[e.g., "npm test -- path/to/file.test.ts"]       # Single file
+    31→[e.g., "npm run test:coverage"]                   # Coverage report
+    32→```
+    33→
+    34→## Test File Organization
+    35→
+    36→**Location:**
+    37→- [Pattern: e.g., "*.test.ts alongside source files"]
+    38→- [Alternative: e.g., "__tests__/ directory" or "separate tests/ tree"]
+    39→
+    40→**Naming:**
+    41→- [Unit tests: e.g., "module-name.test.ts"]
+    42→- [Integration: e.g., "feature-name.integration.test.ts"]
+    43→- [E2E: e.g., "user-flow.e2e.test.ts"]
+    44→
+    45→**Structure:**
+    46→```
+    47→[Show actual directory pattern, e.g.:
+    48→src/
+    49→  lib/
+    50→    utils.ts
+    51→    utils.test.ts
+    52→  services/
+    53→    user-service.ts
+    54→    user-service.test.ts
+    55→]
+    56→```
+    57→
+    58→## Test Structure
+    59→
+    60→**Suite Organization:**
+    61→```typescript
+    62→[Show actual pattern used, e.g.:
+    63→
+    64→describe('ModuleName', () => {
+    65→  describe('functionName', () => {
+    66→    it('should handle success case', () => {
+    67→      // arrange
+    68→      // act
+    69→      // assert
+    70→    });
+    71→
+    72→    it('should handle error case', () => {
+    73→      // test code
+    74→    });
+    75→  });
+    76→});
+    77→]
+    78→```
+    79→
+    80→**Patterns:**
+    81→- [Setup: e.g., "beforeEach for shared setup, avoid beforeAll"]
+    82→- [Teardown: e.g., "afterEach to clean up, restore mocks"]
+    83→- [Structure: e.g., "arrange/act/assert pattern required"]
+    84→
+    85→## Mocking
+    86→
+    87→**Framework:**
+    88→- [Tool: e.g., "Jest built-in mocking", "Vitest vi", "Sinon"]
+    89→- [Import mocking: e.g., "vi.mock() at top of file"]
+    90→
+    91→**Patterns:**
+    92→```typescript
+    93→[Show actual mocking pattern, e.g.:
+    94→
+    95→// Mock external dependency
+    96→vi.mock('./external-service', () => ({
+    97→  fetchData: vi.fn()
+    98→}));
+    99→
+   100→// Mock in test
+   101→const mockFetch = vi.mocked(fetchData);
+   102→mockFetch.mockResolvedValue({ data: 'test' });
+   103→]
+   104→```
+   105→
+   106→**What to Mock:**
+   107→- [e.g., "External APIs, file system, database"]
+   108→- [e.g., "Time/dates (use vi.useFakeTimers)"]
+   109→- [e.g., "Network calls (use mock fetch)"]
+   110→
+   111→**What NOT to Mock:**
+   112→- [e.g., "Pure functions, utilities"]
+   113→- [e.g., "Internal business logic"]
+   114→
+   115→## Fixtures and Factories
+   116→
+   117→**Test Data:**
+   118→```typescript
+   119→[Show pattern for creating test data, e.g.:
+   120→
+   121→// Factory pattern
+   122→function createTestUser(overrides?: Partial<User>): User {
+   123→  return {
+   124→    id: 'test-id',
+   125→    name: 'Test User',
+   126→    email: 'test@example.com',
+   127→    ...overrides
+   128→  };
+   129→}
+   130→
+   131→// Fixture file
+   132→// tests/fixtures/users.ts
+   133→export const mockUsers = [/* ... */];
+   134→]
+   135→```
+   136→
+   137→**Location:**
+   138→- [e.g., "tests/fixtures/ for shared fixtures"]
+   139→- [e.g., "factory functions in test file or tests/factories/"]
+   140→
+   141→## Coverage
+   142→
+   143→**Requirements:**
+   144→- [Target: e.g., "80% line coverage", "no specific target"]
+   145→- [Enforcement: e.g., "CI blocks <80%", "coverage for awareness only"]
+   146→
+   147→**Configuration:**
+   148→- [Tool: e.g., "built-in coverage via --coverage flag"]
+   149→- [Exclusions: e.g., "exclude *.test.ts, config files"]
+   150→
+   151→**View Coverage:**
+   152→```bash
+   153→[e.g., "npm run test:coverage"]
+   154→[e.g., "open coverage/index.html"]
+   155→```
+   156→
+   157→## Test Types
+   158→
+   159→**Unit Tests:**
+   160→- [Scope: e.g., "test single function/class in isolation"]
+   161→- [Mocking: e.g., "mock all external dependencies"]
+   162→- [Speed: e.g., "must run in <1s per test"]
+   163→
+   164→**Integration Tests:**
+   165→- [Scope: e.g., "test multiple modules together"]
+   166→- [Mocking: e.g., "mock external services, use real internal modules"]
+   167→- [Setup: e.g., "use test database, seed data"]
+   168→
+   169→**E2E Tests:**
+   170→- [Framework: e.g., "Playwright for E2E"]
+   171→- [Scope: e.g., "test full user flows"]
+   172→- [Location: e.g., "e2e/ directory separate from unit tests"]
+   173→
+   174→## Common Patterns
+   175→
+   176→**Async Testing:**
+   177→```typescript
+   178→[Show pattern, e.g.:
+   179→
+   180→it('should handle async operation', async () => {
+   181→  const result = await asyncFunction();
+   182→  expect(result).toBe('expected');
+   183→});
+   184→]
+   185→```
+   186→
+   187→**Error Testing:**
+   188→```typescript
+   189→[Show pattern, e.g.:
+   190→
+   191→it('should throw on invalid input', () => {
+   192→  expect(() => functionCall()).toThrow('error message');
+   193→});
+   194→
+   195→// Async error
+   196→it('should reject on failure', async () => {
+   197→  await expect(asyncCall()).rejects.toThrow('error message');
+   198→});
+   199→]
+   200→```
+   201→
+   202→**Snapshot Testing:**
+   203→- [Usage: e.g., "for React components only" or "not used"]
+   204→- [Location: e.g., "__snapshots__/ directory"]
+   205→
+   206→---
+   207→
+   208→*Testing analysis: [date]*
+   209→*Update when test patterns change*
+   210→```
+   211→
+   212→<good_examples>
+   213→```markdown
+   214→# Testing Patterns
+   215→
+   216→**Analysis Date:** 2025-01-20
+   217→
+   218→## Test Framework
+   219→
+   220→**Runner:**
+   221→- Vitest 1.0.4
+   222→- Config: vitest.config.ts in project root
+   223→
+   224→**Assertion Library:**
+   225→- Vitest built-in expect
+   226→- Matchers: toBe, toEqual, toThrow, toMatchObject
+   227→
+   228→**Run Commands:**
+   229→```bash
+   230→npm test                              # Run all tests
+   231→npm test -- --watch                   # Watch mode
+   232→npm test -- path/to/file.test.ts     # Single file
+   233→npm run test:coverage                 # Coverage report
+   234→```
+   235→
+   236→## Test File Organization
+   237→
+   238→**Location:**
+   239→- *.test.ts alongside source files
+   240→- No separate tests/ directory
+   241→
+   242→**Naming:**
+   243→- unit-name.test.ts for all tests
+   244→- No distinction between unit/integration in filename
+   245→
+   246→**Structure:**
+   247→```
+   248→src/
+   249→  lib/
+   250→    parser.ts
+   251→    parser.test.ts
+   252→  services/
+   253→    install-service.ts
+   254→    install-service.test.ts
+   255→  bin/
+   256→    install.ts
+   257→    (no test - integration tested via CLI)
+   258→```
+   259→
+   260→## Test Structure
+   261→
+   262→**Suite Organization:**
+   263→```typescript
+   264→import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+   265→
+   266→describe('ModuleName', () => {
+   267→  describe('functionName', () => {
+   268→    beforeEach(() => {
+   269→      // reset state
+   270→    });
+   271→
+   272→    it('should handle valid input', () => {
+   273→      // arrange
+   274→      const input = createTestInput();
+   275→
+   276→      // act
+   277→      const result = functionName(input);
+   278→
+   279→      // assert
+   280→      expect(result).toEqual(expectedOutput);
+   281→    });
+   282→
+   283→    it('should throw on invalid input', () => {
+   284→      expect(() => functionName(null)).toThrow('Invalid input');
+   285→    });
+   286→  });
+   287→});
+   288→```
+   289→
+   290→**Patterns:**
+   291→- Use beforeEach for per-test setup, avoid beforeAll
+   292→- Use afterEach to restore mocks: vi.restoreAllMocks()
+   293→- Explicit arrange/act/assert comments in complex tests
+   294→- One assertion focus per test (but multiple expects OK)
+   295→
+   296→## Mocking
+   297→
+   298→**Framework:**
+   299→- Vitest built-in mocking (vi)
+   300→- Module mocking via vi.mock() at top of test file
+   301→
+   302→**Patterns:**
+   303→```typescript
+   304→import { vi } from 'vitest';
+   305→import { externalFunction } from './external';
+   306→
+   307→// Mock module
+   308→vi.mock('./external', () => ({
+   309→  externalFunction: vi.fn()
+   310→}));
+   311→
+   312→describe('test suite', () => {
+   313→  it('mocks function', () => {
+   314→    const mockFn = vi.mocked(externalFunction);
+   315→    mockFn.mockReturnValue('mocked result');
+   316→
+   317→    // test code using mocked function
+   318→
+   319→    expect(mockFn).toHaveBeenCalledWith('expected arg');
+   320→  });
+   321→});
+   322→```
+   323→
+   324→**What to Mock:**
+   325→- File system operations (fs-extra)
+   326→- Child process execution (child_process.exec)
+   327→- External API calls
+   328→- Environment variables (process.env)
+   329→
+   330→**What NOT to Mock:**
+   331→- Internal pure functions
+   332→- Simple utilities (string manipulation, array helpers)
+   333→- TypeScript types
+   334→
+   335→## Fixtures and Factories
+   336→
+   337→**Test Data:**
+   338→```typescript
+   339→// Factory functions in test file
+   340→function createTestConfig(overrides?: Partial<Config>): Config {
+   341→  return {
+   342→    targetDir: '/tmp/test',
+   343→    global: false,
+   344→    ...overrides
+   345→  };
+   346→}
+   347→
+   348→// Shared fixtures in tests/fixtures/
+   349→// tests/fixtures/sample-command.md
+   350→export const sampleCommand = `---
+   351→description: Test command
+   352→---
+   353→Content here`;
+   354→```
+   355→
+   356→**Location:**
+   357→- Factory functions: define in test file near usage
+   358→- Shared fixtures: tests/fixtures/ (for multi-file test data)
+   359→- Mock data: inline in test when simple, factory when complex
+   360→
+   361→## Coverage
+   362→
+   363→**Requirements:**
+   364→- No enforced coverage target
+   365→- Coverage tracked for awareness
+   366→- Focus on critical paths (parsers, service logic)
+   367→
+   368→**Configuration:**
+   369→- Vitest coverage via c8 (built-in)
+   370→- Excludes: *.test.ts, bin/install.ts, config files
+   371→
+   372→**View Coverage:**
+   373→```bash
+   374→npm run test:coverage
+   375→open coverage/index.html
+   376→```
+   377→
+   378→## Test Types
+   379→
+   380→**Unit Tests:**
+   381→- Test single function in isolation
+   382→- Mock all external dependencies (fs, child_process)
+   383→- Fast: each test <100ms
+   384→- Examples: parser.test.ts, validator.test.ts
+   385→
+   386→**Integration Tests:**
+   387→- Test multiple modules together
+   388→- Mock only external boundaries (file system, process)
+   389→- Examples: install-service.test.ts (tests service + parser)
+   390→
+   391→**E2E Tests:**
+   392→- Not currently used
+   393→- CLI integration tested manually
+   394→
+   395→## Common Patterns
+   396→
+   397→**Async Testing:**
+   398→```typescript
+   399→it('should handle async operation', async () => {
+   400→  const result = await asyncFunction();
+   401→  expect(result).toBe('expected');
+   402→});
+   403→```
+   404→
+   405→**Error Testing:**
+   406→```typescript
+   407→it('should throw on invalid input', () => {
+   408→  expect(() => parse(null)).toThrow('Cannot parse null');
+   409→});
+   410→
+   411→// Async error
+   412→it('should reject on file not found', async () => {
+   413→  await expect(readConfig('invalid.txt')).rejects.toThrow('ENOENT');
+   414→});
+   415→```
+   416→
+   417→**File System Mocking:**
+   418→```typescript
+   419→import { vi } from 'vitest';
+   420→import * as fs from 'fs-extra';
+   421→
+   422→vi.mock('fs-extra');
+   423→
+   424→it('mocks file system', () => {
+   425→  vi.mocked(fs.readFile).mockResolvedValue('file content');
+   426→  // test code
+   427→});
+   428→```
+   429→
+   430→**Snapshot Testing:**
+   431→- Not used in this codebase
+   432→- Prefer explicit assertions for clarity
+   433→
+   434→---
+   435→
+   436→*Testing analysis: 2025-01-20*
+   437→*Update when test patterns change*
+   438→```
+   439→</good_examples>
+   440→
+   441→<guidelines>
+   442→**What belongs in TESTING.md:**
+   443→- Test framework and runner configuration
+   444→- Test file location and naming patterns
+   445→- Test structure (describe/it, beforeEach patterns)
+   446→- Mocking approach and examples
+   447→- Fixture/factory patterns
+   448→- Coverage requirements
+   449→- How to run tests (commands)
+   450→- Common testing patterns in actual code
+   451→
+   452→**What does NOT belong here:**
+   453→- Specific test cases (defer to actual test files)
+   454→- Technology choices (that's STACK.md)
+   455→- CI/CD setup (that's deployment docs)
+   456→
+   457→**When filling this template:**
+   458→- Check package.json scripts for test commands
+   459→- Find test config file (jest.config.js, vitest.config.ts)
+   460→- Read 3-5 existing test files to identify patterns
+   461→- Look for test utilities in tests/ or test-utils/
+   462→- Check for coverage configuration
+   463→- Document actual patterns used, not ideal patterns
+   464→
+   465→**Useful for phase planning when:**
+   466→- Adding new features (write matching tests)
+   467→- Refactoring (maintain test patterns)
+   468→- Fixing bugs (add regression tests)
+   469→- Understanding verification approach
+   470→- Setting up test infrastructure
+   471→
+   472→**Analysis approach:**
+   473→- Check package.json for test framework and scripts
+   474→- Read test config file for coverage, setup
+   475→- Examine test file organization (collocated vs separate)
+   476→- Review 5 test files for patterns (mocking, structure, assertions)
+   477→- Look for test utilities, fixtures, factories
+   478→- Note any test types (unit, integration, e2e)
+   479→- Document commands for running tests
+   480→</guidelines>
+   481→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

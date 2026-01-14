@@ -1,0 +1,188 @@
+---
+phase: 04-topic-mode-usability
+plan: 01
+type: execute
+---
+
+<objective>
+Add date range selection to Topic Mode search.
+
+Purpose: Allow users to filter search results by date range before searching.
+Output: Date pickers above search UI, search filtered to selected range.
+</objective>
+
+<execution_context>
+@.planning/phases/04-topic-mode-usability/04-CONTEXT.md
+</execution_context>
+
+<context>
+@src/App.tsx
+@src/topicWorker.ts
+@src/types.ts
+
+**Existing date picker infrastructure:**
+- DatePicker component already imported in App.tsx
+- startDate/endDate state exists for Group/User modes
+- Dark theme styling already in App.css
+
+**Current search flow:**
+1. User enters query or clicks theme
+2. handleSearch() posts to worker with query, useSemanticExpansion, searchMode
+3. Worker searches all messages and returns results
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add date range to SearchRequest type</name>
+  <files>src/types.ts</files>
+  <action>
+Update SearchRequest interface to include optional date range:
+
+```typescript
+export interface SearchRequest {
+    type: 'search';
+    query: string;
+    useSemanticExpansion: boolean;
+    searchMode: 'and' | 'or';
+    dateRange?: { start: string | null; end: string | null };
+}
+```
+  </action>
+  <verify>TypeScript compiles without errors</verify>
+  <done>SearchRequest type includes optional dateRange</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add Topic Mode date state and UI</name>
+  <files>src/App.tsx</files>
+  <action>
+1. Add state for Topic Mode date range (separate from Group/User mode dates):
+```typescript
+const [topicStartDate, setTopicStartDate] = useState<Date | null>(null);
+const [topicEndDate, setTopicEndDate] = useState<Date | null>(null);
+```
+
+2. Add date pickers above the "Guided Themes" section (after topicIndex loads, before theme grid):
+```tsx
+{topicIndex && (
+    <div className="field">
+        <label>Date Range (optional)</label>
+        <div className="dates">
+            <DatePicker
+                selected={topicStartDate}
+                onChange={(date) => setTopicStartDate(date)}
+                selectsStart
+                startDate={topicStartDate}
+                endDate={topicEndDate}
+                placeholderText="Start date"
+                isClearable
+                dateFormat="yyyy-MM-dd"
+            />
+            <DatePicker
+                selected={topicEndDate}
+                onChange={(date) => setTopicEndDate(date)}
+                selectsEnd
+                startDate={topicStartDate}
+                endDate={topicEndDate}
+                minDate={topicStartDate}
+                placeholderText="End date"
+                isClearable
+                dateFormat="yyyy-MM-dd"
+            />
+        </div>
+    </div>
+)}
+```
+
+3. Update handleSearch to pass date range:
+```typescript
+const handleSearch = (...) => {
+    // ... existing code ...
+    topicWorkerRef.current?.postMessage({
+        type: 'search',
+        query: keywords.join(','),
+        useSemanticExpansion: useSemantic,
+        searchMode: mode,
+        dateRange: {
+            start: topicStartDate?.toISOString() ?? null,
+            end: topicEndDate?.toISOString() ?? null,
+        },
+    });
+};
+```
+  </action>
+  <verify>
+- `npm run build` succeeds
+- Date pickers appear above Guided Themes when ZIP is loaded
+  </verify>
+  <done>Topic Mode has date range UI and passes to worker</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Filter by date in worker</name>
+  <files>src/topicWorker.ts</files>
+  <action>
+Update searchProcess to filter messages by date range:
+
+1. Extract date range from request:
+```typescript
+const { query, useSemanticExpansion, searchMode, dateRange } = request;
+```
+
+2. Add date filtering helper:
+```typescript
+const isWithinDateRange = (msgDate: string | undefined, range: { start: string | null; end: string | null }): boolean => {
+    if (!msgDate) return true; // Include messages without dates
+    if (!range.start && !range.end) return true; // No filter
+
+    const date = new Date(msgDate).getTime();
+    if (range.start && date < new Date(range.start).getTime()) return false;
+    if (range.end && date > new Date(range.end).getTime()) return false;
+    return true;
+};
+```
+
+3. Apply filter in the search loop before checking term matches:
+```typescript
+for (let i = 0; i < chat.messages.length; i++) {
+    const message = chat.messages[i];
+
+    // Skip if outside date range
+    if (dateRange && !isWithinDateRange(message.date as string | undefined, dateRange)) {
+        continue;
+    }
+
+    // ... existing term matching logic ...
+}
+```
+  </action>
+  <verify>
+- `npm run build` succeeds
+- Search with date range returns only messages within range
+- Search without date range returns all matching messages
+  </verify>
+  <done>Worker filters search results by date range</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run build` succeeds
+- [ ] Date pickers appear in Topic Mode after ZIP loads
+- [ ] Date pickers styled consistently with rest of app
+- [ ] Search respects date range filter
+- [ ] Clearing dates removes the filter
+- [ ] Theme clicks also respect date range
+</verification>
+
+<success_criteria>
+- All tasks completed
+- Date range filtering works for both ad-hoc search and theme clicks
+- No TypeScript errors
+</success_criteria>
+
+<output>
+After completion, create 04-01-SUMMARY.md with implementation details.
+</output>

@@ -1,0 +1,90 @@
+/**
+ * Linear User Sync
+ *
+ * Syncs Linear workspace users to tester profiles for assignment scoring.
+ * Uses the Linear SDK to fetch users and upserts them to the tester store.
+ *
+ * Note: slackUserId is left empty - requires manual mapping or Phase 3 Slack lookup.
+ */
+
+import { getLinearClient } from './client.js';
+import { upsertTester } from '../store/tester-store.js';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/**
+ * Result of a user sync operation.
+ */
+export interface SyncResult {
+  /** Number of users successfully synced */
+  synced: number;
+  /** Number of users skipped (inactive) */
+  skipped: number;
+  /** Error messages for failed upserts */
+  errors: string[];
+}
+
+// ============================================================================
+// User Sync
+// ============================================================================
+
+/**
+ * Sync all active Linear workspace users to tester profiles.
+ *
+ * - Fetches all users from Linear API
+ * - Skips inactive users
+ * - Upserts each active user as a TesterProfile
+ * - Errors per-user don't fail entire sync
+ *
+ * Re-running sync is safe: upsertTester preserves existing stats.
+ */
+export async function syncLinearUsers(): Promise<SyncResult> {
+  const result: SyncResult = {
+    synced: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  const client = getLinearClient();
+
+  // Fetch all users with pagination
+  let users = await client.users();
+
+  while (true) {
+    for (const user of users.nodes) {
+      // Skip inactive users
+      if (!user.active) {
+        result.skipped++;
+        continue;
+      }
+
+      try {
+        await upsertTester({
+          id: user.id,
+          linearUserId: user.id,
+          slackUserId: '', // Empty - manual mapping needed or Phase 3 Slack lookup
+          displayName: user.name,
+          email: user.email ?? '',
+          expertise: [], // Manual configuration
+          availability: 'available',
+        });
+        result.synced++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        result.errors.push(`Failed to sync user ${user.id} (${user.name}): ${message}`);
+      }
+    }
+
+    // Check for more pages
+    if (!users.pageInfo.hasNextPage) {
+      break;
+    }
+
+    // Fetch next page
+    users = await users.fetchNext();
+  }
+
+  return result;
+}

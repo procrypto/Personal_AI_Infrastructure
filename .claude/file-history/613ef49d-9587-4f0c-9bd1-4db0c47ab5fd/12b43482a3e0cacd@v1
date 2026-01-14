@@ -1,0 +1,243 @@
+#!/usr/bin/env node
+/**
+ * CLI Interface
+ *
+ * Simple CLI for configuring and running the analysis autopilot.
+ *
+ * Commands:
+ *   watch <mint>     - Add token to watchlist
+ *   unwatch <mint>   - Remove token from watchlist
+ *   list             - List watchlist
+ *   templates        - List available templates
+ *   use <template>   - Add a template to active rules
+ *   rules            - List active rules
+ *   config           - Show current config
+ *   run              - Start analysis loop
+ */
+
+import { configStore } from './config/index.js';
+import { templates, listTemplates, getTemplate, RuleEngine } from './rules/index.js';
+import { localApi } from './api/index.js';
+
+const HELP = `
+Token Analysis Autopilot CLI
+
+Commands:
+  watch <mint> [symbol]  Add token to watchlist
+  unwatch <mint>         Remove token from watchlist
+  list                   List watchlist
+
+  templates              List available rule templates
+  use <template>         Add a template to active rules
+  remove <rule-id>       Remove a rule set
+  rules                  List active rules
+
+  config                 Show current config
+  mode <paper|live>      Set trigger mode
+  size <sol>             Set default position size
+
+  run                    Start analysis loop
+  analyze <mint>         Analyze a single token
+
+  help                   Show this help
+`;
+
+async function main() {
+  const args = process.argv.slice(2);
+  const command = args[0]?.toLowerCase();
+
+  await configStore.load();
+
+  switch (command) {
+    case 'watch': {
+      const mint = args[1];
+      const symbol = args[2];
+      if (!mint) {
+        console.error('Usage: watch <mint> [symbol]');
+        process.exit(1);
+      }
+      configStore.addToWatchlist(mint, symbol);
+      await configStore.save();
+      console.log(`Added ${symbol || mint} to watchlist`);
+      break;
+    }
+
+    case 'unwatch': {
+      const mint = args[1];
+      if (!mint) {
+        console.error('Usage: unwatch <mint>');
+        process.exit(1);
+      }
+      if (configStore.removeFromWatchlist(mint)) {
+        await configStore.save();
+        console.log(`Removed ${mint} from watchlist`);
+      } else {
+        console.log('Token not found in watchlist');
+      }
+      break;
+    }
+
+    case 'list': {
+      const watchlist = configStore.getWatchlist();
+      if (watchlist.length === 0) {
+        console.log('Watchlist is empty');
+      } else {
+        console.log('\nWatchlist:');
+        for (const token of watchlist) {
+          console.log(`  ${token.symbol || 'Unknown'} - ${token.mint}`);
+        }
+      }
+      break;
+    }
+
+    case 'templates': {
+      console.log('\nAvailable Templates:');
+      for (const id of listTemplates()) {
+        const template = templates[id];
+        console.log(`  ${id}`);
+        console.log(`    ${template.description}`);
+        console.log(`    Mode: ${template.mode} (${template.rules.length} rules)`);
+      }
+      break;
+    }
+
+    case 'use': {
+      const templateId = args[1];
+      if (!templateId) {
+        console.error('Usage: use <template>');
+        console.error('Available:', listTemplates().join(', '));
+        process.exit(1);
+      }
+      const template = getTemplate(templateId);
+      if (!template) {
+        console.error(`Template not found: ${templateId}`);
+        console.error('Available:', listTemplates().join(', '));
+        process.exit(1);
+      }
+      configStore.addRuleSet(template);
+      await configStore.save();
+      console.log(`Added template: ${template.name}`);
+      break;
+    }
+
+    case 'remove': {
+      const ruleId = args[1];
+      if (!ruleId) {
+        console.error('Usage: remove <rule-id>');
+        process.exit(1);
+      }
+      if (configStore.removeRuleSet(ruleId)) {
+        await configStore.save();
+        console.log(`Removed rule set: ${ruleId}`);
+      } else {
+        console.log('Rule set not found');
+      }
+      break;
+    }
+
+    case 'rules': {
+      const ruleSets = configStore.getRuleSets();
+      if (ruleSets.length === 0) {
+        console.log('No active rule sets. Use "use <template>" to add one.');
+      } else {
+        console.log('\nActive Rule Sets:');
+        for (const ruleSet of ruleSets) {
+          console.log(`\n  ${ruleSet.name} (${ruleSet.id})`);
+          console.log(`    Mode: ${ruleSet.mode}`);
+          console.log(`    Rules:`);
+          for (const rule of ruleSet.rules) {
+            const status = rule.enabled ? '✓' : '✗';
+            console.log(`      ${status} ${rule.name} (${rule.ruleType})`);
+          }
+        }
+      }
+      break;
+    }
+
+    case 'config': {
+      const config = configStore.get();
+      console.log('\nCurrent Configuration:');
+      console.log(`  Watchlist: ${config.watchlist.length} tokens`);
+      console.log(`  Rule Sets: ${config.ruleSets.length} active`);
+      console.log(`  Trigger Mode: ${config.trigger.mode}`);
+      console.log(`  Trigger Enabled: ${config.trigger.enabled}`);
+      console.log(`  Position Size: ${config.trigger.defaultPositionSizeSol} SOL`);
+      console.log(`  Poll Interval: ${config.pollIntervalMs}ms`);
+      break;
+    }
+
+    case 'mode': {
+      const mode = args[1] as 'paper' | 'live';
+      if (!mode || !['paper', 'live'].includes(mode)) {
+        console.error('Usage: mode <paper|live>');
+        process.exit(1);
+      }
+      configStore.setTriggerMode(mode);
+      await configStore.save();
+      console.log(`Set trigger mode to: ${mode}`);
+      break;
+    }
+
+    case 'size': {
+      const size = parseFloat(args[1]);
+      if (isNaN(size) || size <= 0) {
+        console.error('Usage: size <sol_amount>');
+        process.exit(1);
+      }
+      configStore.setPositionSize(size);
+      await configStore.save();
+      console.log(`Set default position size to: ${size} SOL`);
+      break;
+    }
+
+    case 'analyze': {
+      const mint = args[1];
+      if (!mint) {
+        console.error('Usage: analyze <mint>');
+        process.exit(1);
+      }
+
+      const ruleSets = configStore.getRuleSets();
+      if (ruleSets.length === 0) {
+        console.error('No active rule sets. Use "use <template>" to add one.');
+        process.exit(1);
+      }
+
+      console.log(`\nAnalyzing ${mint}...`);
+
+      const engine = new RuleEngine({ api: localApi });
+      for (const ruleSet of ruleSets) {
+        engine.addRulesFromConfig(ruleSet.rules);
+      }
+
+      const signals = await engine.analyzeToken(mint);
+      const result = engine.aggregateSignals(signals);
+
+      console.log(`\nResult: ${result.action.toUpperCase()} (confidence: ${(result.confidence * 100).toFixed(0)}%)`);
+
+      if (signals.length > 0) {
+        console.log('\nSignals:');
+        for (const signal of signals) {
+          const emoji = signal.type === 'buy' ? '🟢' : signal.type === 'sell' ? '🔴' : '⚪';
+          console.log(`  ${emoji} ${signal.ruleName}: ${signal.reason}`);
+        }
+      } else {
+        console.log('\nNo signals triggered');
+      }
+      break;
+    }
+
+    case 'run': {
+      console.log('Starting analysis loop... (Ctrl+C to stop)');
+      // This will be implemented with the trigger system
+      console.log('Run mode not yet implemented. Use "analyze <mint>" for now.');
+      break;
+    }
+
+    case 'help':
+    default:
+      console.log(HELP);
+  }
+}
+
+main().catch(console.error);

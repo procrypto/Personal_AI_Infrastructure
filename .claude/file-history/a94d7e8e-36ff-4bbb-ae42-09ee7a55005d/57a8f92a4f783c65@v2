@@ -1,0 +1,63 @@
+# TrenchBench API
+
+ClickHouse-backed REST API for Community Tracker and TrenchBench.
+
+## Quick Start
+
+```bash
+bun install
+cp env.example .env  # Add ClickHouse credentials
+bun dev              # http://localhost:8080
+```
+
+## Deployment
+
+| Environment | Trigger | Target |
+|-------------|---------|--------|
+| Local | `bun dev` | localhost:8080 |
+| Beta | Push to `main` | Cloud Run (bonkbotbeta) |
+| Production | Push `v*` tag | Cloud Run (data-backend-prod) |
+
+### Local Development
+
+```bash
+bun install
+cp env.example .env
+bun dev
+```
+
+Credentials in `.env`:
+```env
+CLICKHOUSE_KEY_ID=...
+CLICKHOUSE_KEY_SECRET=...
+CLICKHOUSE_SERVICE_ID=...
+```
+
+### Docker
+
+```bash
+docker build -t trenchbench-api .
+docker run -p 8080:8080 --env-file .env trenchbench-api
+```
+
+### GCP Cloud Run
+
+CI/CD via GitHub Actions with Workload Identity Federation.
+
+**Setup:** Run `scripts/gcp-setup.sh <project-id>` to configure:
+- Workload Identity Federation (keyless auth)
+- Service Account with required permissions
+- Artifact Registry for container images
+- Secret Manager for ClickHouse credentials
+
+See [docs/GCP-SETUP.md](docs/GCP-SETUP.md) for detailed instructions.
+
+**Workflows:**
+- `.github/workflows/deploy.yml` - Beta (main branch)
+- `.github/workflows/deploy-prod.yml` - Production (v* tags)
+
+## Documentation
+
+- [ENDPOINTS.md](ENDPOINTS.md) - API endpoints and usage
+- [docs/GCP-SETUP.md](docs/GCP-SETUP.md) - GCP infrastructure setup
+- [CHANGELOG.md](CHANGELOG.md) - Version history

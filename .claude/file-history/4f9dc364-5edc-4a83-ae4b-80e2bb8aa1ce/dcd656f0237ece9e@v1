@@ -1,0 +1,75 @@
+/**
+ * Signal Processor
+ *
+ * Dual-path signal generation:
+ * - Fast path: processMarketData() for simple rules (no OHLCV needed)
+ * - Complex path: processOHLCV() for rules requiring candlestick data
+ *
+ * Both paths are synchronous - no API calls, keeps latency under 100ms.
+ */
+
+import type { TokenMarketData, OHLCV } from '../api/types.js';
+import type { Signal, AnalysisContext } from '../rules/types.js';
+import { RuleEngine } from '../rules/engine.js';
+import { validateTokenMarketData } from '../data/validator.js';
+import { normalizeTokenMarketData } from '../data/normalizer.js';
+
+export interface SignalProcessorOptions {
+  /**
+   * Optional function to look up market data by mint.
+   * Used to enrich OHLCV processing context when marketData is not explicitly passed.
+   */
+  marketDataProvider?: () => Map<string, TokenMarketData>;
+}
+
+export class SignalProcessor {
+  private engine: RuleEngine;
+  private marketDataProvider?: () => Map<string, TokenMarketData>;
+
+  constructor(engine: RuleEngine, options?: SignalProcessorOptions) {
+    this.engine = engine;
+    this.marketDataProvider = options?.marketDataProvider;
+  }
+
+  /**
+   * Process market data and generate signals
+   * Fast path: validate → normalize → filter simple rules → run rules → return signals
+   * Only runs rules that don't require OHLCV data (simple rules)
+   * @param data Incoming market data (potentially partial/dirty)
+   * @returns Array of signals (empty if validation fails or no signals)
+   */
+  processMarketData(data: TokenMarketData): Signal[] {
+    // Validate incoming data
+    const validation = validateTokenMarketData(data);
+    if (!validation.valid) {
+      console.warn(`Invalid market data for ${data.mint}:`, validation.errors);
+      return [];
+    }
+
+    // Normalize data (lowercase mint, fill defaults)
+    const normalizedData = normalizeTokenMarketData(data);
+
+    // Filter to only simple rules (those that don't require OHLCV)
+    const allRules = this.engine.getRules();
+    const simpleRules = allRules.filter(rule => rule.config.requiresOHLCV !== true);
+
+    // Run only simple rules against market data
+    const context = { token: normalizedData, ohlcv: [], trades: [] };
+    const signals: Signal[] = [];
+
+    try {
+      for (const rule of simpleRules) {
+        try {
+          const signal = rule.analyze(context);
+          if (signal) signals.push(signal);
+        } catch (error) {
+          console.error(`Rule ${rule.config.id} error:`, error);
+        }
+      }
+      return signals;
+    } catch (error) {
+      console.error(`Error processing market data for ${normalizedData.mint}:`, error);
+      return [];
+    }
+  }
+}

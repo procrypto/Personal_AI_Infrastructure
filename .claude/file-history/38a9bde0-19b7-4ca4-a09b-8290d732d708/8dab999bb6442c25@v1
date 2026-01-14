@@ -1,0 +1,147 @@
+---
+phase: 06-store-migration
+plan: 01
+subsystem: ui
+tags: [zustand, customevents, refactor, cross-widget-sync]
+
+# Dependency graph
+requires:
+  - phase: 03-cross-widget-sync
+    provides: Store subscriptions for selectedTokenMints/selectedTraderAddresses
+provides:
+  - Pure store-based cross-widget selection sync
+  - Cleaner widget code without CustomEvent fallbacks
+affects: [07-integration-pr]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - Store-only cross-widget sync (no CustomEvent fallback)
+
+key-files:
+  created: []
+  modified:
+    - apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx
+    - apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx
+    - apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx
+
+key-decisions:
+  - "Remove all cross-widget CustomEvent code since store subscriptions (Phase 3) handle sync"
+
+patterns-established:
+  - "Store-only sync: All cross-widget selection sync uses trenchBenchStore exclusively"
+
+issues-created: []
+
+# Metrics
+duration: 3min
+completed: 2026-01-13
+
+# Debugging
+debugging:
+  sessions: 0
+  time-spent: 0min
+  patterns: []
+---
+
+# Phase 6 Plan 01: Store Migration Summary
+
+**Removed all cross-widget selection CustomEvent listeners and dispatchers, completing migration to pure store-based sync**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-13T01:55:15Z
+- **Completed:** 2026-01-13T01:58:38Z
+- **Tasks:** 3
+- **Files modified:** 3
+
+## Accomplishments
+
+- Removed 76 lines from Intel Grid (3 CustomEvent listener useEffects)
+- Removed 42 lines from Vantage (1 CustomEvent listener useEffect)
+- Removed 119 lines from Anomalyzer (3 listener useEffects + dispatcher code)
+- Total: 237 lines of CustomEvent code removed
+- Store-based sync is now the sole mechanism for cross-widget selection
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Remove Intel Grid CustomEvent listeners** - `fcacb87e1` (refactor)
+2. **Task 2: Remove Vantage CustomEvent listener** - `323d66b19` (refactor)
+3. **Task 3: Remove Anomalyzer CustomEvent code** - `30de698ac` (refactor)
+
+**Plan metadata:** (pending)
+
+## Files Modified
+
+- `apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx` - Removed vantage-token-select, vantage-token-deselect, anomalyzer-token-select listeners
+- `apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx` - Removed anomalyzer-token-select listener
+- `apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx` - Removed all cross-widget listeners and CustomEvent dispatchers from handleAnomalySelect
+
+## CustomEvents Removed
+
+**Intel Grid:**
+- `vantage-token-select` listener
+- `vantage-token-deselect` listener
+- `anomalyzer-token-select` listener
+
+**Vantage:**
+- `anomalyzer-token-select` listener
+- (intel-grid-token-select was already removed in prior work)
+
+**Anomalyzer:**
+- `intel-grid-token-select` listener
+- `vantage-token-select` listener
+- `vantage-token-deselect` listener
+- `vantage-kol-select` listener
+- `anomalyzer-token-select` dispatchers (add/clear)
+- `vantage-kol-select` dispatcher
+- `vantage-token-deselect` dispatcher
+
+## CustomEvents Preserved
+
+Widget-instance sync events (for syncing settings across multiple instances of same widget type):
+
+- `intel-grid-tab-change`, `intel-grid-sort-change`, `intel-grid-pause-change`, `intel-grid-viewmode-change`
+- `vantage-settings-toggle`, `vantage-view-mode-change`
+- `anomalyzer-filter-change`, `anomalyzer-signal-filter-change`
+
+## Decisions Made
+
+- Remove CustomEvent fallbacks entirely since Phase 3 store subscriptions are working correctly
+- Keep clarifying comments in each widget noting that cross-widget sync moved to store
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Debugging Sessions
+
+None - all verifications passed on first attempt.
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions
+
+**Notes:** Clean execution, all three widgets modified as planned.
+
+## Next Step
+
+Ready for Phase 7: Integration & PR
+
+---
+*Phase: 06-store-migration*
+*Completed: 2026-01-13*

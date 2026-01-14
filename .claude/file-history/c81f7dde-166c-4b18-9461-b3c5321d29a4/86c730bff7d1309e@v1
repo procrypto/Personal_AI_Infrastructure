@@ -1,0 +1,174 @@
+# Context for nanochat-deploy
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+GCP infrastructure deployment for NanoChat, an internal SQL assistant powered by a fine-tuned LLM. Provides a chat interface for analysts to ask questions about ClickHouse/BigQuery data. Uses Terraform for infrastructure, Identity-Aware Proxy for auth, and supports T4/A100 GPUs for model inference.
+
+**Critical constraint**: GPU costs can be significant ($150-1,500/mo) - use work-hours-only scheduling when possible.
+
+## Architecture
+
+### High-Level
+
+```
+Users (Google Workspace)
+         │
+         ▼
+┌─────────────────────┐
+│  Cloud Load Balancer │
+│  (HTTPS + SSL)       │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Identity-Aware      │
+│  Proxy (IAP)         │◄── Google Auth
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Compute Engine      │
+│  (T4/A100 GPU)       │
+│  ┌───────────────┐  │
+│  │  NanoChat     │  │
+│  │  Server       │  │
+│  └───────────────┘  │
+└─────────────────────┘
+```
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Infrastructure | Terraform | GCP provisioning |
+| Compute | GCE (T4/A100 GPU) | Model inference |
+| Auth | Identity-Aware Proxy | Google Workspace SSO |
+| API | Python/FastAPI | Chat server |
+| Model | NanoChat (fine-tuned) | LLM inference |
+
+### Project Structure
+
+```
+terraform/        # GCP infrastructure
+  gcp/              # Main Terraform configs
+api/              # Chat server
+docker/           # Container configs
+scripts/          # Deployment utilities
+  update_model.sh   # Model update script
+training/         # Training utilities
+docs/             # User and admin guides
+data/             # Static data
+```
+
+## Capabilities
+
+### Cost Tiers
+
+| Config | Monthly Cost | Use Case |
+|--------|-------------|----------|
+| T4 GPU (always on) | ~$350/mo | Full availability |
+| T4 GPU (work hours) | ~$150/mo | Cost-optimized |
+| A100 GPU (always on) | ~$1,500/mo | High performance |
+
+### Model Versions
+
+| Model | Description | Training Data |
+|-------|-------------|---------------|
+| model_000171.pt | v3 (current) | 2,770 examples |
+
+## Working in This Repo
+
+### Common Tasks
+
+#### Deploy Infrastructure
+
+```bash
+cd terraform/gcp
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with project ID
+
+terraform init
+terraform plan
+terraform apply
+```
+
+#### Update Model
+
+```bash
+./scripts/update_model.sh <step_number>
+```
+
+#### Monitor Service
+
+```bash
+# Check status
+gcloud compute ssh analyst-ai-server --command="sudo systemctl status nanochat"
+
+# View logs
+gcloud compute ssh analyst-ai-server --command="sudo journalctl -u nanochat -f"
+```
+
+#### Local Development
+
+```bash
+# With Docker
+docker-compose up
+
+# Without Docker
+cd api
+pip install -r requirements.txt
+python server.py
+```
+
+### Finding Code
+
+| Task | Path |
+|------|------|
+| Infrastructure | `terraform/gcp/` |
+| API server | `api/` |
+| Docker config | `docker/` |
+| Deployment scripts | `scripts/` |
+| User documentation | `docs/` |
+
+### Things to Avoid
+
+- Running A100 instances without budget approval
+- Leaving instances running overnight unnecessarily
+- Modifying Terraform state manually
+- Deploying untested model versions
+
+## Related Documentation
+
+- [README.md](README.md) - Quick start
+- [API_QUICKSTART.md](API_QUICKSTART.md) - API setup
+- [QUICKSTART.md](QUICKSTART.md) - Full deployment guide
+- [PROGRESS.md](PROGRESS.md) - Training progress
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) - End user guide
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| nanochat-data-pipeline | Training data, model weights |
+| HuggingFace | Model hosting |
+| Lambda Labs | Training infrastructure |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| Internal analysts | SQL assistant chat interface |
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] IAP access control list management
+- [ ] GPU scheduling automation
+- [ ] Model evaluation and rollback procedures
+- [ ] Cost monitoring alerts
+-->

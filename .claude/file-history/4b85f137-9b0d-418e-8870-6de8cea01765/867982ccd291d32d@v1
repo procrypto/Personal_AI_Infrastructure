@@ -1,0 +1,126 @@
+---
+phase: 26-integration-testing
+plan: 01
+type: execute
+domain: testing
+---
+
+<objective>
+Validate v2.0 data feed pipeline with unit tests for feed adapters and integration validation.
+
+Purpose: Ensure feed adapters correctly transform NATS data to backend format before CLI integration.
+Output: Feed adapter tests passing, v2.0 frontend ready for CLI backend connection.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./26-01-SUMMARY.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase summaries (v2.0 backend integration):
+@.planning/phases/23-websocket-client-refactor/23-01-SUMMARY.md
+@.planning/phases/24-data-feed-implementation/24-01-SUMMARY.md
+@.planning/phases/25-command-event-protocol/25-01-SUMMARY.md
+
+# Key files for this phase:
+@apps/web-terminal/src/websocket/autopilot/feedAdapters.ts
+@apps/web-terminal/src/websocket/autopilot/eventParser.ts
+@apps/web-terminal/src/websocket/autopilot/messageParser.test.ts
+
+**Tech stack available:** vitest, jsdom, React Testing Library
+**Established patterns:** Pure function extraction for testability (Phase 25)
+**Constraining decisions:**
+- Phase 24: Feed types use 'type' field (not 'feed') per backend protocol
+- Phase 24: CVDData interface matches backend spec exactly
+- Phase 25: Parser validates 9 event types
+
+**Issues being addressed:** None
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create feed adapter unit tests</name>
+  <files>apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts</files>
+  <action>
+Create comprehensive tests for all feed adapter functions:
+
+1. toMarketDataFeed - Verify wraps MarketDataMessage with type: 'market_data_feed'
+2. toOhlcvFeed - Verify OHLCV conversion (string→number, wraps in array)
+3. toTradeFeed - Verify trade conversion with price calculation
+4. toCvdFeed - Verify CVD calculation from trading_stats_1h, returns null when missing
+
+Use existing messageParser.test.ts as pattern reference. Mock minimal MarketDataMessage, OHLCVMessage, TradeMessage objects with required fields only.
+
+Avoid: Testing React hooks (useAutopilotDataForwarder) - hooks require more complex setup and the adapters are the critical logic.
+  </action>
+  <verify>vitest run apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts --reporter=verbose</verify>
+  <done>All 4 feed adapter functions have passing tests covering happy path and edge cases</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Run full autopilot test suite</name>
+  <files>apps/web-terminal/src/websocket/autopilot/</files>
+  <action>
+Run all autopilot WebSocket tests to validate v2.0 pipeline integrity:
+- messageParser.test.ts (event parsing)
+- feedAdapters.test.ts (data transformation)
+
+Ensure no regressions introduced.
+  </action>
+  <verify>vitest run apps/web-terminal/src/websocket/autopilot/ --reporter=verbose</verify>
+  <done>All autopilot WebSocket tests pass (messageParser + feedAdapters)</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `vitest run apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts` passes
+- [ ] `vitest run apps/web-terminal/src/websocket/autopilot/` passes all tests
+- [ ] No TypeScript errors in test files
+- [ ] Test coverage includes: toMarketDataFeed, toOhlcvFeed, toTradeFeed, toCvdFeed
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- Feed adapter tests provide confidence for CLI integration
+- v2.0 frontend data pipeline validated
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/26-integration-testing/26-01-SUMMARY.md`:
+
+# Phase 26 Plan 01: Feed Adapter Testing Summary
+
+**[Substantive one-liner about what was validated]**
+
+## Accomplishments
+
+- [Test counts and coverage]
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/websocket/autopilot/feedAdapters.test.ts` - New test file
+
+## Decisions Made
+
+[Any test design decisions, or "None"]
+
+## Issues Encountered
+
+[Problems and resolutions, or "None"]
+
+## Next Phase Readiness
+
+- v2.0 Backend Integration milestone complete
+- Frontend ready for CLI backend connection
+- All data transformation logic validated
+</output>

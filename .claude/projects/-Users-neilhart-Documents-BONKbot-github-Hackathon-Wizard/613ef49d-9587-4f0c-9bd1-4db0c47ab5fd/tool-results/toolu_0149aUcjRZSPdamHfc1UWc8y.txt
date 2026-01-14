@@ -1,0 +1,35 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   820→          blockEntries: marketFilterResult.blockEntries,
+   821→          exitAll: marketFilterResult.exitAll,
+   822→        });
+   823→
+   824→        // Broadcast positions with live P&L
+   825→        const positionData: PositionData[] = [];
+   826→        if (openTrades.length > 0) {
+   827→          console.log(`[WS] Open trades: ${openTrades.length}, mints: ${openTrades.map(t => t.symbol).join(', ')}`);
+   828→        }
+   829→        for (const trade of openTrades) {
+   830→          const marketData = marketDataCache.get(trade.mint);
+   831→          if (marketData) {
+   832→            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   833→            positionData.push({
+   834→              mint: trade.mint,
+   835→              symbol: trade.symbol,
+   836→              action: trade.action,
+   837→              entryPriceSol: trade.entryPriceSol,
+   838→              currentPriceSol: marketData.price_sol,
+   839→              positionSizeSol: trade.positionSizeSol,
+   840→              pnlPercent: pnl.pnlPercent,
+   841→              pnlSol: pnl.pnlSol,
+   842→              entryTime: trade.timestamp,
+   843→            });
+   844→          } else {
+   845→            console.log(`[WS] No market data for ${trade.symbol} (${trade.mint.slice(0, 8)}...)`);
+   846→          }
+   847→        }
+   848→        console.log(`[WS] Broadcasting ${positionData.length} positions`);
+   849→        wsServer.broadcastPositions(positionData);
+   850→
+   851→        // Broadcast signals for magic exits
+   852→        for (const closed of magicExitResults) {
+   853→          wsServer.broadcastSignal({

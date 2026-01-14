@@ -1,0 +1,242 @@
+# Testing Patterns
+
+**Analysis Date:** 2025-01-07
+
+## Test Framework
+
+**Runner:**
+- Custom-built smoke test framework (no Jest, Vitest, Mocha)
+- TypeScript executed directly via tsx
+
+**Assertion Library:**
+- Custom assertions in `src/core/utils.ts`
+- Throws Error on failure
+
+**Run Commands:**
+```bash
+npm test                              # Run all systems
+npm run test:web-api                  # Web API system only
+npm run test:telegram                 # Telegram system only
+ENV=staging npm test                  # Specific environment
+TG_PHASE=migration npm run test:telegram  # Telegram phase
+```
+
+## Test File Organization
+
+**Location:**
+- `src/systems/{system}/scripts/{feature}-check.ts`
+- Co-located with system runner (`run.ts`)
+
+**Naming:**
+- `{feature}-check.ts` for all test files
+- Examples: `health-check.ts`, `auth-check.ts`, `trading-api-check.ts`
+
+**Structure:**
+```
+src/systems/
+  web-api/
+    run.ts                    # System orchestrator
+    scripts/
+      health-check.ts         # Health tests (4 tests)
+      auth-check.ts           # Auth tests (3 tests)
+      user-api-check.ts       # User API tests
+      trading-api-check.ts    # Trading tests
+      dependency-check.ts     # Dependency tests (6 tests)
+      websocket-check.ts      # WebSocket tests (3 tests)
+  telegram/
+    run.ts
+    scripts/
+      tg-canary-check.ts      # Bot health tests
+```
+
+## Test Structure
+
+**Suite Organization:**
+```typescript
+// Each test file exports test functions
+export async function runHealthChecks(config: WebApiConfig): Promise<TestSuiteResult> {
+    const results: TestResult[] = [];
+
+    results.push(await testHealthEndpoint(config));
+    results.push(await testResponseTimeSLA(config));
+    results.push(await testErrorRate(config));
+    results.push(await testWebSocketConnectivity(config));
+
+    return aggregateSuiteResults('Health Checks', results);
+}
+
+// Individual test function
+async function testHealthEndpoint(config: WebApiConfig): Promise<TestResult> {
+    return runTest('A-HEALTH-01', 'Health Endpoint', async () => {
+        const response = await fetchWithTimeout<HealthResponse>(
+            `${config.baseUrl}/health`,
+            { timeout: config.httpTimeoutMs }
+        );
+        assertHttpOk(response.status);
+        assertProperty(response.data, 'status');
+    });
+}
+```
+
+**Patterns:**
+- Each test wrapped in `runTest()` for timing and error handling
+- Assertions throw on failure
+- Results aggregated into `TestSuiteResult`
+- `skipTest()` for optional tests when config missing
+
+## Mocking
+
+**Framework:**
+- No mocking framework
+- Tests run against real services (smoke tests, not unit tests)
+
+**Patterns:**
+- Environment-driven configuration (prod/staging/beta)
+- Optional tests skipped if tokens not configured
+- No mock servers or fixtures
+
+**What to Mock:**
+- N/A - integration tests against live systems
+
+## Fixtures and Factories
+
+**Test Data:**
+```typescript
+// Hardcoded test values in config
+const TEST_TOKEN_BONK = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+const TEST_TOKEN_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+// Config-driven test parameters
+config.testTokenBonk   // Token mint address
+config.testUserToken   // Auth bearer token
+```
+
+**Location:**
+- Test tokens in `config/environments/*.env`
+- Default values in `src/core/config.ts`
+
+## Coverage
+
+**Requirements:**
+- No coverage target (smoke tests, not unit tests)
+- Focus on critical path verification
+
+**Configuration:**
+- No coverage tooling configured
+
+## Test Types
+
+**Smoke Tests (Primary):**
+- Health checks: API availability, response time SLA
+- Connectivity: WebSocket, database, message queue
+- Authentication: Token validation, refresh
+- API functionality: Quotes, orders (read-only)
+
+**Manual Tests:**
+- Documented in `docs/runbooks/*.md`
+- Human verification for visual/UX concerns
+
+**Unit Tests:**
+- Not present (test harness itself is not unit tested)
+
+**E2E Tests:**
+- Not present (considered for future)
+
+## Common Patterns
+
+**Async Testing:**
+```typescript
+async function testFeature(config: Config): Promise<TestResult> {
+    return runTest('TEST-ID', 'Test Name', async () => {
+        const result = await asyncOperation();
+        assertEqual(result.status, 'expected');
+    });
+}
+```
+
+**Error Testing:**
+```typescript
+// Test that invalid token returns 401
+return runTest('A-AUTH-03', 'Invalid Token Rejection', async () => {
+    const response = await fetchWithTimeout(
+        `${config.baseUrl}/v1/user/me`,
+        {
+            headers: { Authorization: 'Bearer invalid_token_12345' },
+            timeout: config.httpTimeoutMs
+        }
+    );
+    assertHttpError(response.status, 401, 'Expected 401 for invalid token');
+});
+```
+
+**Response Time Testing:**
+```typescript
+return runTest('A-HEALTH-02', 'Response Time SLA', async () => {
+    const { durationMs } = await measureTime(async () => {
+        await fetchWithTimeout(`${config.baseUrl}/health`, { timeout: 5000 });
+    });
+    assertResponseTime(durationMs, 500, 'Health check');
+});
+```
+
+**WebSocket Testing:**
+```typescript
+async function verifyWebSocketSubscription(
+    wsUrl: string,
+    topic: string,
+    timeout: number
+): Promise<{ received: boolean; durationMs: number }> {
+    return new Promise((resolve) => {
+        const ws = new WebSocket(wsUrl);
+        const timer = setTimeout(() => {
+            ws.close();
+            resolve({ received: false, durationMs: timeout });
+        }, timeout);
+
+        ws.on('message', (data) => {
+            clearTimeout(timer);
+            ws.close();
+            resolve({ received: true, durationMs: Date.now() - startTime });
+        });
+
+        ws.on('open', () => {
+            ws.send(JSON.stringify({ subscribe: topic }));
+        });
+    });
+}
+```
+
+## Assertion Functions
+
+**Available in `src/core/utils.ts`:**
+- `assertEqual(actual, expected, message)` - Value equality
+- `assertDefined(value, message)` - Not null/undefined
+- `assertRange(value, min, max, message)` - Numeric range
+- `assertHttpOk(status)` - HTTP 2xx status
+- `assertHttpError(status, expected, message)` - Specific HTTP error
+- `assertArrayNotEmpty(arr, message)` - Array has items
+- `assertProperty(obj, prop)` - Object has property
+- `assertResponseTime(ms, maxMs, label)` - Response time threshold
+
+## Output Formats
+
+**Console (default):**
+- Colored output with status icons
+- Suite summaries with pass/fail/skip counts
+
+**JSON:**
+- Structured report for programmatic consumption
+- Full test details with durations and errors
+
+**GitHub Actions:**
+- Markdown tables for job summary
+- Output variables: status, passed, failed, skipped
+
+**Allure (planned):**
+- Integration instructions in `src/core/reporter.ts`
+- Not yet implemented
+
+---
+
+*Testing analysis: 2025-01-07*
+*Update when test patterns change*

@@ -1,0 +1,94 @@
+# Roadmap: Token Analysis Autopilot
+
+## Overview
+
+Transform the backend from a data-polling evaluation engine into a pure signal processor. The main app will firehose market data via existing WebSocket connections, this backend evaluates and emits signals. Architecture will be LOIS-ready for future Rust rewrite. Gradual replacement approach — swap each piece when ready.
+
+## Milestones
+
+- [v1.0 Signal Processor Architecture](milestones/v1.0-ROADMAP.md) (Phases 1-3) — SHIPPED 2026-01-09
+- v2.0 Frontend Data Feed Integration (Phases 4-7) — IN PROGRESS
+
+## Completed Milestones
+
+<details>
+<summary>v1.0 Signal Processor Architecture (Phases 1-3) — SHIPPED 2026-01-09</summary>
+
+- [x] Phase 1: Data Reception (3/3 plans) — completed 2026-01-09
+- [x] Phase 2: Dual-Path Engine (3/3 plans) — completed 2026-01-09
+- [x] Phase 3: Interface Cleanup & Cutover (3/3 plans) — completed 2026-01-09
+
+**Delivered:** Pure signal processor with LOIS-ready interfaces, sub-0.1ms latency, gradual cutover via --new-engine flag.
+
+See [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md) for full details.
+
+</details>
+
+## v2.0 Phases
+
+### Phase 4: NATS Data Feeds (Backend)
+**Goal:** Add trending_feed and whale_feed handlers to backend
+**Status:** Complete
+
+- [x] Add TrendingFeedItem and WhaleMoveFeedItem types
+- [x] Extend DataFeedMessage union
+- [x] Wire feeds to AutoSourceManager
+- [x] Export types for frontend compatibility
+
+### Phase 5: Frontend Feed Forwarding
+**Goal:** Wire missing data feeds from NATS to autopilot backend
+**Repo:** web-terminal-frontend (feat-token-analysis-autopilot branch)
+**Status:** Ready
+
+Tasks:
+- Wire OHLCV feed forwarding (adapter exists at toOhlcvFeed, needs to be sent)
+- Create trending_feed adapter (convert Discovery trending data)
+- Create whale_feed adapter (convert Discovery whale moves)
+- Forward feeds via useAutopilotDataForwarder hook
+- Subscribe to required NATS topics for positions
+
+### Phase 6: Backend Feed Consumption
+**Goal:** Use WebSocket feeds instead of API polling
+**Repo:** token-analysis-autopilot
+**Status:** Complete
+
+Tasks:
+- [x] Wire ohlcv_update into polling loop's candleDataMap
+- [x] Detect feed freshness, skip redundant API calls
+- [x] Add watchlist_feed handler (replace native watchlist)
+- [x] Add feed activity logging for debugging
+
+### Phase 7: Validation & Cleanup
+**Goal:** Validate end-to-end, remove redundant code
+**Repos:** Both
+**Status:** Blocked by Phase 5-6
+
+Tasks:
+- End-to-end test with real market data
+- Verify zero API calls when frontend connected
+- Verify real-time signal latency (sub-100ms)
+- Remove API polling code from runLoop
+- Remove native watchlist storage
+- Document final architecture
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 4 → 5 → 6 → 7
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Data Reception | v1.0 | 3/3 | Complete | 2026-01-09 |
+| 2. Dual-Path Engine | v1.0 | 3/3 | Complete | 2026-01-09 |
+| 3. Interface Cleanup & Cutover | v1.0 | 3/3 | Complete | 2026-01-09 |
+| 4. NATS Data Feeds | v2.0 | 1/1 | Complete | 2026-01-09 |
+| 5. Frontend Feed Forwarding | v2.0 | 1/1 | Complete | 2026-01-09 |
+| 6. Backend Feed Consumption | v2.0 | 1/2 | In progress | - |
+| 7. Validation & Cleanup | v2.0 | 0/? | Blocked | - |
+
+## Success Criteria (v2.0)
+
+1. **Zero API calls:** Backend makes no HTTP requests when frontend connected
+2. **Real-time signals:** Sub-100ms from NATS message to signal emission
+3. **Full feed coverage:** market, OHLCV, trending, whale, watchlist all flowing
+4. **Clean codebase:** API polling and native watchlist removed

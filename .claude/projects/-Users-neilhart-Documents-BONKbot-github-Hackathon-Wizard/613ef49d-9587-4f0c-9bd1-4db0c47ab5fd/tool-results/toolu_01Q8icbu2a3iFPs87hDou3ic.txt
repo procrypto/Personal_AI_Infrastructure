@@ -1,0 +1,36 @@
+166:  getStats(): TradingStats {
+167-    const closed = this.getClosedTrades();
+168-    const open = this.getOpenTrades();
+169-
+170-    const wins = closed.filter(t => (t.pnlSol ?? 0) > 0);
+171-    const losses = closed.filter(t => (t.pnlSol ?? 0) <= 0);
+172-
+173-    const totalPnlSol = closed.reduce((sum, t) => sum + (t.pnlSol ?? 0), 0);
+174-    const totalPnlUsd = closed.reduce((sum, t) => sum + (t.pnlUsd ?? 0), 0);
+175-    const avgPnlPercent = closed.length > 0
+176-      ? closed.reduce((sum, t) => sum + (t.pnlPercent ?? 0), 0) / closed.length
+177-      : 0;
+178-
+179-    // Find best and worst trades
+180-    let bestTrade: PaperTrade | null = null;
+181-    let worstTrade: PaperTrade | null = null;
+182-    for (const trade of closed) {
+183-      if (!bestTrade || (trade.pnlPercent ?? 0) > (bestTrade.pnlPercent ?? 0)) {
+184-        bestTrade = trade;
+185-      }
+186-      if (!worstTrade || (trade.pnlPercent ?? 0) < (worstTrade.pnlPercent ?? 0)) {
+187-        worstTrade = trade;
+188-      }
+189-    }
+190-
+191-    return {
+192-      totalTrades: this.trades.length,
+193-      openTrades: open.length,
+194-      closedTrades: closed.length,
+195-      wins: wins.length,
+196-      losses: losses.length,
+197-      winRate: closed.length > 0 ? wins.length / closed.length : 0,
+198-      totalPnlSol,
+199-      totalPnlUsd,
+200-      avgPnlPercent,
+201-      bestTrade,

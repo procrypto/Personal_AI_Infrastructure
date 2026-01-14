@@ -1,0 +1,113 @@
+     1→import React, { useCallback, useMemo } from "react";
+     2→import { Tooltip } from "@/components/tooltip.tsx";
+     3→import { Button } from "@/components/button.tsx";
+     4→import StarIcon from "@/assets/icons/star.svg";
+     5→import { cn } from "@/lib/utils.ts";
+     6→import { t } from "@lingui/core/macro";
+     7→import { useSetWatchlistItem } from "@/api/watchlist/useSetWatchlistItem.tsx";
+     8→import { useDeleteWatchlistToken } from "@/api/watchlist/useDeleteWatchlistToken";
+     9→import { useGetWatchlist } from "@/api/watchlist/useGetWatchlist.ts";
+    10→
+    11→type WatchlistToggleProps = {
+    12→  mint: string;
+    13→  ticker: string;
+    14→  disableTooltip?: boolean;
+    15→};
+    16→
+    17→export const WatchlistToggle = ({
+    18→  mint,
+    19→  ticker,
+    20→  disableTooltip,
+    21→}: WatchlistToggleProps) => {
+    22→  const { data: watchlistTokens } = useGetWatchlist();
+    23→  const { mutate: addWatchlistItem, isPending: isPendingAdd } =
+    24→    useSetWatchlistItem();
+    25→  const { mutate: deleteWatchlistItem, isPending: isPendingDelete } =
+    26→    useDeleteWatchlistToken();
+    27→
+    28→  const isInWatchlist = useMemo(
+    29→    () =>
+    30→      !!watchlistTokens?.watchlistTokens?.some(group =>
+    31→        group.watchlistTokens?.some(token => token.tokenMint === mint)
+    32→      ),
+    33→    [watchlistTokens, mint]
+    34→  );
+    35→
+    36→  const handleToggleWatchlistItem = useCallback(
+    37→    (e: React.MouseEvent) => {
+    38→      e.preventDefault();
+    39→      e.stopPropagation();
+    40→
+    41→      if (isPendingAdd || isPendingDelete) return;
+    42→
+    43→      if (isInWatchlist) {
+    44→        deleteWatchlistItem({ mint, symbol: ticker });
+    45→      } else {
+    46→        addWatchlistItem({ tokenMint: mint, tokenSymbol: ticker });
+    47→      }
+    48→    },
+    49→    [
+    50→      isInWatchlist,
+    51→      mint,
+    52→      ticker,
+    53→      addWatchlistItem,
+    54→      deleteWatchlistItem,
+    55→      isPendingDelete,
+    56→      isPendingAdd,
+    57→    ]
+    58→  );
+    59→
+    60→  const buttonContent = (
+    61→    <Button
+    62→      data-testid="watchlist-toggle-button"
+    63→      variant="text"
+    64→      onClick={handleToggleWatchlistItem}
+    65→      className={cn(
+    66→        "[&_path]:stroke-fg-secondary hover:[&_path]:stroke-fg-primary flex size-4 items-center justify-center overflow-hidden",
+    67→        isInWatchlist &&
+    68→          "[&_svg]:fill-warning [&_path]:stroke-warning hover:[&_path]:stroke-warning",
+    69→        isPendingAdd || isPendingDelete
+    70→          ? "disabled:cursor-wait disabled:bg-transparent [&_svg]:opacity-50"
+    71→          : ""
+    72→      )}
+    73→      disabled={isPendingAdd || isPendingDelete}
+    74→    >
+    75→      <StarIcon
+    76→        className="transition-colors"
+    77→        width={16}
+    78→        height={16}
+    79→      />
+    80→    </Button>
+    81→  );
+    82→
+    83→  if (disableTooltip) {
+    84→    return buttonContent;
+    85→  }
+    86→
+    87→  return (
+    88→    <Tooltip
+    89→      content={
+    90→        isInWatchlist
+    91→          ? t`Remove ${ticker} from Watchlist`
+    92→          : t`Add ${ticker} to Watchlist`
+    93→      }
+    94→      triggerClassName={cn(
+    95→        "[&_path]:stroke-fg-secondary hover:[&_path]:stroke-fg-primary flex size-4 items-center justify-center overflow-hidden",
+    96→        isInWatchlist &&
+    97→          "[&_svg]:fill-warning [&_path]:stroke-warning hover:[&_path]:stroke-warning"
+    98→      )}
+    99→      side="right"
+   100→      align="center"
+   101→      className="px-2 py-1"
+   102→      arrowClassName="w-2"
+   103→      sideOffset={2}
+   104→    >
+   105→      {buttonContent}
+   106→    </Tooltip>
+   107→  );
+   108→};
+   109→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,144 @@
+     1→# Context for Web Terminal
+     2→
+     3→Context and rules for Claude Code sessions working in this repository.
+     4→
+     5→## Project overview
+     6→
+     7→Web Terminal is a Rust-based data backend for real-time cryptocurrency/token market data.
+     8→It processes blockchain events, materializes aggregated data, and serves it via REST APIs and WebSockets.
+     9→The application supports high throughput and low latency data processing.
+    10→Data is stored in RocksDB and ClickHouse, and is communicated among microservices using NATS.
+    11→Ultimately the data is delivered to a frontend via websocket connections.
+    12→
+    13→The code ingests Solana data from Geyser streams, which can come in at rates on the order of GB/s.
+    14→The data is read, processed, and ultimately stored in ClickHouse or delivered as real-time push updates over websockets.
+    15→
+    16→Low latency and high throughput are of critical importance for this codebase.
+    17→
+    18→## Architecture
+    19→
+    20→### Tech stack in use
+    21→
+    22→#### Data API Backend -- Rust
+    23→This repo hosts the Data API, which is primarily a set of Rust microservices that use NATS for communication among services, ClickHouse for long-term storage, and RocksDB for state storage (in-memory) in the Materializer.
+    24→
+    25→#### Web API Backend -- Typescript
+    26→This is housed in a different repo, and consists of a typescript backend for handling user logic, as well as a postgres DB for storing user data.
+    27→
+    28→#### Pum3 Backend -- Rust
+    29→This is the "Program Update Machine" that is a rust service that ingests on-chain events and converts them into readable NATS messages, which are consumed by various other services, including the data API.
+    30→
+    31→#### Frontend -- Typescript
+    32→The frontend is a high-performance data delivery platform that focuses on delivering large amounts of streaming data to the users to facilitate trading tokens on Solana.
+    33→
+    34→### Services (Docker containers)
+    35→
+    36→| Service | Purpose |
+    37→|---------|---------|
+    38→| `wt-initializer` | Processes Geyser RPC events from Solana |
+    39→| `wt-materializer` | Aggregates data, maintains state in RocksDB |
+    40→| `wt-ch-writer` | Writes to ClickHouse |
+    41→| `wt-web-server` | REST API and WebSocket server |
+    42→| `wt-health-checker` | Health check sidecar |
+    43→| `wt-nats` | NATS messaging hub |
+    44→
+    45→### Key Directories
+    46→
+    47→```
+    48→bin/
+    49→  initializer/     # Geyser event processors
+    50→  materializer/    # State aggregation
+    51→  web-server/      # API handlers
+    52→  health-checker/  # Health check sidecar
+    53→crates/
+    54→  data-sdk/        # Query implementations
+    55→  storage/         # ClickHouse/RocksDB layer
+    56→  primitives/      # Shared types, NATS topics
+    57→scripts/
+    58→  gcp/             # Deployment and operations scripts
+    59→docs/              # Operational documentation
+    60→env/               # Environment configuration (deploy-environment.toml)
+    61→```
+    62→
+    63→# General review guidelines
+    64→Audience: When providing explanations, assume a highly skilled audience. Always justify suggestions with core principles. Provide keywords for searching the rust documentation or other relevant documentation when appropriate.
+    65→Tone: Maintain a helpful, respectful, and technical tone.
+    66→Accuracy: It is critically important that your feedback is accurate. Double check all responses against known Rust patterns and avoid providing feedback that you do not have high certainty on.
+    67→
+    68→## Repository specific standards
+    69→Idiomatic Rust: Prioritize idiomatic Rust patterns.
+    70→Concurrency: When reviewing concurrent code, focus on correct use of channels, mutexes, and thread-safe data structures. Flag any potential deadlocks or race conditions.
+    71→Error Handling: All functions should use `Result<T, E>` for fallible operations. Encourage the use of the `?` operator and clear, descriptive error types. Avoid unwrapping results until at the top-level of production code.
+    72→Performance: Code reviews should always include a performance check for data-intensive operations. Suggest optimizations like lazy evaluation, reducing allocations, and using stack-based data structures when possible.
+    73→Macro Review: If macros are created, provide a clear explanation of their purpose and side effects.
+    74→Data Integrity: During a review, check for potential data loss or corruption. Verify that data transformations are reversible or properly documented if not.
+    75→Idiomatic Bash: All `.sh` scripts should run on Bash 3.5 so that they can natively run on MacOS. Code should be self-documenting with clear logs. All scripts, including utils, should be runnable from command and provide help text with the `-h | --help` argument. Speed of execution is important.
+    76→
+    77→## Review feedback format
+    78→Overview: Open with a succinct overview of the PR. Any specific feedback should be provided in the form of GitHub comments.
+    79→Actionable: Feedback should be actionable. Instead of just pointing out an issue, suggest a specific improvement or code snippet.
+    80→
+    81→**When updating docs:** 
+    82→1. Reference canonical sources (code, toml files) rather than duplicating
+    83→2. If doc conflicts with code, fix the doc to match code
+    84→
+    85→## Additional guidelines
+    86→
+    87→Reference the following files for additional project details and contribution guidelines:
+    88→- [Project CONTRIBUTING.md](CONTRIBUTING.md) @CONTRIBUTING.md
+    89→- [Project README.md](README.md) @README.md
+    90→- [Scripts README.md](scripts/README.md) @scripts/README.md
+    91→- [Scripts CONTRIBUTING.md](scripts/CONTRIBUTING.md) @scripts/CONTRIBUTING.md
+    92→- [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md) @docs/DEPLOYMENT_RUNBOOK.md
+    93→- [Backend data structure](docs/BACKEND_API_AND_DATA.md) @docs/BACKEND_API_AND_DATA.md
+    94→- [Frontend specification](FRONTEND_SPEC.md) @FRONTEND_SPEC.md
+    95→
+    96→Key scripts:
+    97→- `scripts/gcp/deploy-prod.sh` - Full zone deployment
+    98→- `scripts/gcp/remove-web-server-from-load-balancer.sh` - Remove from LB
+    99→- `scripts/gcp/add-web-server-to-load-balancer.sh` - Add to LB
+   100→- `scripts/gcp/restart-wt-services.sh` - Restart services
+   101→
+   102→## Common Tasks
+   103→
+   104→### Local Development
+   105→
+   106→```bash
+   107→make build-local-env && source .env
+   108→make help  # See available targets
+   109→```
+   110→
+   111→As an example, you can then build the whole stack via:
+   112→```bash
+   113→make build-run-all
+   114→```
+   115→
+   116→or run a specific service via:
+   117→```bash
+   118→docker compose up -d --build <service>
+   119→```
+   120→
+   121→### Finding Code
+   122→
+   123→- API endpoints: `bin/web-server/src/api/`
+   124→- NATS topics: `crates/primitives/src/nats/topics.rs`
+   125→- ClickHouse tables: `crates/storage/src/clickhouse/`
+   126→- Geyser processors: `bin/initializer/src/processors/`
+   127→
+   128→### Deployment Operations
+   129→
+   130→See @docs/DEPLOYMENT_RUNBOOK.md [docs/DEPLOYMENT_RUNBOOK.md](docs/DEPLOYMENT_RUNBOOK.md) for:
+   131→- Web server manual cycling
+   132→- Rollback procedures
+   133→- Troubleshooting common errors
+   134→
+   135→## Things to Avoid
+   136→
+   137→- Hardcoding instance names in documentation (use patterns or dynamic lookups)
+   138→- Duplicating content that exists in script `--help` output or code
+   139→- Creating new documentation files when existing ones should be updated
+   140→- Pushing to main branch directly
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,308 @@
+# Data Flows
+
+Cross-system data flow documentation for the BONKbot platform.
+
+**Last Updated**: 2025-01-10
+
+---
+
+## High-Level Architecture
+
+```
+                              SOLANA BLOCKCHAIN
+                                     │
+         ┌───────────────────────────┼───────────────────────────┐
+         │                           │                           │
+         ▼                           ▼                           ▼
+      Geyser                     Jito RPC                   Solana RPC
+    (GB/s stream)             (MEV bundles)              (standard queries)
+         │                           │                           │
+         ▼                           │                           │
+   geyser-geezer                     │                           │
+   (initial processing)              │                           │
+         │                           │                           │
+         ▼                           │                           │
+       pum3                          │                           │
+   (Program Update Machine)          │                           │
+         │                           │                           │
+         │ [NATS: initializer.*]     │                           │
+         ▼                           ▼                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           web-terminal (Rust)                           │
+│                                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
+│  │ Initializer  │───▶│ Materializer │───▶│  CH Writer   │──▶ClickHouse │
+│  └──────────────┘    └──────┬───────┘    └──────────────┘              │
+│                             │                                          │
+│                             ▼                                          │
+│                         RocksDB                                        │
+│                        (hot state)                                     │
+│                             │                                          │
+│                             │ [NATS: materializer.*]                   │
+│                             ▼                                          │
+│                      ┌──────────────┐                                  │
+│                      │  Web Server  │                                  │
+│                      └──────┬───────┘                                  │
+└─────────────────────────────┼───────────────────────────────────────────┘
+                              │
+                              │ REST /data + WebSocket
+                              │
+┌─────────────────────────────┼───────────────────────────────────────────┐
+│                             ▼                           bonkbot (TS)    │
+│                   ┌──────────────────┐                                 │
+│                   │ Market Data Feed │◄─────────────────┐              │
+│                   └────────┬─────────┘                  │              │
+│                            │                            │              │
+│  ┌─────────────────────────┼────────────────────────────┼────────┐     │
+│  │                         │                            │        │     │
+│  │    ┌────────────┐  ┌────┴─────┐  ┌───────────┐  ┌───┴───┐   │     │
+│  │    │ User Auth  │  │ Swaps    │  │ Limit Ord │  │ DCA   │   │     │
+│  │    └────────────┘  └────┬─────┘  └───────────┘  └───────┘   │     │
+│  │                         │                                    │     │
+│  │                         ▼                                    │     │
+│  │              ┌──────────────────┐                           │     │
+│  │              │ Jupiter/Raydium  │                           │     │
+│  │              │ + Jito Bundles   │                           │     │
+│  │              └────────┬─────────┘                           │     │
+│  │                       │                                      │     │
+│  │                       ▼                                      │     │
+│  │              Solana Blockchain                               │     │
+│  │                                                              │     │
+│  │    ┌────────────┐  ┌────────────┐  ┌────────────┐          │     │
+│  │    │ PostgreSQL │  │   Redis    │  │ ClickHouse │          │     │
+│  │    │ (users)    │  │ (cache)    │  │ (analytics)│          │     │
+│  │    └────────────┘  └────────────┘  └────────────┘          │     │
+│  │                                                              │     │
+│  └──────────────────────────────────────────────────────────────┘     │
+│                              │                                         │
+│                              │ REST /v1 + NATS events                  │
+└──────────────────────────────┼─────────────────────────────────────────┘
+                               │
+                               ▼
+                 ┌──────────────────────────┐
+                 │  web-terminal-frontend   │
+                 │                          │
+                 │  ┌────────────────────┐  │
+                 │  │   React Query      │◄─┼── REST APIs
+                 │  └────────────────────┘  │
+                 │  ┌────────────────────┐  │
+                 │  │   Zustand Store    │◄─┼── WebSocket Topics
+                 │  └────────────────────┘  │
+                 │  ┌────────────────────┐  │
+                 │  │      UI Layer      │  │
+                 │  └────────────────────┘  │
+                 └──────────────────────────┘
+                               │
+                               ▼
+                            USERS
+```
+
+---
+
+## Data Flow Details
+
+### 1. Market Data Flow (Blockchain → User)
+
+**Path**: Geyser → geyser-geezer → pum3 → web-terminal → frontend
+
+```
+Solana Blockchain
+       │
+       │ Geyser gRPC (GB/s)
+       ▼
+geyser-geezer
+       │
+       │ NATS (input_initializer_deduped.*)
+       ▼
+pum3 (Program Update Machine)
+       │
+       │ NATS (initializer.*)
+       ▼
+web-terminal/initializer
+       │
+       ├──▶ NATS (initializer.dex_event.*)
+       │         │
+       │         ▼
+       │    web-terminal/materializer
+       │         │
+       │         ├──▶ RocksDB (hot state)
+       │         ├──▶ NATS (materializer.*)
+       │         └──▶ ch-writer → ClickHouse
+       │
+       └──▶ NATS (initializer.token.*) → web-server
+                                              │
+                                              │ WebSocket
+                                              ▼
+                                         Frontend
+```
+
+**Latency Requirements**: <100ms for trade events, <50ms for price updates
+
+### 2. User Operations Flow (User → Blockchain)
+
+**Path**: Frontend → bonkbot → DEX → Solana
+
+```
+User Action (Swap Request)
+       │
+       │ REST POST /v1/swap
+       ▼
+bonkbot API
+       │
+       ├──▶ Validate user, check balances
+       │
+       ├──▶ Get quote from Jupiter/Raydium
+       │
+       ├──▶ Build transaction
+       │
+       ├──▶ Sign via Signer Service (NATS)
+       │
+       └──▶ Submit to Jito (MEV protection)
+                  │
+                  │ gRPC
+                  ▼
+           Solana Blockchain
+                  │
+                  │ Confirmation
+                  ▼
+           bonkbot (update state)
+                  │
+                  │ NATS (swap.*, limit_order.*)
+                  ▼
+           Frontend (via WebSocket)
+```
+
+### 3. Real-Time Update Flow
+
+**Path**: web-terminal → Frontend (WebSocket)
+
+```
+web-terminal NATS topics:
+│
+├── materializer.market_data.{mint}     ──┐
+├── materializer.trades2.{mint}         ──┤
+├── materializer.token_ohlcv.{mint}.*   ──┤
+├── materializer.holders_stats.{mint}   ──┤
+├── materializer.sol_price              ──┤
+└── materializer.xray.*                 ──┘
+                                          │
+                                    web-server
+                                          │
+                                    WebSocket
+                                          │
+                                          ▼
+                              Frontend NATS Topics
+                              │
+                              ├── market_data.{mint}
+                              ├── trades_2.{mint}.*
+                              ├── token_ohlcv.{mint}.{res}
+                              ├── holders_stats.{mint}
+                              ├── sol_price
+                              └── sol_balance.{address}
+                                          │
+                                          ▼
+                              Zustand Store (24 slices)
+                                          │
+                                          ▼
+                                   React Components
+```
+
+### 4. User Event Flow
+
+**Path**: bonkbot → Frontend (WebSocket via NATS bridge)
+
+```
+bonkbot events (NATS):
+│
+├── {env}.swap.{telemetryId}
+├── {env}.pnl_v2.{telemetryId}.{wallet}
+├── {env}.limit_order.{telemetryId}
+├── {env}.limit_order_complete.{telemetryId}
+├── {env}.web_notification.{telemetryId}
+├── {env}.distribute.{telemetryId}
+└── {env}.consolidate.{telemetryId}
+                    │
+                    │ NATS → WebSocket bridge
+                    ▼
+              Frontend Topics
+                    │
+                    ▼
+         React Query invalidation
+         Zustand store updates
+                    │
+                    ▼
+            UI re-render
+```
+
+---
+
+## Interface Inventory
+
+### REST APIs
+
+| System | Base Path | Purpose |
+|--------|-----------|---------|
+| web-terminal | `/data` | Market data, discovery, search |
+| bonkbot | `/v1` | User ops, auth, trading |
+
+### WebSocket Endpoints
+
+| Endpoint | System | Purpose |
+|----------|--------|---------|
+| `/data/ws` | web-terminal | NATS topic subscription |
+| `/data/discovery/trending_ws` | web-terminal | Trending tokens |
+| `/data/active_positions_ws` | web-terminal | Position updates |
+| `/data/watchlist_ws` | web-terminal | Watchlist updates |
+| `/data/topbar_ws` | web-terminal | Ticker tape |
+
+### NATS Topic Patterns
+
+| Pattern | Publisher | Consumers |
+|---------|-----------|-----------|
+| `initializer.*` | pum3 | web-terminal |
+| `materializer.*` | web-terminal | web-server, ch-writer |
+| `{env}.swap.*` | bonkbot | frontend |
+| `{env}.pnl_v2.*` | bonkbot | frontend |
+
+### Databases
+
+| Database | System | Purpose |
+|----------|--------|---------|
+| ClickHouse | web-terminal, bonkbot | Historical data, analytics |
+| RocksDB | web-terminal | Hot state (in-memory) |
+| PostgreSQL | bonkbot | User data, orders |
+| Redis | bonkbot | Sessions, cache |
+
+---
+
+## Data Ownership
+
+| Data Type | Owner System | Storage |
+|-----------|--------------|---------|
+| Market prices | web-terminal | RocksDB, ClickHouse |
+| Trade history | web-terminal | ClickHouse |
+| Token metadata | web-terminal | ClickHouse |
+| User accounts | bonkbot | PostgreSQL |
+| Orders | bonkbot | PostgreSQL |
+| Swap history | bonkbot | PostgreSQL, ClickHouse |
+| Referrals | bonkbot | PostgreSQL |
+| Sessions | bonkbot | Redis |
+
+---
+
+## Critical Paths
+
+### High-Frequency (< 100ms)
+- Trade event display
+- Price updates
+- Portfolio PnL refresh
+
+### User-Blocking (< 1s)
+- Swap quote generation
+- Transaction submission
+- Auth token refresh
+
+### Background (async)
+- ClickHouse writes
+- Referral calculations
+- Fee distribution

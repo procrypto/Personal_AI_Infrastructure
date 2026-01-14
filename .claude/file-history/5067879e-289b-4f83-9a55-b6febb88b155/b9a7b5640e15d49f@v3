@@ -1,0 +1,139 @@
+# Knowledge Registry
+
+Central index of all mapped systems in the organizational technical memory.
+
+**Last Updated**: 2025-01-10
+
+---
+
+## Systems
+
+### web-terminal
+- **Path**: `~/Documents/BONKbot/github/web-terminal`
+- **Type**: Backend Service (Rust)
+- **ai.md**: Yes (excellent quality)
+- **Last Discovered**: 2025-01-10 (pre-existing)
+- **Quality**: Excellent
+- **Primary Purpose**: Real-time cryptocurrency market data backend
+- **Key Interfaces**: REST `/data`, WebSocket, NATS messaging
+- **Notes**: Well-documented with comprehensive BACKEND_API_AND_DATA.md. Created by engineer with AI expertise. Use as reference for documentation quality.
+
+### bonkbot
+- **Path**: `~/Documents/BONKbot/github/bonkbot`
+- **Type**: Backend Service (TypeScript/Node.js)
+- **ai.md**: Yes
+- **Last Discovered**: 2025-01-10
+- **Quality**: Good
+- **Primary Purpose**: Telegram bot + Web Terminal API (user operations, trading)
+- **Key Interfaces**: REST `/v1` (port 8800), NATS messaging, Telegram Bot API
+- **Notes**: This IS the "web-api" - powers Web Terminal frontend. Monorepo with shared packages. Inversify DI, TSOA OpenAPI, Kysely ORM.
+
+### web-terminal-frontend
+- **Path**: `~/Documents/BONKbot/github/web-terminal-frontend/main-ui`
+- **Type**: Frontend (React/TypeScript)
+- **ai.md**: Yes
+- **Last Discovered**: 2025-01-10
+- **Quality**: Good
+- **Primary Purpose**: User-facing trading platform UI
+- **Key Interfaces**: Consumes `/v1` (bonkbot) + `/data` (web-terminal) + WebSocket
+- **Notes**: Turborepo monorepo. React 19, TanStack Router, Zustand (24 slices). Uses git worktrees (main-ui = prod). Has good internal docs in docs/ folder.
+
+---
+
+## Unmapped Systems
+
+*Systems known to exist but not yet documented:*
+
+| System | Path | Priority | Notes |
+|--------|------|----------|-------|
+| pum3 | ~/Documents/BONKbot/github/pum3 | High | Program Update Machine - feeds web-terminal |
+| geyser-geezer | ~/Documents/BONKbot/github/geyser-geezer | Medium | Geyser RPC processor |
+| analytics_clickhouse | ~/Documents/BONKbot/github/analytics_clickhouse | Medium | Analytics queries |
+| qa-tools | ~/Documents/BONKbot/github/qa-tools | Low | Testing utilities |
+| tradingview | ~/Documents/BONKbot/github/tradingview | Low | TradingView integration |
+
+---
+
+## Quick Reference
+
+| System | Primary Purpose | Key Interface | Quality |
+|--------|-----------------|---------------|---------|
+| web-terminal | Market data | WS, REST `/data`, NATS | Excellent |
+| bonkbot | User operations | REST `/v1`, NATS, TG | Good |
+| web-terminal-frontend | Trading UI | React app | Good |
+
+---
+
+## System Relationships
+
+### High-Level Architecture
+
+```
+                         Solana Blockchain
+                                │
+              ┌─────────────────┼─────────────────┐
+              ▼                 ▼                 ▼
+           Geyser           Jito RPC         Solana RPC
+              │                 │                 │
+              ▼                 │                 │
+       geyser-geezer            │                 │
+              │                 │                 │
+              ▼                 │                 │
+            pum3                │                 │
+              │                 │                 │
+              ▼                 ▼                 ▼
+       web-terminal ◄───────────┴────────► bonkbot
+        (market data)                    (user ops)
+              │                              │
+              │         REST /data           │ REST /v1
+              │         WebSocket            │
+              │                              │
+              └──────────┬───────────────────┘
+                         ▼
+              web-terminal-frontend
+                         │
+                         ▼
+                      Users
+```
+
+### Data Flow Summary
+
+| Flow | Source → Destination | Interface |
+|------|---------------------|-----------|
+| Blockchain events | Geyser → geyser-geezer → pum3 | gRPC, NATS |
+| Market data | pum3 → web-terminal | NATS |
+| Real-time prices | web-terminal → frontend | WebSocket |
+| Historical data | web-terminal → frontend | REST `/data` |
+| User auth | frontend → bonkbot | REST `/v1` |
+| Swap execution | frontend → bonkbot → Solana | REST, RPC |
+| Trade updates | bonkbot → frontend | NATS → WS |
+
+---
+
+## Cross-System Maps
+
+| Map | Last Updated | Status |
+|-----|--------------|--------|
+| data-flows.md | 2025-01-10 | Created |
+| dependencies.md | - | Not yet created |
+| interfaces.md | - | Not yet created |
+
+---
+
+## Registry Maintenance
+
+### Adding a System
+1. Run `Discover` workflow on the repo
+2. Entry is automatically added here
+3. Cross-system maps updated if connections found
+
+### Quality Ratings
+- **Excellent**: Complete ai.md, all sections filled, cross-system context documented
+- **Good**: ai.md exists with most sections, minor gaps
+- **Needs Update**: ai.md exists but stale or missing sections
+- **Not Mapped**: No ai.md, needs Discover workflow
+
+### Refresh Schedule
+- Re-run Discover after significant codebase changes
+- Review registry monthly for staleness
+- Update cross-system maps when integrations change

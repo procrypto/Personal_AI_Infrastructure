@@ -1,0 +1,95 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   289→      for (const ruleSet of ruleSets) {
+   290→        engine.addRulesFromConfig(ruleSet.rules);
+   291→      }
+   292→
+   293→      let scanCount = 0;
+   294→      const runLoop = async () => {
+   295→        scanCount++;
+   296→        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+   297→
+   298→        // Separate watchlist and open trades
+   299→        const watchlistMints = new Set(watchlist.map(t => t.mint));
+   300→        const openTrades = paperTracker.getOpenTrades();
+   301→        const tradeMints = new Set(openTrades.map(t => t.mint));
+   302→
+   303→        const watchResults: string[] = [];
+   304→        const tradeResults: string[] = [];
+   305→
+   306→        // Process watchlist tokens
+   307→        for (const token of watchlist) {
+   308→          try {
+   309→            const signals = await engine.analyzeToken(token.mint);
+   310→            const result = engine.aggregateSignals(signals);
+   311→            const sym = token.symbol || token.mint.slice(0, 6);
+   312→
+   313→            if (result.action === 'hold') {
+   314→              watchResults.push(`${sym}:-`);
+   315→            } else {
+   316→              const marketData = await localApi.getMarketData(token.mint);
+   317→              const conf = (result.confidence * 100).toFixed(0);
+   318→              watchResults.push(`${sym}:${result.action.toUpperCase()}(${conf}%)`);
+   319→
+   320→              await trigger.trigger({
+   321→                mint: token.mint,
+   322→                symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   323→                action: result.action,
+   324→                priceSol: marketData.price_sol,
+   325→                priceUsd: marketData.price_usd,
+   326→                ruleSetId: ruleSets[0].id,
+   327→                signals: result.signals,
+   328→                confidence: result.confidence,
+   329→              });
+   330→
+   331→              await paperTracker.save();
+   332→            }
+   333→          } catch {
+   334→            const sym = token.symbol || token.mint.slice(0, 6);
+   335→            watchResults.push(`${sym}:ERR`);
+   336→          }
+   337→        }
+   338→
+   339→        // Process open trades (not in watchlist)
+   340→        for (const trade of openTrades) {
+   341→          if (watchlistMints.has(trade.mint)) continue; // Already processed
+   342→
+   343→          try {
+   344→            const marketData = await localApi.getMarketData(trade.mint);
+   345→            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   346→            const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   347→            tradeResults.push(`${trade.symbol}:${sign}${pnl.pnlPercent.toFixed(1)}%`);
+   348→
+   349→            // Also run analysis for potential exit signals
+   350→            const signals = await engine.analyzeToken(trade.mint);
+   351→            const result = engine.aggregateSignals(signals);
+   352→
+   353→            if (result.action !== 'hold') {
+   354→              await trigger.trigger({
+   355→                mint: trade.mint,
+   356→                symbol: trade.symbol,
+   357→                action: result.action,
+   358→                priceSol: marketData.price_sol,
+   359→                priceUsd: marketData.price_usd,
+   360→                ruleSetId: ruleSets[0].id,
+   361→                signals: result.signals,
+   362→                confidence: result.confidence,
+   363→              });
+   364→
+   365→              await paperTracker.save();
+   366→            }
+   367→          } catch {
+   368→            tradeResults.push(`${trade.symbol}:ERR`);
+   369→          }
+   370→        }
+   371→
+   372→        // Output
+   373→        let line = `[${time}] #${scanCount}`;
+   374→        if (watchResults.length > 0) line += `  W: ${watchResults.join(' ')}`;
+   375→        if (tradeResults.length > 0) line += `  T: ${tradeResults.join(' ')}`;
+   376→        if (watchResults.length === 0 && tradeResults.length === 0) line += '  (nothing to scan)';
+   377→        console.log(line);
+   378→      };
+   379→
+   380→      // Run immediately, then on interval
+   381→      await runLoop();
+   382→      setInterval(runLoop, config.pollIntervalMs);

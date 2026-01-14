@@ -1,0 +1,48 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   388→      for (const ruleSet of ruleSets) {
+   389→        engine.addRulesFromConfig(ruleSet.rules);
+   390→      }
+   391→
+   392→      let scanCount = 0;
+   393→      const runLoop = async () => {
+   394→        scanCount++;
+   395→        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+   396→
+   397→        // Refresh auto-sources if needed (every 15m by default)
+   398→        await autoSources.refreshIfNeeded();
+   399→
+   400→        // Get fresh token list
+   401→        const tokens = getAllTokens();
+   402→        const openTrades = paperTracker.getOpenTrades();
+   403→        const openMints = new Set(openTrades.map(t => t.mint));
+   404→
+   405→        // Batch fetch all market data upfront (including SOL for market filter)
+   406→        const allMints = [...tokens.map(t => t.mint)];
+   407→        if (!allMints.includes(SOL_MINT)) {
+   408→          allMints.push(SOL_MINT);
+   409→        }
+   410→        const marketDataCache = await localApi.getMarketDataBatch(allMints);
+   411→
+   412→        // Check market filter (SOL dump protection)
+   413→        const solData = marketDataCache.get(SOL_MINT);
+   414→        const marketFilterResult = marketFilter.check(solData);
+   415→
+   416→        // Handle market dump - exit all positions
+   417→        const marketDumpExits: typeof magicExitResults = [];
+   418→        if (marketFilterResult.exitAll) {
+   419→          const dumpExits = await marketFilter.executeExitAll(marketDataCache, true);
+   420→          marketDumpExits.push(...dumpExits);
+   421→        }
+   422→
+   423→        // Check magic exits (TP at resistance, SL at support break)
+   424→        // Magic exits still run even in CAUTION mode (structure-based exits are always valid)
+   425→        const magicExitResults = await magicExits.executeExits(marketDataCache, true);
+   426→
+   427→        const scanResults: string[] = [];
+   428→        const tradeResults: string[] = [];
+   429→        const magicResults: string[] = [];
+   430→        const dumpExitResults: string[] = [];
+   431→
+   432→        // Record magic exits
+   433→        for (const closed of magicExitResults) {
+   434→          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';

@@ -1,0 +1,225 @@
+     1→/**
+     2→ * Autopilot Store
+     3→ *
+     4→ * Zustand store slice for token-analysis-autopilot data.
+     5→ * Handles positions, signals, strategies, config, and status.
+     6→ *
+     7→ * NOTE: Positions only contain entry data. Current prices and P&L
+     8→ * are calculated in the frontend using NATS market_data subscriptions.
+     9→ */
+    10→
+    11→import type { SubStore } from "@/store/types";
+    12→import type { GlobalStore } from "../../types";
+    13→import type {
+    14→  AutopilotStore,
+    15→  AutopilotPositionEntry,
+    16→  AutopilotMarketStatus,
+    17→  AutopilotStats,
+    18→  AutopilotTokenList,
+    19→  AutopilotConfig,
+    20→  AutopilotStrategies,
+    21→  AutopilotSignal,
+    22→  AutopilotLastAnalysis,
+    23→} from "./types";
+    24→
+    25→const MAX_SIGNALS = 50;
+    26→
+    27→const defaultMarketStatus: AutopilotMarketStatus = {
+    28→  state: "NORMAL",
+    29→  solPriceChangePercent: 0,
+    30→  blockEntries: false,
+    31→  exitAll: false,
+    32→};
+    33→
+    34→const defaultStats: AutopilotStats = {
+    35→  totalTrades: 0,
+    36→  openTrades: 0,
+    37→  closedTrades: 0,
+    38→  wins: 0,
+    39→  losses: 0,
+    40→  winRate: 0,
+    41→  totalPnlSol: 0,
+    42→  totalPnlUsd: 0,
+    43→  avgPnlPercent: 0,
+    44→};
+    45→
+    46→const defaultConfig: AutopilotConfig = {
+    47→  autoSourcesEnabled: true,
+    48→  trendingEnabled: true,
+    49→  whalesEnabled: true,
+    50→  marketFilterEnabled: true,
+    51→  mode: "paper",
+    52→  positionSizeSol: 0.1,
+    53→  pollIntervalMs: 30000,
+    54→};
+    55→
+    56→const defaultTokenList: AutopilotTokenList = {
+    57→  watchlist: [],
+    58→  trending: [],
+    59→  whales: [],
+    60→};
+    61→
+    62→const defaultStrategies: AutopilotStrategies = {
+    63→  available: [],
+    64→  active: [],
+    65→};
+    66→
+    67→export const getAutopilotStore: SubStore<
+    68→  AutopilotStore,
+    69→  GlobalStore
+    70→> = set => ({
+    71→  // Connection status
+    72→  isConnected: false,
+    73→  setIsConnected: connected =>
+    74→    set(
+    75→      state => {
+    76→        state.autopilot.isConnected = connected;
+    77→      },
+    78→      false,
+    79→      { type: "autopilot/setIsConnected", data: { connected } }
+    80→    ),
+    81→
+    82→  // Position entries
+    83→  positions: new Map<string, AutopilotPositionEntry>(),
+    84→  setPositions: positions =>
+    85→    set(
+    86→      state => {
+    87→        const posMap = new Map<string, AutopilotPositionEntry>();
+    88→        positions.forEach(p => posMap.set(p.mint, p));
+    89→        state.autopilot.positions = posMap;
+    90→      },
+    91→      false,
+    92→      { type: "autopilot/setPositions", data: { count: positions.length } }
+    93→    ),
+    94→
+    95→  // Signals history
+    96→  signals: [],
+    97→  addSignal: (signal: AutopilotSignal) =>
+    98→    set(
+    99→      state => {
+   100→        state.autopilot.signals = [signal, ...state.autopilot.signals].slice(
+   101→          0,
+   102→          MAX_SIGNALS
+   103→        );
+   104→      },
+   105→      false,
+   106→      { type: "autopilot/addSignal", data: { signalType: signal.signalType } }
+   107→    ),
+   108→
+   109→  // Market status
+   110→  marketStatus: defaultMarketStatus,
+   111→  setMarketStatus: status =>
+   112→    set(
+   113→      state => {
+   114→        state.autopilot.marketStatus = status;
+   115→      },
+   116→      false,
+   117→      { type: "autopilot/setMarketStatus", data: { state: status.state } }
+   118→    ),
+   119→
+   120→  // Trading stats
+   121→  stats: defaultStats,
+   122→  setStats: stats =>
+   123→    set(
+   124→      state => {
+   125→        state.autopilot.stats = stats;
+   126→      },
+   127→      false,
+   128→      { type: "autopilot/setStats", data: { openTrades: stats.openTrades } }
+   129→    ),
+   130→
+   131→  // Scan metadata
+   132→  scanTick: null,
+   133→  setScanTick: tick =>
+   134→    set(
+   135→      state => {
+   136→        state.autopilot.scanTick = tick;
+   137→      },
+   138→      false,
+   139→      { type: "autopilot/setScanTick", data: { scanNumber: tick.scanNumber } }
+   140→    ),
+   141→
+   142→  // Last analyzed token
+   143→  lastAnalysis: null,
+   144→  setLastAnalysis: (analysis: AutopilotLastAnalysis) =>
+   145→    set(
+   146→      state => {
+   147→        state.autopilot.lastAnalysis = analysis;
+   148→      },
+   149→      false,
+   150→      {
+   151→        type: "autopilot/setLastAnalysis",
+   152→        data: { symbol: analysis.symbol, outcome: analysis.outcome },
+   153→      }
+   154→    ),
+   155→
+   156→  // Token lists
+   157→  tokenList: defaultTokenList,
+   158→  setTokenList: list =>
+   159→    set(
+   160→      state => {
+   161→        state.autopilot.tokenList = list;
+   162→      },
+   163→      false,
+   164→      {
+   165→        type: "autopilot/setTokenList",
+   166→        data: {
+   167→          watchlist: list.watchlist.length,
+   168→          trending: list.trending.length,
+   169→          whales: list.whales.length,
+   170→        },
+   171→      }
+   172→    ),
+   173→
+   174→  // Config
+   175→  config: defaultConfig,
+   176→  setConfig: config =>
+   177→    set(
+   178→      state => {
+   179→        state.autopilot.config = config;
+   180→      },
+   181→      false,
+   182→      { type: "autopilot/setConfig", data: { mode: config.mode } }
+   183→    ),
+   184→
+   185→  // Strategies
+   186→  strategies: defaultStrategies,
+   187→  setStrategies: strategies =>
+   188→    set(
+   189→      state => {
+   190→        state.autopilot.strategies = strategies;
+   191→      },
+   192→      false,
+   193→      {
+   194→        type: "autopilot/setStrategies",
+   195→        data: {
+   196→          available: strategies.available.length,
+   197→          active: strategies.active.length,
+   198→        },
+   199→      }
+   200→    ),
+   201→
+   202→  // Reset all
+   203→  reset: () =>
+   204→    set(
+   205→      state => {
+   206→        state.autopilot.isConnected = false;
+   207→        state.autopilot.positions = new Map();
+   208→        state.autopilot.signals = [];
+   209→        state.autopilot.marketStatus = defaultMarketStatus;
+   210→        state.autopilot.stats = defaultStats;
+   211→        state.autopilot.scanTick = null;
+   212→        state.autopilot.lastAnalysis = null;
+   213→        state.autopilot.tokenList = defaultTokenList;
+   214→        state.autopilot.config = defaultConfig;
+   215→        state.autopilot.strategies = defaultStrategies;
+   216→      },
+   217→      false,
+   218→      { type: "autopilot/reset", data: {} }
+   219→    ),
+   220→});
+   221→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

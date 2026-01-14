@@ -1,0 +1,64 @@
+   415→      if (allTokens.length === 0) {
+   416→        console.error('Nothing to watch. Add tokens with "watch <mint>", enable auto-sources, or have open trades.');
+   417→        process.exit(1);
+   418→      }
+   419→
+   420→      const openCount = paperTracker.getOpenTrades().length;
+   421→      const mfStatus = config.marketFilter.enabled ? 'On' : 'Off';
+   422→
+   423→      // Start WebSocket server for frontend
+   424→      wsServer.start(8765);
+   425→
+   426→      // Helper to get current config for broadcasting
+   427→      const getCurrentConfig = (): ConfigData => ({
+   428→        autoSourcesEnabled: configStore.getAutoSourceConfig().enabled,
+   429→        trendingEnabled: configStore.getAutoSourceConfig().trending,
+   430→        whalesEnabled: configStore.getAutoSourceConfig().whales,
+   431→        marketFilterEnabled: configStore.getMarketFilterConfig().enabled,
+   432→        mode: configStore.getTriggerConfig().mode,
+   433→        positionSizeSol: configStore.getTriggerConfig().defaultPositionSizeSol,
+   434→        pollIntervalMs: configStore.get().pollIntervalMs,
+   435→      });
+   436→
+   437→      // Helper to get strategies data for broadcasting
+   438→      const getStrategiesData = (): StrategiesData => {
+   439→        const activeRuleSets = configStore.getRuleSets();
+   440→        const activeIds = new Set(activeRuleSets.map(r => r.id));
+   441→
+   442→        const available: StrategyInfo[] = listTemplates().map(id => {
+   443→          const t = templates[id];
+   444→          return {
+   445→            id: t.id,
+   446→            name: t.name,
+   447→            description: t.description,
+   448→            mode: t.mode,
+   449→            ruleCount: t.rules.length,
+   450→            summary: getTemplateSummary(t),
+   451→          };
+   452→        });
+   453→
+   454→        return {
+   455→          available,
+   456→          active: Array.from(activeIds),
+   457→        };
+   458→      };
+   459→
+   460→      // Handle commands from frontend
+   461→      wsServer.onCommand(async (cmd: AutopilotCommand) => {
+   462→        switch (cmd.command) {
+   463→          case 'toggle_sources':
+   464→            configStore.setAutoSourceEnabled(cmd.enabled);
+   465→            await configStore.save();
+   466→            console.log(`[WS] Auto-sources ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   467→            break;
+   468→          case 'toggle_trending':
+   469→            configStore.setSourceEnabled('trending', cmd.enabled);
+   470→            await configStore.save();
+   471→            console.log(`[WS] Trending source ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   472→            break;
+   473→          case 'toggle_whales':
+   474→            configStore.setSourceEnabled('whales', cmd.enabled);
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

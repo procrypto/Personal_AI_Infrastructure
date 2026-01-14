@@ -1,0 +1,368 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { useState, useEffect, useCallback, useRef } from "react";
+     3→import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+     4→import { Bot, AlertTriangle, TrendingUp, TrendingDown, Activity, Zap, Target, ShieldAlert, Clock } from "lucide-react";
+     5→import { cn } from "@/lib/utils";
+     6→
+     7→// Types matching the backend WebSocket events
+     8→interface PositionData {
+     9→  mint: string;
+    10→  symbol: string;
+    11→  action: "buy" | "sell";
+    12→  entryPriceSol: number;
+    13→  currentPriceSol: number;
+    14→  positionSizeSol: number;
+    15→  pnlPercent: number;
+    16→  pnlSol: number;
+    17→  entryTime: number;
+    18→}
+    19→
+    20→interface SignalData {
+    21→  timestamp: number;
+    22→  mint: string;
+    23→  symbol: string;
+    24→  signalType: "magic_buy" | "magic_exit" | "dump_exit" | "rule_signal";
+    25→  action: "buy" | "sell" | "close";
+    26→  reason: string;
+    27→  pnlPercent?: number;
+    28→  entryType?: string;
+    29→}
+    30→
+    31→interface MarketStatusData {
+    32→  state: "NORMAL" | "CAUTION" | "DUMP";
+    33→  solPriceChangePercent: number;
+    34→  blockEntries: boolean;
+    35→  exitAll: boolean;
+    36→}
+    37→
+    38→interface StatsData {
+    39→  totalTrades: number;
+    40→  openTrades: number;
+    41→  closedTrades: number;
+    42→  wins: number;
+    43→  losses: number;
+    44→  winRate: number;
+    45→  totalPnlSol: number;
+    46→  totalPnlUsd: number;
+    47→  avgPnlPercent: number;
+    48→}
+    49→
+    50→interface ScanTickData {
+    51→  timestamp: number;
+    52→  scanNumber: number;
+    53→  tokenCount: number;
+    54→  openPositions: number;
+    55→}
+    56→
+    57→type AutopilotEvent =
+    58→  | { type: "position_update"; positions: PositionData[] }
+    59→  | { type: "signal"; signal: SignalData }
+    60→  | { type: "market_status"; status: MarketStatusData }
+    61→  | { type: "stats_update"; stats: StatsData }
+    62→  | { type: "scan_tick"; tick: ScanTickData };
+    63→
+    64→// Determine WebSocket URL based on protocol (use proxy for HTTPS)
+    65→const getAutopilotWsUrl = () => {
+    66→  if (typeof window === "undefined") return "ws://localhost:8765";
+    67→  // Use vite proxy when on HTTPS to avoid mixed content
+    68→  if (window.location.protocol === "https:") {
+    69→    return `wss://${window.location.host}/autopilot-ws`;
+    70→  }
+    71→  return "ws://localhost:8765";
+    72→};
+    73→
+    74→// WebSocket hook for autopilot backend
+    75→function useAutopilotWebSocket(wsUrl: string = getAutopilotWsUrl()) {
+    76→  const [positions, setPositions] = useState<PositionData[]>([]);
+    77→  const [signals, setSignals] = useState<SignalData[]>([]);
+    78→  const [marketStatus, setMarketStatus] = useState<MarketStatusData>({
+    79→    state: "NORMAL",
+    80→    solPriceChangePercent: 0,
+    81→    blockEntries: false,
+    82→    exitAll: false,
+    83→  });
+    84→  const [stats, setStats] = useState<StatsData>({
+    85→    totalTrades: 0,
+    86→    openTrades: 0,
+    87→    closedTrades: 0,
+    88→    wins: 0,
+    89→    losses: 0,
+    90→    winRate: 0,
+    91→    totalPnlSol: 0,
+    92→    totalPnlUsd: 0,
+    93→    avgPnlPercent: 0,
+    94→  });
+    95→  const [scanTick, setScanTick] = useState<ScanTickData | null>(null);
+    96→  const [isConnected, setIsConnected] = useState(false);
+    97→  const wsRef = useRef<WebSocket | null>(null);
+    98→  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    99→
+   100→  const connect = useCallback(() => {
+   101→    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+   102→
+   103→    try {
+   104→      const ws = new WebSocket(wsUrl);
+   105→      wsRef.current = ws;
+   106→
+   107→      ws.onopen = () => {
+   108→        setIsConnected(true);
+   109→        console.log("[Autopilot] WebSocket connected");
+   110→      };
+   111→
+   112→      ws.onclose = () => {
+   113→        setIsConnected(false);
+   114→        console.log("[Autopilot] WebSocket disconnected, reconnecting...");
+   115→        // Reconnect after 3 seconds
+   116→        reconnectTimeoutRef.current = setTimeout(connect, 3000);
+   117→      };
+   118→
+   119→      ws.onerror = (err) => {
+   120→        console.error("[Autopilot] WebSocket error:", err);
+   121→      };
+   122→
+   123→      ws.onmessage = (event) => {
+   124→        try {
+   125→          const data = JSON.parse(event.data) as AutopilotEvent;
+   126→
+   127→          switch (data.type) {
+   128→            case "position_update":
+   129→              setPositions(data.positions);
+   130→              break;
+   131→            case "signal":
+   132→              setSignals((prev) => [data.signal, ...prev].slice(0, 50)); // Keep last 50 signals
+   133→              break;
+   134→            case "market_status":
+   135→              setMarketStatus(data.status);
+   136→              break;
+   137→            case "stats_update":
+   138→              setStats(data.stats);
+   139→              break;
+   140→            case "scan_tick":
+   141→              setScanTick(data.tick);
+   142→              break;
+   143→          }
+   144→        } catch (err) {
+   145→          console.error("[Autopilot] Failed to parse message:", err);
+   146→        }
+   147→      };
+   148→    } catch (err) {
+   149→      console.error("[Autopilot] Failed to connect:", err);
+   150→      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+   151→    }
+   152→  }, [wsUrl]);
+   153→
+   154→  useEffect(() => {
+   155→    connect();
+   156→    return () => {
+   157→      if (reconnectTimeoutRef.current) {
+   158→        clearTimeout(reconnectTimeoutRef.current);
+   159→      }
+   160→      wsRef.current?.close();
+   161→    };
+   162→  }, [connect]);
+   163→
+   164→  return { positions, signals, marketStatus, stats, scanTick, isConnected };
+   165→}
+   166→
+   167→// Market Status Badge Component
+   168→const MarketStatusBadge = ({ status }: { status: MarketStatusData }) => {
+   169→  const stateConfig = {
+   170→    NORMAL: { color: "bg-green-500/20 text-green-400 border-green-500/30", icon: Activity, label: "NORMAL" },
+   171→    CAUTION: { color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30", icon: AlertTriangle, label: "CAUTION" },
+   172→    DUMP: { color: "bg-red-500/20 text-red-400 border-red-500/30", icon: ShieldAlert, label: "DUMP" },
+   173→  };
+   174→
+   175→  const config = stateConfig[status.state];
+   176→  const Icon = config.icon;
+   177→
+   178→  return (
+   179→    <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-1.5", config.color)}>
+   180→      <Icon className="h-4 w-4" />
+   181→      <span className="text-xs font-semibold">{config.label}</span>
+   182→      <span className="text-xs opacity-75">
+   183→        SOL {status.solPriceChangePercent >= 0 ? "+" : ""}
+   184→        {status.solPriceChangePercent.toFixed(2)}%
+   185→      </span>
+   186→    </div>
+   187→  );
+   188→};
+   189→
+   190→// Position Card Component
+   191→const PositionCard = ({ position }: { position: PositionData }) => {
+   192→  const isProfit = position.pnlPercent >= 0;
+   193→  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+   194→
+   195→  return (
+   196→    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+   197→      <div className="flex items-center gap-3">
+   198→        <div
+   199→          className={cn(
+   200→            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+   201→            isProfit ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"
+   202→          )}
+   203→        >
+   204→          {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+   205→        </div>
+   206→        <div>
+   207→          <span className="text-text-primary text-sm font-medium">${position.symbol}</span>
+   208→          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+   209→            <Clock className="h-3 w-3" />
+   210→            {holdTime}m
+   211→          </div>
+   212→        </div>
+   213→      </div>
+   214→      <div className="text-right">
+   215→        <div className={cn("text-sm font-semibold", isProfit ? "text-green-400" : "text-red-400")}>
+   216→          {isProfit ? "+" : ""}
+   217→          {position.pnlPercent.toFixed(2)}%
+   218→        </div>
+   219→        <div className="text-text-secondary text-[10px]">
+   220→          {position.positionSizeSol.toFixed(2)} SOL
+   221→        </div>
+   222→      </div>
+   223→    </div>
+   224→  );
+   225→};
+   226→
+   227→// Signal Item Component
+   228→const SignalItem = ({ signal }: { signal: SignalData }) => {
+   229→  const signalConfig = {
+   230→    magic_buy: { color: "text-cyan-400", icon: Target, label: "BUY" },
+   231→    magic_exit: { color: "text-purple-400", icon: Zap, label: "EXIT" },
+   232→    dump_exit: { color: "text-red-400", icon: ShieldAlert, label: "DUMP" },
+   233→    rule_signal: { color: "text-blue-400", icon: Activity, label: "SIGNAL" },
+   234→  };
+   235→
+   236→  const config = signalConfig[signal.signalType];
+   237→  const Icon = config.icon;
+   238→  const time = new Date(signal.timestamp).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+   239→
+   240→  return (
+   241→    <div className="border-border-primary/50 flex items-center gap-2 border-b py-2 last:border-0">
+   242→      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+   243→      <span className="text-text-secondary text-[10px]">{time}</span>
+   244→      <span className={cn("text-xs font-medium", config.color)}>{config.label}</span>
+   245→      <span className="text-text-primary text-xs">${signal.symbol}</span>
+   246→      {signal.pnlPercent !== undefined && (
+   247→        <span className={cn("text-xs", signal.pnlPercent >= 0 ? "text-green-400" : "text-red-400")}>
+   248→          {signal.pnlPercent >= 0 ? "+" : ""}
+   249→          {signal.pnlPercent.toFixed(1)}%
+   250→        </span>
+   251→      )}
+   252→    </div>
+   253→  );
+   254→};
+   255→
+   256→// Stats Panel Component
+   257→const StatsPanel = ({ stats }: { stats: StatsData }) => {
+   258→  const isProfit = stats.totalPnlSol >= 0;
+   259→
+   260→  return (
+   261→    <div className="border-border-primary bg-bg-tertiary/30 grid grid-cols-4 gap-2 rounded-lg border p-3">
+   262→      <div className="text-center">
+   263→        <div className="text-text-primary text-lg font-bold">{stats.closedTrades}</div>
+   264→        <div className="text-text-secondary text-[10px]">Trades</div>
+   265→      </div>
+   266→      <div className="text-center">
+   267→        <div className={cn("text-lg font-bold", stats.winRate >= 0.5 ? "text-green-400" : "text-red-400")}>
+   268→          {(stats.winRate * 100).toFixed(0)}%
+   269→        </div>
+   270→        <div className="text-text-secondary text-[10px]">Win Rate</div>
+   271→      </div>
+   272→      <div className="text-center">
+   273→        <div className="text-text-primary text-lg font-bold">
+   274→          {stats.wins}W/{stats.losses}L
+   275→        </div>
+   276→        <div className="text-text-secondary text-[10px]">Record</div>
+   277→      </div>
+   278→      <div className="text-center">
+   279→        <div className={cn("text-lg font-bold", isProfit ? "text-green-400" : "text-red-400")}>
+   280→          {isProfit ? "+" : ""}
+   281→          <FormattedNumber value={stats.totalPnlSol} decimals={2} />
+   282→        </div>
+   283→        <div className="text-text-secondary text-[10px]">P&L (SOL)</div>
+   284→      </div>
+   285→    </div>
+   286→  );
+   287→};
+   288→
+   289→// Main Autopilot Widget Component
+   290→export const AutopilotWidget = () => {
+   291→  const { positions, signals, marketStatus, stats, scanTick, isConnected } = useAutopilotWebSocket();
+   292→
+   293→  return (
+   294→    <div className="flex h-full flex-col gap-3 overflow-hidden">
+   295→      {/* Header - Market Status */}
+   296→      <div className="flex items-center justify-between">
+   297→        <div className="flex items-center gap-2">
+   298→          <Bot className={cn("h-5 w-5", isConnected ? "text-green-400" : "text-red-400")} />
+   299→          <span className="text-text-primary text-sm font-semibold">Token Autopilot</span>
+   300→          {scanTick && (
+   301→            <span className="text-text-secondary text-[10px]">
+   302→              #{scanTick.scanNumber} | {scanTick.tokenCount} tokens
+   303→            </span>
+   304→          )}
+   305→        </div>
+   306→        <MarketStatusBadge status={marketStatus} />
+   307→      </div>
+   308→
+   309→      {/* Connection Status (shown when disconnected) */}
+   310→      {!isConnected && (
+   311→        <div className="bg-yellow-500/10 border-yellow-500/30 flex items-center gap-2 rounded-lg border px-3 py-2">
+   312→          <AlertTriangle className="h-4 w-4 text-yellow-400" />
+   313→          <span className="text-xs text-yellow-400">Connecting to autopilot backend...</span>
+   314→        </div>
+   315→      )}
+   316→
+   317→      {/* Stats Panel */}
+   318→      <StatsPanel stats={stats} />
+   319→
+   320→      {/* Open Positions */}
+   321→      <div className="flex-shrink-0">
+   322→        <div className="text-text-secondary mb-2 flex items-center gap-2 text-xs font-medium">
+   323→          <Target className="h-3.5 w-3.5" />
+   324→          Open Positions ({positions.length})
+   325→        </div>
+   326→        {positions.length === 0 ? (
+   327→          <div className="text-text-secondary border-border-primary/50 rounded-lg border border-dashed p-4 text-center text-xs">
+   328→            No open positions
+   329→          </div>
+   330→        ) : (
+   331→          <div className="max-h-40 space-y-2 overflow-auto">
+   332→            {positions.map((pos) => (
+   333→              <PositionCard key={pos.mint} position={pos} />
+   334→            ))}
+   335→          </div>
+   336→        )}
+   337→      </div>
+   338→
+   339→      {/* Signal Feed */}
+   340→      <div className="flex min-h-0 flex-1 flex-col">
+   341→        <div className="text-text-secondary mb-2 flex items-center gap-2 text-xs font-medium">
+   342→          <Zap className="h-3.5 w-3.5" />
+   343→          Signal Feed
+   344→        </div>
+   345→        <div className="flex-1 overflow-auto">
+   346→          {signals.length === 0 ? (
+   347→            <div className="text-text-secondary border-border-primary/50 rounded-lg border border-dashed p-4 text-center text-xs">
+   348→              Waiting for signals...
+   349→            </div>
+   350→          ) : (
+   351→            <div className="space-y-0">
+   352→              {signals.slice(0, 10).map((signal, idx) => (
+   353→                <SignalItem key={`${signal.timestamp}-${idx}`} signal={signal} />
+   354→              ))}
+   355→            </div>
+   356→          )}
+   357→        </div>
+   358→      </div>
+   359→    </div>
+   360→  );
+   361→};
+   362→
+   363→export default AutopilotWidget;
+   364→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

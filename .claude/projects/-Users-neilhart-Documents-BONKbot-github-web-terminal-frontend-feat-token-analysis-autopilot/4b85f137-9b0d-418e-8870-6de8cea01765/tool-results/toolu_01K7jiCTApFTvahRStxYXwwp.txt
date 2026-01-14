@@ -1,0 +1,180 @@
+     1→/**
+     2→ * AutopilotWebsocket
+     3→ *
+     4→ * WebSocket client for the token-analysis-autopilot backend.
+     5→ * Connects to local autopilot service (no auth token needed).
+     6→ *
+     7→ * Extends BaseWebsocket for connection management and healthcheck.
+     8→ */
+     9→
+    10→import { BaseWebsocket } from "@/websocket/base/BaseWebsocket";
+    11→import type { TokenMarketData } from "@/store/memoryStore/slices/websocket-messages-store/types";
+    12→
+    13→// Command types that can be sent to autopilot backend
+    14→export type AutopilotCommand =
+    15→  | { command: "toggle_sources"; enabled: boolean }
+    16→  | { command: "toggle_trending"; enabled: boolean }
+    17→  | { command: "toggle_whales"; enabled: boolean }
+    18→  | { command: "toggle_filter"; enabled: boolean }
+    19→  | { command: "set_mode"; mode: "paper" | "live" }
+    20→  | { command: "set_position_size"; sizeSol: number }
+    21→  | { command: "refresh_sources" }
+    22→  | { command: "get_config" }
+    23→  | { command: "get_strategies" }
+    24→  | { command: "toggle_strategy"; strategyId: string; enabled: boolean }
+    25→  | { command: "close_all_positions" }
+    26→  | { command: "close_position"; mint: string };
+    27→
+    28→// Data feed types for v2.0 architecture (frontend -> CLI)
+    29→// Frontend forwards NATS market data to CLI backend
+    30→// Protocol matches backend engineer spec (uses 'type' field, not 'feed')
+    31→
+    32→// OHLCV candle data format expected by backend
+    33→export type OHLCVCandle = {
+    34→  open: number;
+    35→  high: number;
+    36→  low: number;
+    37→  close: number;
+    38→  volume: number;
+    39→  timestamp: number;
+    40→};
+    41→
+    42→// Trade data format expected by backend
+    43→export type TradeData = {
+    44→  mint: string;
+    45→  side: "buy" | "sell";
+    46→  price: number;
+    47→  amount: number;
+    48→  timestamp: number;
+    49→};
+    50→
+    51→// CVD data format matching backend spec exactly
+    52→export type CVDData = {
+    53→  mint: string;
+    54→  timestamp: number;
+    55→  cvd: number; // Current cumulative volume delta
+    56→  cvdChange: number; // Change over period
+    57→  buyVolume: number; // Buy volume in period
+    58→  sellVolume: number; // Sell volume in period
+    59→  netDelta: number; // buyVolume - sellVolume for period
+    60→  periodMs: number; // Period length (e.g., 60000 for 1m)
+    61→};
+    62→
+    63→// Feed types using 'type' field per backend protocol
+    64→export type MarketDataFeed = {
+    65→  type: "market_data_feed";
+    66→  data: TokenMarketData;
+    67→};
+    68→
+    69→export type OhlcvFeed = {
+    70→  type: "ohlcv_update";
+    71→  mint: string;
+    72→  ohlcv: OHLCVCandle[];
+    73→};
+    74→
+    75→export type TradeFeed = {
+    76→  type: "trade_feed";
+    77→  trade: TradeData;
+    78→};
+    79→
+    80→export type CvdFeed = {
+    81→  type: "cvd_update";
+    82→  data: CVDData;
+    83→};
+    84→
+    85→export type AutopilotFeed = MarketDataFeed | OhlcvFeed | TradeFeed | CvdFeed;
+    86→
+    87→export class AutopilotWebsocket extends BaseWebsocket {
+    88→  private hasMessageListener = false;
+    89→  private removeListener: (() => void) | null = null;
+    90→
+    91→  /**
+    92→   * Connect to autopilot backend.
+    93→   * No auth token needed - this is a local service.
+    94→   */
+    95→  async connect() {
+    96→    // If already connected, skip
+    97→    if (
+    98→      this.ws?.readyState === WebSocket.OPEN ||
+    99→      this.ws?.readyState === WebSocket.CONNECTING
+   100→    ) {
+   101→      return;
+   102→    }
+   103→
+   104→    // No auth token needed for local autopilot backend
+   105→    const ws = new WebSocket(this.url);
+   106→    this.ws = ws;
+   107→    this.setupConnectHandlers();
+   108→  }
+   109→
+   110→  /**
+   111→   * Send a command to the autopilot backend.
+   112→   */
+   113→  sendCommand(command: AutopilotCommand) {
+   114→    if (this.ws?.readyState === WebSocket.OPEN) {
+   115→      this.ws.send(JSON.stringify(command));
+   116→    } else {
+   117→      console.warn("[Autopilot] Cannot send command - not connected");
+   118→    }
+   119→  }
+   120→
+   121→  /**
+   122→   * Send a data feed to the autopilot backend.
+   123→   * Used for v2.0 architecture where frontend forwards NATS data to CLI.
+   124→   */
+   125→  sendFeed(feed: AutopilotFeed) {
+   126→    if (this.ws?.readyState === WebSocket.OPEN) {
+   127→      this.ws.send(JSON.stringify(feed));
+   128→    } else {
+   129→      console.warn("[Autopilot] Cannot send feed - not connected");
+   130→    }
+   131→  }
+   132→
+   133→  /**
+   134→   * Subscribe to data from the autopilot websocket.
+   135→   * Returns a cleanup function to remove the listener.
+   136→   */
+   137→  subscribeToData(onMessage: (data: unknown) => void) {
+   138→    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+   139→      throw new Error("WebSocket must be connected before subscribing to data");
+   140→    }
+   141→
+   142→    // Ensure only one message handler is attached at a time
+   143→    if (this.hasMessageListener && this.removeListener) {
+   144→      this.removeListener();
+   145→      this.hasMessageListener = false;
+   146→      this.removeListener = null;
+   147→    }
+   148→
+   149→    const messageHandler = (event: MessageEvent) => {
+   150→      const data = event.data;
+   151→      if (typeof data !== "string") return;
+   152→      if (data.length === 0 || data.charCodeAt(0) !== 123) return; // '{'
+   153→
+   154→      // Skip pong messages from healthcheck
+   155→      if (data.indexOf('"pong"') !== -1) return;
+   156→
+   157→      try {
+   158→        const parsed = JSON.parse(data);
+   159→        onMessage(parsed);
+   160→        // Any data message is also a pong
+   161→        this.healthcheck?.resetPongs();
+   162→      } catch (e) {
+   163→        console.error("[Autopilot] Error parsing websocket message:", e, data);
+   164→      }
+   165→    };
+   166→
+   167→    this.ws.addEventListener("message", messageHandler);
+   168→    this.hasMessageListener = true;
+   169→    this.removeListener = () => {
+   170→      this.ws?.removeEventListener("message", messageHandler);
+   171→    };
+   172→
+   173→    return this.removeListener;
+   174→  }
+   175→}
+   176→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

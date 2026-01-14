@@ -1,0 +1,33 @@
+# Phase 15 Plan 01: Discovery API Integration Summary
+
+**Frontend now uses Discovery API/WebSocket for instant whale moves and trending data.**
+
+## Accomplishments
+
+- Created `useAutopilotDiscoveryTokens` hook for hybrid data sourcing
+- Whale moves now come from Discovery API (1s refresh)
+- Trending tokens now come from Discovery WebSocket store (same as Discovery/Overwatch pages)
+- Watchlist preserved from autopilot backend
+- Added `useDiscoverySubscription` to autopilot subscription for trending data population
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts` - New hook combining Discovery + backend sources
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts` - Uses new Discovery hook
+- `apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts` - Added Discovery subscription, uses Discovery sources for NATS subscriptions
+
+## Decisions Made
+
+- Use `discovery_trending_list.itemsMap` store (WebSocket) for trending instead of `useTrendingList` hook (REST API with limit=5)
+- Call `useDiscoverySubscription` in autopilot subscription to ensure trending data is populated
+- Backend optimization (Discovery WebSocket integration for CLI) deferred to v2.0
+
+## Issues Encountered
+
+- Initial implementation used `useTrendingList` hook which only returns 5 results from search API
+- Fixed by using `discovery_trending_list.itemsMap` store which contains full trending table via WebSocket
+- Trending wasn't populating until `useDiscoverySubscription` was added to trigger data load
+
+## Next Phase Readiness
+
+Ready for Phase 16: User Watchlist Integration

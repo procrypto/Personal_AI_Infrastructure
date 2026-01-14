@@ -1,0 +1,226 @@
+---
+phase: 04-nats-data-feeds
+plan: 01
+type: execute
+---
+
+<objective>
+Add trending_feed and whale_feed data feed types so frontend can forward NATS discovery data instead of backend polling API.
+
+Purpose: Enable real-time trending/whale data from frontend's NATS subscription, eliminating 15-minute API polling delay.
+Output: Backend receives and processes trending_feed and whale_feed messages from frontend WebSocket.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./04-01-SUMMARY.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@INTEGRATION.md
+
+# Prior phase establishing data feed pattern:
+@.planning/phases/03-interface-cleanup-cutover/03-03-SUMMARY.md
+
+# Key files to modify:
+@src/websocket-server.ts
+@src/trading/auto-sources.ts
+
+**Tech stack available:** TypeScript, ws library, existing DataFeedMessage union type
+**Established patterns:** DataFeedMessage discriminated union, handleDataFeed switch statement, upsert into Maps
+
+**Constraining decisions:**
+- Phase 03-03: CVD data feed follows same pattern (type field, handler in switch)
+- Frontend sends NATS data via feedAdapters.ts (toMarketDataFeed, toCvdFeed patterns)
+
+**NATS topics from web-terminal backend:**
+- `materializer.trending.{5m|1h|6h|24h}` → TrendingData
+- Discovery WebSocket: `/data/discovery/trending_ws` → Real-time trending
+- Whale moves: `/data/discovery/whale_moves` API → WhaleMovesItem[]
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add trending_feed and whale_feed to DataFeedMessage</name>
+  <files>src/websocket-server.ts</files>
+  <action>
+1. Add TrendingFeedItem interface matching frontend's NATS trending data:
+   ```typescript
+   interface TrendingFeedItem {
+     mint: string;
+     symbol: string;
+     name: string;
+     rank: number;
+     volume_usd: number;
+     resolution: '5m' | '1h' | '6h' | '24h';
+   }
+   ```
+
+2. Add WhaleMoveFeedItem interface matching existing WhaleMovesItem but with required fields:
+   ```typescript
+   interface WhaleMoveFeedItem {
+     mint: string;
+     symbol: string;
+     whale_count: number;
+     volume_usd: number;
+   }
+   ```
+
+3. Extend DataFeedMessage union:
+   ```typescript
+   | { type: 'trending_feed'; tokens: TrendingFeedItem[]; resolution: '5m' | '1h' | '6h' | '24h' }
+   | { type: 'whale_feed'; tokens: WhaleMoveFeedItem[] }
+   ```
+
+4. Add storage Maps:
+   ```typescript
+   private trendingTokens: Map<string, TrendingFeedItem> = new Map();
+   private whaleTokens: Map<string, WhaleMoveFeedItem> = new Map();
+   ```
+
+5. Update isDataFeedMessage() to include new types.
+
+6. Add cases to handleDataFeed switch:
+   - trending_feed: Clear and repopulate trendingTokens Map
+   - whale_feed: Clear and repopulate whaleTokens Map
+
+7. Add getter methods: getTrendingTokens(), getWhaleTokens()
+
+Avoid: Don't change existing data feed handlers. Don't modify TokenMarketData or other existing types.
+  </action>
+  <verify>npx tsc --noEmit passes with no errors</verify>
+  <done>DataFeedMessage includes trending_feed and whale_feed, handlers store data in Maps, getter methods exist</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Connect data feeds to AutoSourceManager</name>
+  <files>src/trading/auto-sources.ts, src/cli.ts</files>
+  <action>
+1. In AutoSourceManager, add method to receive trending from data feed:
+   ```typescript
+   setTrendingFromFeed(tokens: TrendingFeedItem[]): void {
+     this.trendingTokens = tokens.map((item, index) => ({
+       mint: item.mint,
+       symbol: item.symbol || item.mint.slice(0, 6),
+       source: 'trending' as TokenSource,
+       metadata: { rank: index + 1, volumeUsd: item.volume_usd },
+     }));
+     this.lastRefresh = Date.now();
+   }
+   ```
+
+2. Add similar method for whale feed:
+   ```typescript
+   setWhalesFromFeed(tokens: WhaleMoveFeedItem[]): void {
+     this.whaleTokens = tokens.map(item => ({
+       mint: item.mint,
+       symbol: item.symbol || item.mint.slice(0, 6),
+       source: 'whales' as TokenSource,
+       metadata: { whaleCount: item.whale_count, volumeUsd: item.volume_usd },
+     }));
+     this.lastRefresh = Date.now();
+   }
+   ```
+
+3. In cli.ts, wire up the data feed to AutoSourceManager in the onDataFeed handler:
+   ```typescript
+   wsServer.onDataFeed((message) => {
+     if (message.type === 'trending_feed') {
+       autoSources.setTrendingFromFeed(message.tokens);
+       console.log(`[AutoSources] Received ${message.tokens.length} trending tokens via feed`);
+     } else if (message.type === 'whale_feed') {
+       autoSources.setWhalesFromFeed(message.tokens);
+       console.log(`[AutoSources] Received ${message.tokens.length} whale tokens via feed`);
+     }
+     pipeline.handleDataFeed(message);
+   });
+   ```
+
+Avoid: Don't remove existing API polling yet - it serves as fallback. Don't modify refreshTrending/refreshWhales methods.
+  </action>
+  <verify>npx tsc --noEmit passes, npm test passes (65 tests)</verify>
+  <done>AutoSourceManager can receive tokens from data feeds, cli.ts wires feeds to auto-sources</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Add logging and export types</name>
+  <files>src/websocket-server.ts, src/types/index.ts</files>
+  <action>
+1. Add log line in handleDataFeed for trending_feed and whale_feed:
+   ```typescript
+   case 'trending_feed':
+     console.log(`[WS] Data feed received: trending_feed (${message.tokens.length} tokens, ${message.resolution})`);
+     // ... handler code
+   case 'whale_feed':
+     console.log(`[WS] Data feed received: whale_feed (${message.tokens.length} tokens)`);
+     // ... handler code
+   ```
+
+2. Export new interfaces from websocket-server.ts:
+   ```typescript
+   export type { TrendingFeedItem, WhaleMoveFeedItem };
+   ```
+
+3. Add to src/types/index.ts exports for LOIS compatibility:
+   ```typescript
+   export type { TrendingFeedItem, WhaleMoveFeedItem } from '../websocket-server.js';
+   ```
+
+Avoid: Don't add interfaces to src/types/lois.ts - these are frontend-specific, not LOIS-ready.
+  </action>
+  <verify>npm run build succeeds, types are importable from './types'</verify>
+  <done>Logging shows feed reception, types exported for frontend TypeScript compatibility</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `npx tsc --noEmit` passes
+- [ ] `npm test` passes (65 tests)
+- [ ] `npm run build` succeeds
+- [ ] Types TrendingFeedItem, WhaleMoveFeedItem are exported
+- [ ] Manual test: Send trending_feed message via WebSocket, see log output
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Backend can receive trending_feed and whale_feed messages
+- AutoSourceManager updated when feeds arrive
+- Existing API polling still works as fallback
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/04-nats-data-feeds/04-01-SUMMARY.md`:
+
+# Phase 4 Plan 1: NATS Data Feeds Summary
+
+**[One-liner about what shipped]**
+
+## Accomplishments
+- [Key outcomes]
+
+## Files Created/Modified
+- `src/websocket-server.ts` - Added trending_feed, whale_feed types and handlers
+- `src/trading/auto-sources.ts` - Added setTrendingFromFeed, setWhalesFromFeed methods
+- `src/cli.ts` - Wired data feeds to AutoSourceManager
+- `src/types/index.ts` - Exported new types
+
+## Decisions Made
+[Any decisions, or "None"]
+
+## Issues Encountered
+[Problems and resolutions, or "None"]
+
+## Next Phase Readiness
+- Phase 04-01 complete: Backend can receive NATS data feeds
+- Frontend can now send trending_feed and whale_feed messages
+- API polling remains as fallback until frontend integration validated
+</output>

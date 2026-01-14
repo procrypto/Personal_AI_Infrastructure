@@ -1,0 +1,59 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   231→      console.log(`Set trigger mode to: ${mode}`);
+   232→      break;
+   233→    }
+   234→
+   235→    case 'size': {
+   236→      const size = parseFloat(args[1]);
+   237→      if (isNaN(size) || size <= 0) {
+   238→        console.error('Usage: size <sol_amount>');
+   239→        process.exit(1);
+   240→      }
+   241→      configStore.setPositionSize(size);
+   242→      await configStore.save();
+   243→      console.log(`Set default position size to: ${size} SOL`);
+   244→      break;
+   245→    }
+   246→
+   247→    case 'filter': {
+   248→      const subCmd = args[1]?.toLowerCase();
+   249→      const filterConfig = configStore.getMarketFilterConfig();
+   250→
+   251→      if (!subCmd) {
+   252→        // Show status
+   253→        console.log('\nMarket Filter (SOL Dump Protection):');
+   254→        console.log(`  Enabled: ${filterConfig.enabled ? 'Yes' : 'No'}`);
+   255→        console.log(`  Timeframe: ${filterConfig.timeframeMinutes}m`);
+   256→        console.log(`  Skip Entries: SOL < ${filterConfig.skipEntriesThreshold}%`);
+   257→        console.log(`  Exit All: SOL < ${filterConfig.exitAllThreshold}%`);
+   258→        console.log(`  Recovery: SOL >= ${filterConfig.recoveryThreshold}%`);
+   259→        console.log(`\nState Machine:`);
+   260→        console.log(`  NORMAL ──(${filterConfig.skipEntriesThreshold}%)──> CAUTION ──(${filterConfig.exitAllThreshold}%)──> DUMP`);
+   261→        console.log(`     ^                                                │`);
+   262→        console.log(`     └────────────────(>=${filterConfig.recoveryThreshold}%)────────────────────┘`);
+   263→        break;
+   264→      }
+   265→
+   266→      if (subCmd === 'on') {
+   267→        configStore.setMarketFilterEnabled(true);
+   268→        await configStore.save();
+   269→        console.log('Market filter enabled');
+   270→        break;
+   271→      }
+   272→
+   273→      if (subCmd === 'off') {
+   274→        configStore.setMarketFilterEnabled(false);
+   275→        await configStore.save();
+   276→        console.log('Market filter disabled');
+   277→        break;
+   278→      }
+   279→
+   280→      console.error('Usage: filter [on|off]');
+   281→      break;
+   282→    }
+   283→
+   284→    case 'analyze': {
+   285→      const mint = args[1];
+   286→      if (!mint) {
+   287→        console.error('Usage: analyze <mint>');
+   288→        process.exit(1);

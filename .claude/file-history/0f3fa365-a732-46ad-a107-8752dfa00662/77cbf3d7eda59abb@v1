@@ -1,0 +1,99 @@
+---
+phase: 07-validation-cleanup
+plan: 01
+type: execute
+---
+
+<objective>
+Validate end-to-end feed integration and measure zero-API achievement.
+
+Purpose: Confirm all data feeds flow correctly from frontend to backend signals before removing fallback code.
+Output: Verified feed coverage with metrics proving API elimination is safe.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase summaries (dependency graph):
+@.planning/phases/06-backend-feed-consumption/06-01-SUMMARY.md
+@.planning/phases/06-backend-feed-consumption/06-02-SUMMARY.md
+
+# Key source files:
+@src/cli.ts
+@src/websocket-server.ts
+@src/trading/auto-sources.ts
+
+**Tech stack available:** Feed freshness tracking, feed-first API fallback pattern, watchlist_feed handler
+**Established patterns:** isFeedFresh(), getFeedStats(), feed activity logging every 10 scans
+**Constraining decisions:**
+- Phase 6: 60s OHLCV freshness threshold, 5-minute stale warning threshold
+- Phase 6: Feed-first, API-fallback pattern for OHLCV polling
+</context>
+
+<tasks>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Phase 6 feed handlers - need end-to-end validation with real frontend connection</what-built>
+  <how-to-verify>
+    1. Start frontend (web-terminal-frontend on feat-token-analysis-autopilot branch)
+    2. Start backend: `cd ~/Documents/BONKbot/github/token-analysis-autopilot && npm run cli run`
+    3. Wait for one polling cycle (30s)
+    4. Check terminal output for feed activity logging (every 10 scans):
+       - Should see: `[Feed] market_data: Xms ago | ohlcv: Xms ago | cvd: Xms ago | trending: Xms ago | whale: Xms ago`
+       - Should see: `[Feed] Using OHLCV feed for X positions` (not `[API] Using OHLCV API`)
+       - Should NOT see: `[Feed] WARNING: All feeds stale`
+    5. Verify signals are generated (look for BUY/SELL/HOLD outputs)
+  </how-to-verify>
+  <resume-signal>Type "verified" if feeds are flowing, or describe what's missing/broken</resume-signal>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add API call counter to measure zero-API achievement</name>
+  <files>src/api/client.ts</files>
+  <action>Add a static counter to ApiClient that increments on each HTTP request. Add getApiCallCount() and resetApiCallCount() methods. This allows validation to measure exactly how many API calls occur when feeds are active vs inactive.</action>
+  <verify>npm run build succeeds, grep shows counter increment in client.ts</verify>
+  <done>ApiClient has call counter with get/reset methods, no test failures</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Add validation command to CLI for feed health check</name>
+  <files>src/cli.ts</files>
+  <action>Add `validate-feeds` command that:
+1. Gets feed stats from wsServer.getFeedStats()
+2. Gets API call count from ApiClient.getApiCallCount()
+3. Prints summary: which feeds are active, ages, API calls made
+4. Returns exit code 0 if all feeds fresh and API calls = 0, else 1
+
+This provides a programmatic way to verify zero-API achievement.</action>
+  <verify>npm run cli validate-feeds runs without error (may show stale if no frontend)</verify>
+  <done>validate-feeds command exists, shows feed stats and API call count</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run build` succeeds without errors
+- [ ] `npm test` passes (65 tests)
+- [ ] validate-feeds command exists and runs
+- [ ] End-to-end test showed feed data flowing (human verification)
+</verification>
+
+<success_criteria>
+
+- Human verified feeds flow from frontend to backend
+- API call counter added to track HTTP requests
+- validate-feeds command provides programmatic health check
+- Ready for Plan 2 (cleanup of redundant code)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/07-validation-cleanup/07-01-SUMMARY.md`
+</output>

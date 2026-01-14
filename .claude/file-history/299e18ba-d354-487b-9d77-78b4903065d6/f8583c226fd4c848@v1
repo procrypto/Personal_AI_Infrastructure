@@ -1,0 +1,178 @@
+/**
+ * Rule Engine
+ *
+ * Orchestrates running analysis rules against token data.
+ * Aggregates signals and determines final action.
+ */
+
+import type { ApiClient } from '../api/client.js';
+import type { Signal, Rule, RuleSet, AnalysisContext, AnyRuleConfig } from './types.js';
+import { PriceChangeRule } from './price-change.js';
+import { VolumeSpikeRule } from './volume-spike.js';
+
+export interface EngineConfig {
+  api: ApiClient;
+  defaultOhlcvResolution?: '1m' | '5m' | '15m';
+  defaultOhlcvCountback?: number;
+  defaultTradesLimit?: number;
+}
+
+export class RuleEngine {
+  private api: ApiClient;
+  private rules: Rule[] = [];
+  private ohlcvResolution: '1m' | '5m' | '15m';
+  private ohlcvCountback: number;
+  private tradesLimit: number;
+
+  constructor(config: EngineConfig) {
+    this.api = config.api;
+    this.ohlcvResolution = config.defaultOhlcvResolution ?? '5m';
+    this.ohlcvCountback = config.defaultOhlcvCountback ?? 100;
+    this.tradesLimit = config.defaultTradesLimit ?? 50;
+  }
+
+  /**
+   * Add a rule to the engine
+   */
+  addRule(rule: Rule): void {
+    this.rules.push(rule);
+  }
+
+  /**
+   * Add rules from a config array
+   */
+  addRulesFromConfig(configs: AnyRuleConfig[]): void {
+    for (const config of configs) {
+      const rule = this.createRuleFromConfig(config);
+      if (rule) this.rules.push(rule);
+    }
+  }
+
+  /**
+   * Create a Rule instance from config
+   */
+  private createRuleFromConfig(config: AnyRuleConfig): Rule | null {
+    switch (config.ruleType) {
+      case 'price_change':
+        return new PriceChangeRule(config);
+      case 'volume_spike':
+        return new VolumeSpikeRule(config);
+      // Add more rule types here as they're implemented
+      default:
+        console.warn(`Unknown rule type: ${(config as any).ruleType}`);
+        return null;
+    }
+  }
+
+  /**
+   * Clear all rules
+   */
+  clearRules(): void {
+    this.rules = [];
+  }
+
+  /**
+   * Get current rules
+   */
+  getRules(): Rule[] {
+    return [...this.rules];
+  }
+
+  /**
+   * Analyze a single token
+   */
+  async analyzeToken(mint: string): Promise<Signal[]> {
+    try {
+      // Fetch all required data in parallel
+      const [token, ohlcv, trades] = await Promise.all([
+        this.api.getMarketData(mint),
+        this.api.getOHLCV(mint, this.ohlcvResolution, { countback: this.ohlcvCountback }),
+        this.api.getTrades(mint, this.tradesLimit),
+      ]);
+
+      const context: AnalysisContext = { token, ohlcv, trades };
+
+      // Run all rules
+      const signals: Signal[] = [];
+      for (const rule of this.rules) {
+        try {
+          const signal = rule.analyze(context);
+          if (signal) {
+            signals.push(signal);
+          }
+        } catch (error) {
+          console.error(`Rule ${rule.config.id} failed:`, error);
+        }
+      }
+
+      return signals;
+    } catch (error) {
+      console.error(`Failed to analyze token ${mint}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Analyze multiple tokens
+   */
+  async analyzeTokens(mints: string[]): Promise<Map<string, Signal[]>> {
+    const results = new Map<string, Signal[]>();
+
+    // Process in parallel with concurrency limit
+    const concurrency = 5;
+    for (let i = 0; i < mints.length; i += concurrency) {
+      const batch = mints.slice(i, i + concurrency);
+      const batchResults = await Promise.all(
+        batch.map(mint => this.analyzeToken(mint).then(signals => ({ mint, signals })))
+      );
+
+      for (const { mint, signals } of batchResults) {
+        results.set(mint, signals);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Aggregate signals and determine final action
+   */
+  aggregateSignals(signals: Signal[], mode: 'all' | 'any' = 'any'): {
+    action: 'buy' | 'sell' | 'hold';
+    confidence: number;
+    signals: Signal[];
+  } {
+    if (signals.length === 0) {
+      return { action: 'hold', confidence: 0, signals: [] };
+    }
+
+    const buySignals = signals.filter(s => s.type === 'buy');
+    const sellSignals = signals.filter(s => s.type === 'sell');
+
+    if (mode === 'all') {
+      // All signals must agree
+      if (buySignals.length === signals.length) {
+        const avgStrength = buySignals.reduce((sum, s) => sum + s.strength, 0) / buySignals.length;
+        return { action: 'buy', confidence: avgStrength, signals: buySignals };
+      }
+      if (sellSignals.length === signals.length) {
+        const avgStrength = sellSignals.reduce((sum, s) => sum + s.strength, 0) / sellSignals.length;
+        return { action: 'sell', confidence: avgStrength, signals: sellSignals };
+      }
+      return { action: 'hold', confidence: 0, signals };
+    }
+
+    // 'any' mode - majority wins
+    if (buySignals.length > sellSignals.length) {
+      const avgStrength = buySignals.reduce((sum, s) => sum + s.strength, 0) / buySignals.length;
+      return { action: 'buy', confidence: avgStrength, signals: buySignals };
+    }
+    if (sellSignals.length > buySignals.length) {
+      const avgStrength = sellSignals.reduce((sum, s) => sum + s.strength, 0) / sellSignals.length;
+      return { action: 'sell', confidence: avgStrength, signals: sellSignals };
+    }
+
+    // Tie - hold
+    return { action: 'hold', confidence: 0, signals };
+  }
+}

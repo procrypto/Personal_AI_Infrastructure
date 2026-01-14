@@ -1,0 +1,131 @@
+# Context for analytics-dataform
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Dataform-based ELT pipeline for BonkBot blockchain trading analytics. Transforms raw Postgres data from the production database into BigQuery analytics tables, tracking user trading volumes, limit orders, referral networks, and producing leaderboards and VIP status calculations.
+
+**Critical constraint**: Data accuracy is paramount - these tables power user-facing metrics, VIP status, and referral payouts.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Pipeline | Dataform 3.0.0 | ELT orchestration |
+| Target | BigQuery | Analytics warehouse |
+| Source | Cloud SQL (Postgres) | Production replica |
+| Runtime | Node.js 18 | Dataform CLI |
+
+### Data Flow
+
+```
+Postgres Replica --> EXTERNAL_QUERY --> tmp_ staging views
+  --> dim_ dimensions (SCD2) + fact_ tables
+  --> agg_ aggregations --> Looker/Web Terminal
+```
+
+### Key Tables (37+)
+
+| Table | Purpose |
+|-------|---------|
+| `dim_all_user_metrics` | SCD Type 2 user dimension (main table) |
+| `fact_all_user_referral_networks` | 3-level referral chains |
+| `fact_limit_order_user_actions` | Daily limit order aggregates |
+| `agg_user_referrer_performance` | Referrer earnings |
+
+## Capabilities
+
+### Data Sources
+
+| Source | Type | Access Pattern |
+|--------|------|----------------|
+| bonkbot-replica | BigQuery connection | EXTERNAL_QUERY to Postgres |
+| Postgres tables | user, transaction, swap, limit_order, wallet | Real-time queries |
+
+### Key Patterns
+
+1. **SCD Type 2**: `dim_all_user_metrics` tracks historical user state changes
+2. **Recursive Referrals**: 3-level downline traversal via recursive CTE
+3. **Incremental Loads**: Daily partitioned aggregations
+4. **Platform Segmentation**: Telegram vs Web Terminal metrics split
+
+### Extension Points
+
+- Add new dimension: Create `dim_*.sqlx` in `definitions/`
+- Add new fact table: Create `fact_*.sqlx` with appropriate grain
+- Add aggregation: Create `agg_*.sqlx` for rollups
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- Use SQLX files with Dataform config blocks
+- Follow naming: `tmp_` (staging), `dim_` (dimensions), `fact_` (facts), `agg_` (aggregations)
+- Shared declarations in `definitions/_variables.sqlx`
+- Document column descriptions in config blocks
+
+### Common Tasks
+
+#### Setup
+
+```bash
+npm install
+gcloud auth application-default login
+```
+
+#### Development
+
+```bash
+dataform compile          # Validate SQL
+dataform run --dry-run    # Preview changes
+dataform run              # Execute pipeline
+```
+
+#### Finding Code
+
+- Main user dimension: `definitions/dim_all_user_metrics.sqlx`
+- Shared variables: `definitions/_variables.sqlx`
+- GCP setup: `docs/SERVICE_ACCOUNT_SETUP.md`
+- Referral logic: `definitions/fact_all_user_referral_networks.sqlx`
+
+### Things to Avoid
+
+- Modifying SCD2 logic without understanding historical implications
+- Breaking changes to columns consumed by Looker
+- Running full refreshes during peak hours
+- Hardcoding dates instead of using incremental patterns
+
+## Related Documentation
+
+- [README.md](README.md) - Setup and usage
+- [CLAUDE.md](CLAUDE.md) - AI assistant context (if exists)
+- [docs/SERVICE_ACCOUNT_SETUP.md](docs/SERVICE_ACCOUNT_SETUP.md) - GCP configuration
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| bonkbot (Postgres) | User, transaction, swap, order data |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| Looker | Dashboard metrics |
+| Web Terminal | VIP status, leaderboards |
+| Referral system | Payout calculations |
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] Review guidelines and tone expectations
+- [ ] Specific SQL style guide
+- [ ] Dataform deployment process
+- [ ] Common data quality checks
+-->

@@ -1,0 +1,119 @@
+     1→/**
+     2→ * Analysis Rule Types
+     3→ *
+     4→ * Rules are configurable analysis logic that runs as deterministic code.
+     5→ * When conditions are met, they emit signals that can trigger LOIS trades.
+     6→ */
+     7→
+     8→import type { TokenMarketData, OHLCV, Trade } from '../api/types.js';
+     9→
+    10→// Signal emitted when a rule condition is met
+    11→export interface Signal {
+    12→  ruleId: string;
+    13→  ruleName: string;
+    14→  mint: string;
+    15→  symbol: string;
+    16→  type: 'buy' | 'sell' | 'alert';
+    17→  strength: number; // 0-1, how confident the signal is
+    18→  reason: string;
+    19→  data: Record<string, any>; // Rule-specific data
+    20→  timestamp: number;
+    21→}
+    22→
+    23→// Context provided to rules for analysis
+    24→export interface AnalysisContext {
+    25→  token: TokenMarketData;
+    26→  ohlcv: OHLCV[];
+    27→  trades: Trade[];
+    28→}
+    29→
+    30→// Base rule configuration
+    31→export interface RuleConfig {
+    32→  id: string;
+    33→  name: string;
+    34→  description: string;
+    35→  enabled: boolean;
+    36→  type: 'buy' | 'sell' | 'both';
+    37→}
+    38→
+    39→// Rule interface - all rules implement this
+    40→export interface Rule<TConfig extends RuleConfig = RuleConfig> {
+    41→  config: TConfig;
+    42→  analyze(context: AnalysisContext): Signal | null;
+    43→}
+    44→
+    45→// ============================================================================
+    46→// Price Pattern Rules
+    47→// ============================================================================
+    48→
+    49→export interface PriceChangeRuleConfig extends RuleConfig {
+    50→  ruleType: 'price_change';
+    51→  timeframe: '5m' | '1h' | '6h' | '24h';
+    52→  threshold: number; // Percentage change (e.g., 10 = 10%)
+    53→  direction: 'up' | 'down' | 'both';
+    54→}
+    55→
+    56→export interface BreakoutRuleConfig extends RuleConfig {
+    57→  ruleType: 'breakout';
+    58→  lookbackCandles: number;
+    59→  breakoutPercent: number; // How much above/below the range
+    60→}
+    61→
+    62→export interface MACrossoverRuleConfig extends RuleConfig {
+    63→  ruleType: 'ma_crossover';
+    64→  fastPeriod: number;
+    65→  slowPeriod: number;
+    66→}
+    67→
+    68→// ============================================================================
+    69→// Momentum / Volume Rules
+    70→// ============================================================================
+    71→
+    72→export interface VolumeSpkeRuleConfig extends RuleConfig {
+    73→  ruleType: 'volume_spike';
+    74→  timeframe: '5m' | '1h' | '6h' | '24h';
+    75→  multiplier: number; // Volume must be X times average
+    76→}
+    77→
+    78→export interface BuySellRatioRuleConfig extends RuleConfig {
+    79→  ruleType: 'buy_sell_ratio';
+    80→  timeframe: '5m' | '1h' | '6h' | '24h';
+    81→  minRatio: number; // Minimum buy/sell ratio to trigger
+    82→}
+    83→
+    84→export interface TraderCountRuleConfig extends RuleConfig {
+    85→  ruleType: 'trader_count';
+    86→  timeframe: '5m' | '1h' | '6h' | '24h';
+    87→  minTraders: number;
+    88→  minBuyers?: number;
+    89→}
+    90→
+    91→// ============================================================================
+    92→// Combined Rule Config Type
+    93→// ============================================================================
+    94→
+    95→export type AnyRuleConfig =
+    96→  | PriceChangeRuleConfig
+    97→  | BreakoutRuleConfig
+    98→  | MACrossoverRuleConfig
+    99→  | VolumeSpkeRuleConfig
+   100→  | BuySellRatioRuleConfig
+   101→  | TraderCountRuleConfig;
+   102→
+   103→// ============================================================================
+   104→// Rule Set - Collection of rules to run together
+   105→// ============================================================================
+   106→
+   107→export interface RuleSet {
+   108→  id: string;
+   109→  name: string;
+   110→  description: string;
+   111→  rules: AnyRuleConfig[];
+   112→  // All rules must pass, or just any
+   113→  mode: 'all' | 'any';
+   114→}
+   115→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

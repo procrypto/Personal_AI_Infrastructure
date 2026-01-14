@@ -1,0 +1,114 @@
+---
+phase: 23-websocket-client-refactor
+plan: 01
+type: execute
+---
+
+<objective>
+Add data feed sending capability to AutopilotWebsocket for v2.0 architecture.
+
+Purpose: Enable frontend to forward NATS market data to CLI backend, reversing data flow so CLI no longer needs direct NATS connection.
+Output: Extended AutopilotWebsocket with typed feed protocol and sendFeed method.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Current WebSocket implementation:
+@apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts
+@apps/web-terminal/src/websocket/autopilot/autopilotWebsocketInstance.ts
+@apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+
+# Store types for reference:
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+
+# Screener types (data structures to forward):
+@apps/web-terminal/src/hooks/useAutopilot/types.ts
+
+**Architecture Context:**
+- v1.x: Frontend receives events from CLI, sends commands to CLI
+- v2.0: Frontend ALSO forwards market_data, ohlcv, trade, cvd feeds TO CLI
+- CLI will stop direct NATS connection, rely on frontend forwarding
+
+**Prior Decisions:**
+- Hybrid architecture: NATS for display prices, CLI for signal generation (Phase 9)
+- lois-adapter.ts pattern for format conversions at WebSocket boundary (Phase 1)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Define data feed protocol types</name>
+  <files>apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts</files>
+  <action>
+Add typed feed message types for outbound data feeds. Create AutopilotFeed union type with:
+
+1. `market_data` feed - token price/mcap updates (mint, price_sol, price_usd, mcap, volume_24h)
+2. `ohlcv` feed - candlestick data (mint, interval, open, high, low, close, volume, timestamp)
+3. `trade` feed - individual trades (mint, side, price, amount, timestamp)
+4. `cvd` feed - cumulative volume delta (mint, cvd_1h, cvd_6h, buy_volume, sell_volume)
+
+Structure each feed type as: `{ feed: "market_data" | "ohlcv" | "trade" | "cvd", data: T }`
+
+Keep existing AutopilotCommand type unchanged - feeds are separate from commands.
+Do NOT modify existing functionality - only ADD new types.
+  </action>
+  <verify>TypeScript compiles without errors: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+  <done>AutopilotFeed union type defined with all four feed variants, types exported</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add sendFeed method to AutopilotWebsocket</name>
+  <files>apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts</files>
+  <action>
+Add sendFeed method to AutopilotWebsocket class:
+
+```typescript
+sendFeed(feed: AutopilotFeed) {
+  if (this.ws?.readyState === WebSocket.OPEN) {
+    this.ws.send(JSON.stringify(feed));
+  } else {
+    console.warn("[Autopilot] Cannot send feed - not connected");
+  }
+}
+```
+
+This mirrors the existing sendCommand pattern but is semantically separate.
+Keep sendCommand unchanged - it's for user-initiated actions.
+sendFeed is for continuous data forwarding (Phase 24 will wire this up).
+
+Export AutopilotFeed type from the module for use by hooks in Phase 24.
+  </action>
+  <verify>TypeScript compiles: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+  <done>sendFeed method added, AutopilotFeed exported, existing sendCommand unchanged</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `cd apps/web-terminal && npx tsc --noEmit` passes
+- [ ] `cd apps/web-terminal && bun run test` passes (existing tests still work)
+- [ ] AutopilotFeed type is exported and usable
+- [ ] sendFeed method exists on AutopilotWebsocket
+- [ ] Existing sendCommand functionality unchanged
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Existing autopilot functionality unchanged
+- Feed protocol types ready for Phase 24 implementation
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/23-websocket-client-refactor/23-01-SUMMARY.md`
+</output>

@@ -1,0 +1,109 @@
+---
+phase: 03-interface-cleanup-cutover
+plan: 01
+subsystem: types
+tags: [lois, interfaces, rust-ready, type-system]
+
+# Dependency graph
+requires:
+  - phase: 02-01
+    provides: SignalProcessor.processMarketData
+  - phase: 02-03
+    provides: Signal pipeline factory pattern
+provides:
+  - LOIS-ready interface types (ISignal, ISignalProcessor, etc.)
+  - SignalProcessor implementing ISignalProcessor interface
+  - Clean type boundaries for future Rust reimplementation
+affects: [signal-pipeline, cli-integration, future-lois]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [interface-contracts, structural-subtyping]
+
+key-files:
+  created: [src/types/lois.ts, src/types/index.ts]
+  modified: [src/signal/processor.ts]
+
+key-decisions:
+  - "Used snake_case for IMarketDataInput to match TokenMarketData (structural compatibility)"
+  - "ISignal is minimal subset of Signal (no ruleName, symbol, data fields)"
+  - "IOHLCVCandle structurally identical to OHLCV for seamless compatibility"
+
+patterns-established:
+  - "LOIS interface pattern: minimal types for Rust mapping (I-prefix)"
+  - "Structural subtyping: TokenMarketData extends IMarketDataInput"
+
+issues-created: []
+
+# Metrics
+duration: 5min
+completed: 2026-01-09
+---
+
+# Phase 3 Plan 1: LOIS Interface Types Summary
+
+**LOIS-ready interface types and SignalProcessor interface compliance for future Rust reimplementation**
+
+## Performance
+
+- **Duration:** 5 min
+- **Started:** 2026-01-09T06:52:00Z
+- **Completed:** 2026-01-09T06:57:00Z
+- **Tasks:** 2
+- **Files created/modified:** 3
+
+## Accomplishments
+- Created `src/types/lois.ts` with minimal, Rust-mappable interfaces
+- Created `src/types/index.ts` as central export point
+- SignalProcessor now implements ISignalProcessor interface
+- All existing tests pass (62/62)
+
+## LOIS Types Created
+
+| Type | Purpose | Rust Equivalent |
+|------|---------|-----------------|
+| `ISignal` | Core signal output | `struct Signal` |
+| `ISignalType` | Signal type enum | `enum SignalType` |
+| `IMarketDataInput` | Minimal market data | `struct MarketDataInput` |
+| `IOHLCVCandle` | Single candle | `struct OHLCVCandle` |
+| `ISignalProcessor` | Processor contract | `trait SignalProcessor` |
+| `IDataFeedMessage` | Feed message union | `enum DataFeedMessage` |
+| `ISignalPipeline` | Pipeline contract | `trait SignalPipeline` |
+
+## Type Compatibility
+
+- `TokenMarketData` is a structural superset of `IMarketDataInput` - compatible
+- `OHLCV` is structurally identical to `IOHLCVCandle` - compatible
+- `Signal` extends `ISignal` with extra fields - compatible
+
+## Files Created/Modified
+- `src/types/lois.ts` - LOIS-ready interface definitions
+- `src/types/index.ts` - Type exports
+- `src/signal/processor.ts` - Added `implements ISignalProcessor`
+
+## Decisions Made
+- Used snake_case for `IMarketDataInput` fields to match existing `TokenMarketData` API types
+- This enables structural subtyping where `TokenMarketData` satisfies `IMarketDataInput`
+
+## Deviations from Plan
+
+None - plan executed as specified.
+
+## Issues Encountered
+- Pre-existing TypeScript errors in cli.ts and websocket-server.ts (unrelated to this phase)
+- These don't affect LOIS types or SignalProcessor
+
+## Verification
+- [x] `npm test` passes all existing tests (62/62)
+- [x] Types importable from `./types`
+- [x] SignalProcessor has `implements ISignalProcessor`
+- [x] LOIS interfaces cleanly separated from implementation
+
+## Next Phase Readiness
+- Phase 03-01 complete: LOIS interface types defined
+- Ready for Phase 03-02: Barrel exports cleanup
+
+---
+*Phase: 03-interface-cleanup-cutover*
+*Completed: 2026-01-09*

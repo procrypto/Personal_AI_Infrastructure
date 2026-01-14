@@ -1,0 +1,181 @@
+     1→/**
+     2→ * Autopilot Message Parsing Tests
+     3→ *
+     4→ * Tests for WebSocket message parsing logic extracted to eventParser.ts.
+     5→ * Validates all event types, unknown events, malformed data, and pong message filtering.
+     6→ */
+     7→
+     8→import { describe, expect, it } from "vitest";
+     9→import { parseAutopilotEvent } from "./eventParser";
+    10→
+    11→describe("parseAutopilotEvent", () => {
+    12→  describe("valid event types", () => {
+    13→    it("parses position_update event correctly", () => {
+    14→      const data = {
+    15→        type: "position_update",
+    16→        positions: [
+    17→          {
+    18→            mint: "mint1",
+    19→            symbol: "TOKEN1",
+    20→            action: "buy" as const,
+    21→            entryPriceSol: 0.001,
+    22→            positionSizeSol: 1.0,
+    23→            entryTime: Date.now(),
+    24→          },
+    25→        ],
+    26→      };
+    27→
+    28→      const result = parseAutopilotEvent(data);
+    29→
+    30→      expect(result).not.toBeNull();
+    31→      expect(result?.type).toBe("position_update");
+    32→      if (result?.type === "position_update") {
+    33→        expect(result.positions.length).toBe(1);
+    34→        expect(result.positions[0].symbol).toBe("TOKEN1");
+    35→      }
+    36→    });
+    37→
+    38→    it("parses signal event correctly", () => {
+    39→      const data = {
+    40→        type: "signal",
+    41→        signal: {
+    42→          timestamp: Date.now(),
+    43→          mint: "mint1",
+    44→          symbol: "TOKEN1",
+    45→          signalType: "magic_buy" as const,
+    46→          action: "buy" as const,
+    47→          reason: "High volume spike",
+    48→          pnlPercent: 0,
+    49→          entryType: "trending",
+    50→        },
+    51→      };
+    52→
+    53→      const result = parseAutopilotEvent(data);
+    54→
+    55→      expect(result).not.toBeNull();
+    56→      expect(result?.type).toBe("signal");
+    57→      if (result?.type === "signal") {
+    58→        expect(result.signal.symbol).toBe("TOKEN1");
+    59→        expect(result.signal.signalType).toBe("magic_buy");
+    60→      }
+    61→    });
+    62→
+    63→    it("parses stats_update event correctly", () => {
+    64→      const data = {
+    65→        type: "stats_update",
+    66→        stats: {
+    67→          totalTrades: 10,
+    68→          openTrades: 3,
+    69→          closedTrades: 7,
+    70→          wins: 5,
+    71→          losses: 2,
+    72→          winRate: 71.43,
+    73→          totalPnlSol: 2.5,
+    74→          totalPnlUsd: 250.0,
+    75→          avgPnlPercent: 12.5,
+    76→        },
+    77→      };
+    78→
+    79→      const result = parseAutopilotEvent(data);
+    80→
+    81→      expect(result).not.toBeNull();
+    82→      expect(result?.type).toBe("stats_update");
+    83→      if (result?.type === "stats_update") {
+    84→        expect(result.stats.totalTrades).toBe(10);
+    85→        expect(result.stats.winRate).toBeCloseTo(71.43, 2);
+    86→      }
+    87→    });
+    88→
+    89→    it("parses config event correctly", () => {
+    90→      const data = {
+    91→        type: "config",
+    92→        config: {
+    93→          autoSourcesEnabled: true,
+    94→          trendingEnabled: true,
+    95→          whalesEnabled: false,
+    96→          marketFilterEnabled: true,
+    97→          mode: "paper" as const,
+    98→          positionSizeSol: 0.1,
+    99→          pollIntervalMs: 30000,
+   100→        },
+   101→      };
+   102→
+   103→      const result = parseAutopilotEvent(data);
+   104→
+   105→      expect(result).not.toBeNull();
+   106→      expect(result?.type).toBe("config");
+   107→      if (result?.type === "config") {
+   108→        expect(result.config.mode).toBe("paper");
+   109→        expect(result.config.positionSizeSol).toBe(0.1);
+   110→      }
+   111→    });
+   112→
+   113→    it("parses strategies event correctly", () => {
+   114→      const data = {
+   115→        type: "strategies",
+   116→        strategies: {
+   117→          available: [
+   118→            {
+   119→              id: "strategy1",
+   120→              name: "High Volume",
+   121→              description: "Detect high volume spikes",
+   122→              mode: "any" as const,
+   123→              ruleCount: 3,
+   124→              summary: "Volume > 100k",
+   125→            },
+   126→          ],
+   127→          active: ["strategy1"],
+   128→        },
+   129→      };
+   130→
+   131→      const result = parseAutopilotEvent(data);
+   132→
+   133→      expect(result).not.toBeNull();
+   134→      expect(result?.type).toBe("strategies");
+   135→      if (result?.type === "strategies") {
+   136→        expect(result.strategies.available.length).toBe(1);
+   137→        expect(result.strategies.active).toContain("strategy1");
+   138→      }
+   139→    });
+   140→  });
+   141→
+   142→  describe("edge cases and errors", () => {
+   143→    it("returns null for unknown event type", () => {
+   144→      const data = {
+   145→        type: "unknown_event_type",
+   146→        someData: "value",
+   147→      };
+   148→
+   149→      const result = parseAutopilotEvent(data);
+   150→
+   151→      expect(result).toBeNull();
+   152→    });
+   153→
+   154→    it("returns null for malformed data (not an object)", () => {
+   155→      const result1 = parseAutopilotEvent("not an object");
+   156→      const result2 = parseAutopilotEvent(42);
+   157→      const result3 = parseAutopilotEvent(null);
+   158→      const result4 = parseAutopilotEvent(undefined);
+   159→
+   160→      expect(result1).toBeNull();
+   161→      expect(result2).toBeNull();
+   162→      expect(result3).toBeNull();
+   163→      expect(result4).toBeNull();
+   164→    });
+   165→
+   166→    it("returns null for pong message", () => {
+   167→      const data = {
+   168→        pong: true,
+   169→      };
+   170→
+   171→      const result = parseAutopilotEvent(data);
+   172→
+   173→      expect(result).toBeNull();
+   174→    });
+   175→  });
+   176→});
+   177→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

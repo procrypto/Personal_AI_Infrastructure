@@ -1,0 +1,184 @@
+# Testing Patterns
+
+**Analysis Date:** 2026-01-09
+
+## Test Framework
+
+**Runner:**
+- Custom test utilities (no jest/vitest/mocha)
+- Tests are executable TypeScript files
+- Run with tsx (esbuild-based TypeScript executor)
+
+**Assertion Library:**
+- Custom assertions in `src/test-comprehensive.ts`
+- Matchers: `assertEqual`, `assertApprox`, `assertTrue`, `assertFalse`, `assertNotNull`
+
+**Run Commands:**
+```bash
+npm test                      # Run basic tests (src/test.ts)
+npm run test:trading          # Run trading tests (src/test-trading.ts)
+npm run test:comprehensive    # Run full suite (src/test-comprehensive.ts)
+```
+
+## Test File Organization
+
+**Location:**
+- All test files in `src/` root directory
+- No `__tests__/` directories
+- No `.test.ts` or `.spec.ts` suffix pattern
+
+**Naming:**
+- `test.ts` - Basic API and rule tests
+- `test-trading.ts` - Trading feature tests
+- `test-comprehensive.ts` - Full integration suite
+- `test-opposite.ts` - Opposite signal tests
+
+**Structure:**
+```
+src/
+  test.ts                # Basic tests
+  test-trading.ts        # Trading tests
+  test-comprehensive.ts  # Full suite (22KB)
+  test-opposite.ts       # Specific scenario tests
+```
+
+## Test Structure
+
+**Suite Organization:**
+```typescript
+// Custom test function
+function test(name: string, fn: () => void) {
+  try {
+    fn();
+    console.log(`  ✓ ${name}`);
+    passed++;
+  } catch (error) {
+    console.log(`  ✗ ${name}`);
+    failed++;
+  }
+}
+
+// Usage
+console.log('Testing Williams TSL:');
+test('detects fractal lows', () => {
+  const fractals = tsl.detectFractals(candles);
+  assertTrue(fractals.length > 0, 'Should find fractals');
+});
+```
+
+**Patterns:**
+- Console output with ✓/✗ emojis
+- Pass/fail counters for summary
+- Inline test data or factory functions
+
+## Mocking
+
+**Framework:**
+- No mocking framework
+- Test data generated inline or via factory functions
+
+**Patterns:**
+```typescript
+// Factory function for test data
+function generateCandles(basePrice: number, count: number, volatility = 0.02): OHLCV[] {
+  // Generate mock OHLCV data
+}
+
+// Inline mock data
+const mockMarketData: TokenMarketData = {
+  mint: 'test-mint',
+  price_sol: 0.001,
+  // ...
+};
+```
+
+**What to Mock:**
+- Market data objects created inline
+- OHLCV candles generated with factory
+
+**What NOT to Mock:**
+- API calls (use real endpoints with fallback)
+- File system operations
+
+## Fixtures and Factories
+
+**Test Data:**
+```typescript
+// Factory pattern in test-comprehensive.ts
+function generateCandles(basePrice: number, count: number, volatility: number = 0.02): OHLCV[] {
+  const candles: OHLCV[] = [];
+  let price = basePrice;
+  let time = Date.now() - count * 60000;
+
+  for (let i = 0; i < count; i++) {
+    // Generate realistic candle data
+  }
+  return candles;
+}
+```
+
+**Location:**
+- Factory functions defined in test files
+- No shared fixtures directory
+
+## Coverage
+
+**Requirements:**
+- No enforced coverage target
+- Coverage tracked manually via test code
+- Focus on critical paths (rules, trading logic)
+
+**Configuration:**
+- No coverage tool configured
+- Verification via test pass/fail counts
+
+**View Coverage:**
+```bash
+# No coverage report - review test output
+npm run test:comprehensive
+```
+
+## Test Types
+
+**Unit Tests:**
+- Individual rule analysis
+- Paper tracker P&L calculation
+- Williams fractal detection
+- Market filter state transitions
+
+**Integration Tests:**
+- Multi-rule signal aggregation
+- Full analysis → trigger → trade flow
+- API client with fallback
+
+**E2E Tests:**
+- Not implemented (manual CLI testing)
+
+## Common Patterns
+
+**Async Testing:**
+```typescript
+// Using async/await with custom runner
+async function main() {
+  const marketData = await localApi.getMarketData(testMint);
+  test('fetches market data', () => {
+    assertNotNull(marketData, 'Should return data');
+  });
+}
+```
+
+**Error Testing:**
+```typescript
+test('handles missing data', () => {
+  const result = rule.analyze({ token: null });
+  assertEqual(result, null, 'Should return null for missing data');
+});
+```
+
+**Snapshot Testing:**
+- Not used in this codebase
+
+---
+
+*Testing analysis: 2026-01-09*
+*Update when test patterns change*

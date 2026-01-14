@@ -1,0 +1,110 @@
+/**
+ * Slack Message Event Listener
+ *
+ * Listens for Linear bot messages in Slack and extracts issue IDs for mapping.
+ * Uses defensive early returns to handle edge cases cleanly.
+ *
+ * Usage:
+ *   const app = getSlackApp();
+ *   setupLinearMessageListener(app);
+ */
+
+import type { App, BotMessageEvent } from '@slack/bolt';
+
+/**
+ * Extract Linear issue ID from message text.
+ * Looks for URLs like: https://linear.app/workspace/issue/ABC-123
+ *
+ * @param text - Message text to parse
+ * @returns Issue ID (e.g., 'ABC-123') or null if not found
+ */
+export function extractLinearIssueId(text: string): string | null {
+  const match = text.match(/linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Extract Linear issue ID from message attachments.
+ * Fallback for when the URL isn't in the main text.
+ *
+ * @param attachments - Slack message attachments
+ * @returns Issue ID (e.g., 'ABC-123') or null if not found
+ */
+export function extractIssueIdFromAttachments(
+  attachments: Array<{ title_link?: string; text?: string }> | undefined
+): string | null {
+  if (!attachments) return null;
+
+  for (const attachment of attachments) {
+    // Try title_link first
+    if (attachment.title_link) {
+      const issueId = extractLinearIssueId(attachment.title_link);
+      if (issueId) return issueId;
+    }
+    // Try attachment text
+    if (attachment.text) {
+      const issueId = extractLinearIssueId(attachment.text);
+      if (issueId) return issueId;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Set up listener for Linear bot messages.
+ * Filters for bot messages from LINEAR_BOT_ID and extracts issue IDs.
+ *
+ * @param app - Bolt App instance
+ */
+export function setupLinearMessageListener(app: App): void {
+  const linearBotId = process.env.LINEAR_BOT_ID;
+
+  if (!linearBotId) {
+    console.warn(
+      'LINEAR_BOT_ID not configured - Linear message listener will not filter by bot'
+    );
+  }
+
+  app.event('message', async ({ event, logger }) => {
+    // Type guard: Must be a bot message
+    if (!('subtype' in event) || event.subtype !== 'bot_message') {
+      return;
+    }
+
+    // Cast to BotMessageEvent for type safety
+    const botEvent = event as BotMessageEvent;
+
+    // Filter: Must be from Linear bot (if configured)
+    if (linearBotId && botEvent.bot_id !== linearBotId) {
+      return;
+    }
+
+    // Extract issue ID from text
+    const text = botEvent.text || '';
+    let issueId = extractLinearIssueId(text);
+
+    // Fallback: Try attachments if text didn't have URL
+    if (!issueId && 'attachments' in botEvent) {
+      issueId = extractIssueIdFromAttachments(
+        botEvent.attachments as Array<{ title_link?: string; text?: string }> | undefined
+      );
+    }
+
+    // No issue ID found - skip this message
+    if (!issueId) {
+      logger.debug('Linear message without issue ID, skipping');
+      return;
+    }
+
+    // Log capture (storage in Task 3)
+    logger.info({
+      msg: 'Captured Linear message',
+      issueId,
+      channelId: botEvent.channel,
+      messageTs: botEvent.ts,
+    });
+
+    // TODO: Task 3 will wire this to storeLinearMessage
+  });
+}

@@ -1,0 +1,163 @@
+---
+phase: 02-containerization
+plan: 01
+type: execute
+---
+
+<objective>
+Create production-ready Dockerfile and .dockerignore for Cloud Run deployment.
+
+Purpose: Enable containerized deployment following ferris-the-sentinel patterns.
+Output: Multi-stage Dockerfile optimized for Bun/TypeScript, .dockerignore excluding build artifacts.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/01-environment-config/01-02-SUMMARY.md
+
+# Key source files:
+@src/config.ts
+@src/server.ts
+@package.json
+
+**Tech stack available:**
+- Bun runtime (oven/bun:1 Docker image)
+- Elysia HTTP framework
+- TypeScript (runs directly via Bun, no build step)
+
+**Established patterns:**
+- APP_ENV env var for environment detection (local/beta/prod)
+- PORT env var for server port
+- CLICKHOUSE_* env vars for credentials (beta/prod)
+
+**Reference implementation:**
+- ferris-the-sentinel Dockerfile pattern (multi-stage, minimal final image)
+- ferris-the-sentinel .dockerignore (excludes IDE, .env, docs, .github)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create .dockerignore</name>
+  <files>.dockerignore</files>
+  <action>Create .dockerignore following ferris-the-sentinel pattern:
+
+```
+# Build artifacts
+node_modules/
+
+# IDE and editor files
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+
+# Environment files
+.env
+.env.*
+
+# CI/CD
+.github/
+
+# Planning (GSD)
+.planning/
+
+# Misc
+Dockerfile
+.dockerignore
+```
+
+Include .planning/ directory (not in ferris but specific to this project's GSD setup).
+Do NOT include src/ or any source files - those are needed in the container.</action>
+  <verify>cat .dockerignore shows all expected exclusions</verify>
+  <done>.dockerignore exists with node_modules, IDE files, .env, docs, .github, .planning excluded</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create multi-stage Dockerfile</name>
+  <files>Dockerfile</files>
+  <action>Create multi-stage Dockerfile optimized for Bun on Cloud Run:
+
+```dockerfile
+# Stage 1: Install dependencies
+FROM oven/bun:1 AS install
+WORKDIR /app
+
+# Copy package files for dependency caching
+COPY package.json bun.lock ./
+
+# Install production dependencies only
+RUN bun install --frozen-lockfile --production
+
+# Stage 2: Production runtime
+FROM oven/bun:1-slim AS runtime
+WORKDIR /app
+
+# Copy production dependencies from install stage
+COPY --from=install /app/node_modules ./node_modules
+
+# Copy application source
+COPY package.json ./
+COPY src ./src
+
+# Cloud Run uses PORT env var, default to 8080
+ENV PORT=8080
+EXPOSE 8080
+
+# Run as non-root user (bun user exists in official image)
+USER bun
+
+# Start the server
+CMD ["bun", "run", "src/server.ts"]
+```
+
+Key decisions:
+- Use `oven/bun:1-slim` for final stage (smaller image)
+- `--frozen-lockfile` ensures reproducible builds
+- `--production` excludes devDependencies (typescript, @types/bun)
+- PORT=8080 default matches Cloud Run and ferris-the-sentinel
+- USER bun for security (non-root)
+- No build step needed - Bun runs TypeScript directly</action>
+  <verify>cat Dockerfile shows two stages (install, runtime), PORT=8080 default, USER bun</verify>
+  <done>Dockerfile exists with multi-stage build, production deps only, port 8080, non-root user</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] .dockerignore excludes node_modules, .env, .github, .planning, IDE files
+- [ ] Dockerfile has two stages (install, runtime)
+- [ ] Dockerfile uses oven/bun:1 and oven/bun:1-slim
+- [ ] Dockerfile sets PORT=8080 default
+- [ ] Dockerfile runs as non-root user (bun)
+- [ ] No TypeScript errors: `bun run typecheck`
+</verification>
+
+<success_criteria>
+- Both files created and follow ferris-the-sentinel patterns
+- Dockerfile optimized for layer caching (deps separate from source)
+- Production-only dependencies in final image
+- Ready for local Docker build verification (02-02-PLAN.md)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-containerization/02-01-SUMMARY.md`
+</output>

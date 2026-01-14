@@ -1,0 +1,39 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/rotations.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+    11→ * - Downward Rotation (-1): close < rotationLow AND close < low[1]
+    12→ * - Invalidation (0): crosses opposite level without new rotation
+    13→ */
+    14→
+    15→import type { OHLCV } from '../api/types.js';
+    16→import type { Rule, Signal, AnalysisContext, RotationsRuleConfig } from './types.js';
+    17→
+    18→// ============================================================================
+    19→// Types
+    20→// ============================================================================
+    21→
+    22→export type RotationState = -1 | 0 | 1; // -1 = down, 0 = invalidated, 1 = up
+    23→
+    24→export interface RotationLevels {
+    25→  rotationHigh: number;
+    26→  rotationLow: number;
+    27→  state: RotationState;
+    28→  barIndex: number; // When current rotation started
+    29→}
+    30→
+    31→export interface RotationAnalysis {
+    32→  current: RotationLevels;
+    33→  htf?: RotationLevels; // Higher timeframe levels (optional)
+    34→  signals: {
+    35→    newUpRotation: boolean;
+    36→    newDownRotation: boolean;
+    37→    invalidation: boolean;
+    38→    atSupport: boolean; // Price near rotationLow
+    39→    atResistance: boolean; // Price near rotationHigh
+    40→    falseBreakoutHigh: boolean; // Wick above, close below (orange)
+    41→    falseBreakoutLow: boolean; // Wick below, close above (orange)
+    42→    htfAligned: boolean; // Current TF matches HTF direction
+    43→  };
+    44→}
+    45→
+    46→// ============================================================================
+    47→// Rotation Calculator
+    48→// ============================================================================

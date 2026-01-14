@@ -1,0 +1,129 @@
+---
+phase: 03-slack-listener-threads
+plan: 01
+subsystem: slack
+tags: [slack-bolt, slack-events, linear-capture, message-listener]
+
+# Dependency graph
+requires:
+  - phase: 01-02
+    provides: Vercel KV store with linear-message-store
+  - phase: 01-03
+    provides: Event bus singleton pattern
+  - phase: 02-01
+    provides: LinearClient singleton pattern reference
+provides:
+  - Slack Bolt App singleton (getSlackApp)
+  - Linear message listener (setupLinearMessageListener)
+  - Issue ID extraction from text and attachments
+  - Integration with linear-message-store
+affects: [03-02, 03-03, 05-01, 05-02]
+
+# Tech tracking
+tech-stack:
+  added: ["@slack/bolt ^4.6.0"]
+  patterns: ["Slack Bolt singleton", "Message event filtering", "Defensive early returns"]
+
+key-files:
+  created:
+    - src/coordination/slack/client.ts
+    - src/coordination/slack/listener.ts
+    - src/coordination/slack/types.ts
+    - src/coordination/slack/index.ts
+  modified:
+    - src/coordination/index.ts
+    - package.json
+    - bun.lock
+
+key-decisions:
+  - "Use @slack/bolt for unified event handling and web API"
+  - "HTTP receiver mode (not Socket Mode) for Vercel Functions compatibility"
+  - "Defensive early returns in listener for clean filtering"
+  - "Non-blocking error handling - log but don't throw"
+
+patterns-established:
+  - "Slack App singleton: getSlackApp() + resetSlackApp() for testing"
+  - "Message filtering: subtype check → bot_id check → content extraction"
+  - "Issue extraction: text first, attachments fallback"
+
+issues-created: []
+
+# Metrics
+duration: 3min
+completed: 2026-01-08
+---
+
+# Phase 3 Plan 01: Slack Listener for Linear Message Capture Summary
+
+**Slack Bolt singleton with Linear bot message listener capturing issue IDs to Vercel KV store**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-08T17:01:52Z
+- **Completed:** 2026-01-08T17:05:26Z
+- **Tasks:** 3
+- **Files modified:** 6
+
+## Accomplishments
+
+- Installed @slack/bolt ^4.6.0 for Slack app framework
+- Created Slack App singleton following established pattern from Linear client
+- Implemented Linear bot message listener with issue ID extraction
+- Wired listener to existing linear-message-store for persistence
+- Created barrel exports integrating slack module into coordination system
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Install @slack/bolt and create client singleton** - `1323ce8` (feat)
+2. **Task 2: Create message event listener for Linear bot messages** - `bf1d225` (feat)
+3. **Task 3: Wire up listener to linear-message-store and create barrel export** - `d9b3f45` (feat)
+
+## Files Created/Modified
+
+- `src/coordination/slack/client.ts` - Bolt App singleton with env-based config
+- `src/coordination/slack/listener.ts` - Message event listener with Linear filtering
+- `src/coordination/slack/types.ts` - LinearBotConfig and CapturedLinearMessage interfaces
+- `src/coordination/slack/index.ts` - Barrel export for slack module
+- `src/coordination/index.ts` - Added slack exports to main barrel
+- `package.json` - Added @slack/bolt dependency
+
+## Decisions Made
+
+- Used @slack/bolt ^4.6.0 instead of separate @slack/events-api + @slack/web-api for unified experience
+- Chose HTTP receiver mode (not Socket Mode) since we'll use Vercel Functions
+- Applied defensive early returns pattern for clean message filtering
+- Wrapped store call in try/catch with logging to not disrupt Slack event processing
+
+## Deviations from Plan
+
+### Auto-fixed Issues
+
+**1. [Rule 3 - Blocking] Fixed BotMessageEvent import**
+- **Found during:** Task 2 (message listener creation)
+- **Issue:** BotMessageEvent not exported directly from @slack/bolt
+- **Fix:** Import from @slack/types instead
+- **Files modified:** src/coordination/slack/listener.ts
+- **Verification:** TypeScript build passes
+- **Committed in:** bf1d225
+
+---
+
+**Total deviations:** 1 auto-fixed (blocking)
+**Impact on plan:** Minor import fix, no scope change
+
+## Issues Encountered
+
+None - plan executed as specified after import fix.
+
+## Next Phase Readiness
+
+- Slack listener infrastructure complete
+- Ready for 03-02: Message-to-ticket ID mapping store
+- Environment variables needed for production: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, LINEAR_BOT_ID
+
+---
+*Phase: 03-slack-listener-threads*
+*Completed: 2026-01-08*

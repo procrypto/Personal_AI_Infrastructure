@@ -1,0 +1,1162 @@
+/// <reference lib="webworker" />
+
+import { JSONParser } from '@streamparser/json';
+
+declare const self: DedicatedWorkerGlobalScope;
+
+type PathSegment = string | number;
+type ParserStack = Array<{ key: string | number | undefined }>;
+
+interface UserInfo {
+    userId: string;
+    displayName: string;
+    messageCount: number;
+}
+
+interface UnixRange {
+    startUnix?: number;
+    endUnix?: number;
+}
+
+interface UserMapping {
+    version: string;
+    users: Array<{
+        userId: string;
+        preferredName: string;
+        aliases: string[];
+        role: string;
+    }>;
+}
+
+interface ScanRequest {
+    type: 'scan';
+    file: File;
+    range: UnixRange;
+}
+
+interface FilterRequest {
+    type: 'filter';
+    file: File;
+    selectedUserIds: string[];
+    range: UnixRange;
+    mapping: UserMapping;
+}
+
+interface ScanGroupsRequest {
+    type: 'scanGroups';
+    file: File;
+    range: UnixRange;
+}
+
+interface FilterGroupsRequest {
+    type: 'filterGroups';
+    file: File;
+    selectedGroupIds: string[];
+    range: UnixRange;
+}
+
+type Request = ScanRequest | FilterRequest | ScanGroupsRequest | FilterGroupsRequest;
+
+type EnrichedMessage = Record<string, unknown>;
+
+interface GroupInfo {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    messageCount?: number;
+}
+
+interface ChatOutput {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    messages: EnrichedMessage[];
+}
+
+interface ParsedMessageInfo {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    message: Record<string, unknown>;
+    unixTime: number | null;
+}
+
+interface WalkStats {
+    totalMessages: number;
+    matchedMessages: number;
+}
+
+const YIELD_INTERVAL_BYTES = 50 * 1024 * 1024; // Yield every 50MB to allow GC.
+const MAX_STRING_BUFFER = 64 * 1024; // 64KB max string buffer.
+
+// Yield to event loop to allow garbage collection.
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+const isInRange = (unixTime: number, range: UnixRange): boolean => {
+    if (range.startUnix !== undefined && unixTime < range.startUnix) {
+        return false;
+    }
+    if (range.endUnix !== undefined && unixTime > range.endUnix) {
+        return false;
+    }
+    return true;
+};
+
+const stripUserPrefix = (userId: string): string => {
+    return userId.startsWith('user') ? userId.slice(4) : userId;
+};
+
+const normalizeSelectedIds = (ids: string[]): Set<string> => {
+    const normalized = ids
+        .map((id) => stripUserPrefix(id.trim()))
+        .filter((id) => id.length > 0);
+    return new Set(normalized);
+};
+
+const extractUnixTime = (message: Record<string, unknown>): number | null => {
+    const unixValue = message.date_unixtime;
+    if (typeof unixValue === 'string' && unixValue.trim().length > 0) {
+        const parsed = Number.parseInt(unixValue, 10);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+    if (typeof unixValue === 'number' && Number.isFinite(unixValue)) {
+        return unixValue;
+    }
+    if (typeof message.date === 'string') {
+        const parsedDate = Date.parse(message.date);
+        if (!Number.isNaN(parsedDate)) {
+            return Math.floor(parsedDate / 1000);
+        }
+    }
+    return null;
+};
+
+const extractUserIdFromMessage = (message: Record<string, unknown>): string | null => {
+    const candidate = (message.from_id ?? message.actor_id) as unknown;
+    if (typeof candidate === 'string') {
+        return stripUserPrefix(candidate.trim());
+    }
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+        return String(candidate);
+    }
+    return null;
+};
+
+const extractDisplayNameFromMessage = (message: Record<string, unknown>): string => {
+    const candidate = (message.from ?? message.actor) as unknown;
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+        return candidate.trim();
+    }
+    return 'Unknown';
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
+
+const buildPath = (
+    stack: ParserStack,
+    key: PathSegment | undefined,
+): PathSegment[] => {
+    const path: PathSegment[] = [];
+    for (let i = 1; i < stack.length; i++) {
+        const segment = stack[i].key;
+        if (segment !== undefined) {
+            path.push(segment);
+        }
+    }
+    if (key !== undefined) {
+        path.push(key);
+    }
+    return path;
+};
+
+const getChatIndexFromPath = (path: PathSegment[]): number | null => {
+    // Support both { chats: { list: [...] } } and { list: [...] } formats.
+    for (let i = 0; i < path.length - 2; i++) {
+        if (path[i] === 'chats' && path[i + 1] === 'list' && typeof path[i + 2] === 'number') {
+            return path[i + 2] as number;
+        }
+    }
+    // Handle top-level list: { list: [...] }.
+    if (path.length >= 2 && path[0] === 'list' && typeof path[1] === 'number') {
+        return path[1] as number;
+    }
+    return null;
+};
+
+// Check if path is inside a messages array (to distinguish chat-level vs message-level fields).
+const isInsideMessages = (path: PathSegment[]): boolean => {
+    return path.includes('messages');
+};
+
+const isMessagePath = (path: PathSegment[]): boolean => {
+    const secondLast = path[path.length - 2];
+    const last = path[path.length - 1];
+    // Validate message path ends with messages[n].
+    if (secondLast !== 'messages' || typeof last !== 'number') {
+        return false;
+    }
+    // Support { chats: { list: [...] } } format (path length >= 5).
+    if (path.length >= 5 && path[0] === 'chats' && path[1] === 'list') {
+        return true;
+    }
+    // Support { list: [...] } format (path length >= 4).
+    if (path.length >= 4 && path[0] === 'list') {
+        return true;
+    }
+    return false;
+};
+
+interface WalkResult extends WalkStats {
+    truncationContext?: string;
+}
+
+const walkMessages = async (
+    file: File,
+    range: UnixRange,
+    onMessage: (info: ParsedMessageInfo) => void | Promise<void>,
+    onProgress?: (loadedBytes: number, totalBytes: number, stats?: { total: number; matched: number }) => void,
+): Promise<WalkResult> => {
+    const totalBytes = file.size;
+    let loadedBytes = 0;
+    let lastYieldBytes = 0;
+    const parser = new JSONParser({
+        stringBufferSize: MAX_STRING_BUFFER,
+        numberBufferSize: 256,
+        keepStack: true,
+    });
+    const reader = file.stream().getReader();
+    const chatMeta = new Map<number, { name?: string; id?: string; type?: string }>();
+    let totalMessages = 0;
+    let matchedMessages = 0;
+    const rangeActive = range.startUnix !== undefined || range.endUnix !== undefined;
+    // Track parser errors since onError callback can't reject the promise directly.
+    let parserError: Error | null = null;
+    // Keep last chunk for debugging truncation errors.
+    let lastChunkText = '';
+    let truncationError: string | null = null;
+
+    parser.onValue = ({ value, key, stack }) => {
+        const path = buildPath(stack as ParserStack, key as PathSegment | undefined);
+        const last = path[path.length - 1];
+
+        // Capture chat name (only at chat level, not inside messages).
+        if (typeof value === 'string' && last === 'name' && !isInsideMessages(path)) {
+            const chatIndex = getChatIndexFromPath(path);
+            if (chatIndex !== null) {
+                const meta = chatMeta.get(chatIndex) ?? {};
+                meta.name = value;
+                chatMeta.set(chatIndex, meta);
+            }
+            return;
+        }
+
+        // Capture chat ID (only at chat level, not message IDs inside messages).
+        if ((typeof value === 'string' || typeof value === 'number') && last === 'id' && !isInsideMessages(path)) {
+            const chatIndex = getChatIndexFromPath(path);
+            if (chatIndex !== null) {
+                const meta = chatMeta.get(chatIndex) ?? {};
+                meta.id = String(value);
+                chatMeta.set(chatIndex, meta);
+            }
+            return;
+        }
+
+        // Capture chat type (only at chat level, not inside messages).
+        if (typeof value === 'string' && last === 'type' && !isInsideMessages(path)) {
+            const chatIndex = getChatIndexFromPath(path);
+            if (chatIndex !== null) {
+                const meta = chatMeta.get(chatIndex) ?? {};
+                meta.type = value;
+                chatMeta.set(chatIndex, meta);
+            }
+            return;
+        }
+
+        if (!isMessagePath(path) || !isPlainObject(value)) {
+            return;
+        }
+
+        const record = value as Record<string, unknown>;
+        if (record.type !== 'message') {
+            return;
+        }
+
+        totalMessages += 1;
+
+        const chatIndex = getChatIndexFromPath(path);
+        const meta = chatIndex !== null ? chatMeta.get(chatIndex) : undefined;
+        const chatId = meta?.id ?? 'unknown';
+        const chatName = meta?.name ?? 'unknown';
+        const chatType = meta?.type;
+        const unixTime = extractUnixTime(record);
+
+        if (rangeActive) {
+            if (unixTime === null) {
+                return;
+            }
+            if (!isInRange(unixTime, range)) {
+                return;
+            }
+        }
+
+        matchedMessages += 1;
+        onMessage({
+            chatId,
+            chatName,
+            chatType,
+            message: record,
+            unixTime,
+        });
+    };
+
+    parser.onError = (error: Error) => {
+        parserError = error;
+    };
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+            try {
+                parser.end();
+            }
+            catch (endError) {
+                // Truncated JSON at EOF is common for large exports.
+                // Capture context for debugging.
+                truncationError = (endError as Error).message;
+                console.warn('JSON truncated at end of file:', truncationError);
+                console.warn('Last ~2KB of file:\n', lastChunkText.slice(-2048));
+            }
+            break;
+        }
+        if (value) {
+            // Keep last chunk for debugging truncation.
+            const chunkText = new TextDecoder().decode(value);
+            lastChunkText = (lastChunkText + chunkText).slice(-4096);
+            
+            try {
+                parser.write(value);
+            }
+            catch (writeError) {
+                parserError = writeError as Error;
+            }
+            // Check for parser errors after each write.
+            if (parserError) {
+                reader.cancel();
+                throw new Error(`JSON parse error at ${((loadedBytes / totalBytes) * 100).toFixed(1)}%: ${parserError.message}`);
+            }
+            loadedBytes += value.byteLength;
+            onProgress?.(loadedBytes, totalBytes, { total: totalMessages, matched: matchedMessages });
+            
+            // Periodically yield to event loop to allow garbage collection.
+            if (loadedBytes - lastYieldBytes > YIELD_INTERVAL_BYTES) {
+                lastYieldBytes = loadedBytes;
+                await yieldToEventLoop();
+            }
+        }
+    }
+
+    const result: WalkResult = { totalMessages, matchedMessages };
+    if (truncationError) {
+        // Get last ~10 lines for context.
+        const lines = lastChunkText.split('\n');
+        const lastLines = lines.slice(-12).join('\n');
+        result.truncationContext = `Error: ${truncationError}\n\nLast ~10 lines before EOF:\n${lastLines}`;
+    }
+    return result;
+};
+
+// Legacy regex-based user scanner (fallback).
+const scanProcessLegacy = async (file: File, _range: UnixRange): Promise<void> => {
+    // Regex-based scan - processes entire buffer including message content.
+    const totalBytes = file.size;
+    let loadedBytes = 0;
+    let lastYieldBytes = 0;
+
+    const reader = file.stream().getReader();
+    const decoder = new TextDecoder();
+    const userMap = new Map<string, UserInfo>();
+
+    let buffer = '';
+
+    // Patterns to extract user identifiers from messages.
+    const fromIdPattern = /"from_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/g;
+    const actorIdPattern = /"actor_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/g;
+    const fromNamePattern = /"from"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+    const actorNamePattern = /"actor"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+
+    const processBuffer = (): void => {
+        let match: RegExpExecArray | null;
+        fromIdPattern.lastIndex = 0;
+        actorIdPattern.lastIndex = 0;
+        fromNamePattern.lastIndex = 0;
+        actorNamePattern.lastIndex = 0;
+
+        const mentions: Array<{ pos: number; userId: string; isFromId: boolean }> = [];
+        const names: Array<{ pos: number; name: string; isFromName: boolean }> = [];
+
+        while ((match = fromIdPattern.exec(buffer)) !== null) {
+            const userId = match[2] ?? match[3] ?? match[4];
+            if (userId) {
+                mentions.push({ pos: match.index, userId, isFromId: true });
+            }
+        }
+
+        while ((match = actorIdPattern.exec(buffer)) !== null) {
+            const userId = match[2] ?? match[3] ?? match[4];
+            if (userId) {
+                mentions.push({ pos: match.index, userId, isFromId: false });
+            }
+        }
+
+        while ((match = fromNamePattern.exec(buffer)) !== null) {
+            const name = match[1].replace(/\\(.)/g, '$1');
+            if (name.trim().length > 0) {
+                names.push({ pos: match.index, name, isFromName: true });
+            }
+        }
+
+        while ((match = actorNamePattern.exec(buffer)) !== null) {
+            const name = match[1].replace(/\\(.)/g, '$1');
+            if (name.trim().length > 0) {
+                names.push({ pos: match.index, name, isFromName: false });
+            }
+        }
+
+        mentions.sort((a, b) => a.pos - b.pos);
+        names.sort((a, b) => a.pos - b.pos);
+
+        for (const mention of mentions) {
+            const existing = userMap.get(mention.userId);
+            if (!existing) {
+                let bestName = 'Unknown';
+                let bestDist = Infinity;
+
+                for (const n of names) {
+                    if (mention.isFromId !== n.isFromName) {
+                        continue;
+                    }
+                    const dist = Math.abs(n.pos - mention.pos);
+                    if (dist < bestDist && dist < 500) {
+                        bestDist = dist;
+                        bestName = n.name;
+                    }
+                }
+
+                userMap.set(mention.userId, {
+                    userId: mention.userId,
+                    displayName: bestName,
+                    messageCount: 0,
+                });
+            }
+        }
+
+        if (buffer.length > 1024) {
+            buffer = buffer.slice(-1024);
+        }
+        else {
+            buffer = '';
+        }
+    };
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+            if (buffer.length > 0) {
+                processBuffer();
+            }
+            break;
+        }
+        if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            loadedBytes += value.byteLength;
+
+            processBuffer();
+
+            const pct = (100 * loadedBytes / totalBytes).toFixed(1);
+            self.postMessage({
+                phase: 'scan',
+                loadedBytes,
+                totalBytes,
+                message: `scan ${pct}% | ${userMap.size} users found (legacy)`,
+            });
+
+            if (loadedBytes - lastYieldBytes > YIELD_INTERVAL_BYTES) {
+                lastYieldBytes = loadedBytes;
+                await yieldToEventLoop();
+            }
+        }
+    }
+
+    const users = Array.from(userMap.values()).sort((a, b) =>
+        a.displayName.localeCompare(b.displayName),
+    );
+
+    self.postMessage({
+        type: 'scanResult',
+        users,
+        totalMessages: 0,
+        filteredMessages: 0,
+    });
+};
+
+// Turbo user scanner - bracket-tracking state machine like group mode.
+// Extracts user metadata from messages efficiently by skipping message content.
+const scanProcess = async (file: File, _range: UnixRange): Promise<void> => {
+    const totalBytes = file.size;
+    let loadedBytes = 0;
+    let lastYieldBytes = 0;
+
+    const reader = file.stream().getReader();
+    const decoder = new TextDecoder();
+    const userMap = new Map<string, UserInfo>();
+
+    let buffer = '';
+
+    // State machine for bracket tracking.
+    let inString = false;
+    let escapeNext = false;
+    let braceDepth = 0;  // Track {} depth for message objects.
+    let inMessagesArray = false;
+    let bracketDepth = 0;  // Track [] depth for arrays.
+
+    // Current message extraction state.
+    let currentUserId: string | null = null;
+    let currentDisplayName: string | null = null;
+    let messageStartDepth = 0;
+    let inMessage = false;
+
+    // Patterns for targeted extraction (non-global for single match).
+    const fromIdPattern = /"from_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/;
+    const actorIdPattern = /"actor_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/;
+    const fromNamePattern = /"from"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/;
+    const actorNamePattern = /"actor"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/;
+    const messagesStartPattern = /"messages"\s*:\s*\[/;
+    const typeMessagePattern = /"type"\s*:\s*"message"/;
+
+    // Commit current user to map.
+    const commitUser = (): void => {
+        if (currentUserId && !userMap.has(currentUserId)) {
+            userMap.set(currentUserId, {
+                userId: currentUserId,
+                displayName: currentDisplayName ?? 'Unknown',
+                messageCount: 0,
+            });
+        }
+        currentUserId = null;
+        currentDisplayName = null;
+        inMessage = false;
+    };
+
+    const processBuffer = (): void => {
+        let i = 0;
+
+        while (i < buffer.length) {
+            const char = buffer[i];
+
+            // Handle escape sequences inside strings.
+            if (escapeNext) {
+                escapeNext = false;
+                i++;
+                continue;
+            }
+
+            if (char === '\\' && inString) {
+                escapeNext = true;
+                i++;
+                continue;
+            }
+
+            // Toggle string state.
+            if (char === '"') {
+                inString = !inString;
+                i++;
+                continue;
+            }
+
+            // Skip everything inside strings.
+            if (inString) {
+                i++;
+                continue;
+            }
+
+            // Track brackets and braces.
+            if (char === '[') {
+                bracketDepth++;
+
+                // Check if this is the start of a messages array.
+                const lookback = buffer.slice(Math.max(0, i - 50), i + 1);
+                if (messagesStartPattern.test(lookback)) {
+                    inMessagesArray = true;
+                }
+                i++;
+                continue;
+            }
+
+            if (char === ']') {
+                bracketDepth--;
+                if (bracketDepth === 0 && inMessagesArray) {
+                    // Exiting messages array.
+                    inMessagesArray = false;
+                    commitUser();
+                }
+                i++;
+                continue;
+            }
+
+            if (char === '{') {
+                braceDepth++;
+
+                // If we're in messages array and this is a new object at array level.
+                if (inMessagesArray && braceDepth === bracketDepth + 1) {
+                    // New message object starting.
+                    commitUser();
+                    messageStartDepth = braceDepth;
+                }
+                i++;
+                continue;
+            }
+
+            if (char === '}') {
+                // If closing a message object.
+                if (inMessage && braceDepth === messageStartDepth) {
+                    commitUser();
+                }
+                braceDepth--;
+                i++;
+                continue;
+            }
+
+            // Look for field patterns when in messages array.
+            if (inMessagesArray && !inMessage) {
+                // Look ahead for "type": "message" to confirm this is a message.
+                const remaining = buffer.slice(i, i + 100);
+                if (typeMessagePattern.test(remaining)) {
+                    inMessage = true;
+                }
+            }
+
+            // Extract user fields when in a message.
+            if (inMessagesArray && inMessage && !currentUserId) {
+                const remaining = buffer.slice(i, i + 100);
+
+                // Try to extract from_id.
+                let match = fromIdPattern.exec(remaining);
+                if (match) {
+                    currentUserId = match[2] ?? match[3] ?? match[4];
+                    i += match[0].length;
+                    continue;
+                }
+
+                // Try to extract actor_id.
+                match = actorIdPattern.exec(remaining);
+                if (match) {
+                    currentUserId = match[2] ?? match[3] ?? match[4];
+                    i += match[0].length;
+                    continue;
+                }
+            }
+
+            // Extract display name when in a message.
+            if (inMessagesArray && inMessage && !currentDisplayName) {
+                const remaining = buffer.slice(i, i + 200);
+
+                // Try to extract from.
+                let match = fromNamePattern.exec(remaining);
+                if (match) {
+                    currentDisplayName = match[1].replace(/\\(.)/g, '$1');
+                    i += match[0].length;
+                    continue;
+                }
+
+                // Try to extract actor.
+                match = actorNamePattern.exec(remaining);
+                if (match) {
+                    currentDisplayName = match[1].replace(/\\(.)/g, '$1');
+                    i += match[0].length;
+                    continue;
+                }
+            }
+
+            i++;
+        }
+
+        // Keep a small tail for cross-chunk patterns.
+        const keepSize = Math.min(buffer.length, 512);
+        buffer = buffer.slice(-keepSize);
+    };
+
+    // Stream the file.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+            commitUser();
+            break;
+        }
+        if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            loadedBytes += value.byteLength;
+
+            processBuffer();
+
+            const pct = (100 * loadedBytes / totalBytes).toFixed(1);
+            self.postMessage({
+                phase: 'scan',
+                loadedBytes,
+                totalBytes,
+                message: `scan ${pct}% | ${userMap.size} users found`,
+            });
+
+            if (loadedBytes - lastYieldBytes > YIELD_INTERVAL_BYTES) {
+                lastYieldBytes = loadedBytes;
+                await yieldToEventLoop();
+            }
+        }
+    }
+
+    // Sort users alphabetically by display name.
+    const users = Array.from(userMap.values()).sort((a, b) =>
+        a.displayName.localeCompare(b.displayName),
+    );
+
+    self.postMessage({
+        type: 'scanResult',
+        users,
+        totalMessages: 0,
+        filteredMessages: 0,
+    });
+};
+
+const filterProcess = async (
+    file: File,
+    range: UnixRange,
+    selectedUserIds: string[],
+    mapping: UserMapping,
+): Promise<void> => {
+    const selectedSet = normalizeSelectedIds(selectedUserIds);
+    
+    // Pass 1: Find all chat IDs where selected users have messages in the date range.
+    const targetChatIds = new Set<string>();
+    const chatNames = new Map<string, string>();
+    
+    self.postMessage({
+        phase: 'filter',
+        loadedBytes: 0,
+        totalBytes: 1,
+        message: 'Pass 1: Finding chats with selected users...',
+    });
+    
+    await walkMessages(
+        file,
+        range,
+        ({ chatId, chatName, message }) => {
+            const userId = extractUserIdFromMessage(message);
+            if (userId && selectedSet.has(userId)) {
+                targetChatIds.add(chatId);
+                if (!chatNames.has(chatId)) {
+                    chatNames.set(chatId, chatName);
+                }
+            }
+        },
+        (loadedBytes, totalBytes) => {
+            const pct = (100 * loadedBytes / totalBytes).toFixed(1);
+            self.postMessage({
+                phase: 'filter',
+                loadedBytes,
+                totalBytes,
+                message: `Pass 1: ${pct}% | Found ${targetChatIds.size} chats`,
+            });
+        },
+    );
+    
+    if (targetChatIds.size === 0) {
+        self.postMessage({
+            type: 'filterResult',
+            outputs: [],
+            mapping,
+            totalMessages: 0,
+            dateRange: range,
+        });
+        return;
+    }
+    
+    // Pass 2: Export ALL messages from those chats within the date range.
+    const outputs = new Map<string, ChatOutput>();
+    let totalExtracted = 0;
+    
+    self.postMessage({
+        phase: 'filter',
+        loadedBytes: 0,
+        totalBytes: 1,
+        message: `Pass 2: Extracting full conversations from ${targetChatIds.size} chats...`,
+    });
+    
+    await walkMessages(
+        file,
+        range,
+        ({ chatId, chatName, message }) => {
+            // Only include messages from chats where selected user participated.
+            if (!targetChatIds.has(chatId)) {
+                return;
+            }
+            
+            const userId = extractUserIdFromMessage(message);
+            const displayName = extractDisplayNameFromMessage(message);
+            
+            const enriched: EnrichedMessage = {
+                ...message,
+                chatId,
+                chatName,
+                userId: userId ?? 'unknown',
+                displayName,
+            };
+            
+            const existing = outputs.get(chatId);
+            if (existing) {
+                existing.messages.push(enriched);
+            }
+            else {
+                outputs.set(chatId, {
+                    chatId,
+                    chatName,
+                    messages: [enriched],
+                });
+            }
+            totalExtracted += 1;
+        },
+        (loadedBytes, totalBytes) => {
+            const pct = (100 * loadedBytes / totalBytes).toFixed(1);
+            self.postMessage({
+                phase: 'filter',
+                loadedBytes,
+                totalBytes,
+                message: `Pass 2: ${pct}% | ${totalExtracted.toLocaleString()} msgs from ${outputs.size} chats`,
+            });
+        },
+    );
+
+    const outputsArray = Array.from(outputs.values());
+
+    self.postMessage({
+        type: 'filterResult',
+        outputs: outputsArray,
+        mapping,
+        totalMessages: totalExtracted,
+        dateRange: range,
+        selectedUserIds: Array.from(selectedSet),
+    });
+};
+
+const scanGroupsProcess = async (file: File, _range: UnixRange): Promise<void> => {
+    // Ultra-fast byte-level scan - skips messages arrays entirely.
+    // Strategy: accumulate text until we see "messages": [ then skip that array.
+    const totalBytes = file.size;
+    let loadedBytes = 0;
+    let lastYieldBytes = 0;
+    
+    const reader = file.stream().getReader();
+    const decoder = new TextDecoder();
+    const groups: GroupInfo[] = [];
+    
+    let buffer = '';
+    let inMessagesArray = false;
+    let bracketDepth = 0;
+    
+    // Pattern to find start of messages array.
+    const messagesStartPattern = /"messages"\s*:\s*\[/;
+    // Pattern for messages that are null or missing (chat ends with }).
+    const messagesNullPattern = /"messages"\s*:\s*null/;
+    // Pattern for chat object boundary in list.
+    const chatEndPattern = /\}\s*,\s*\{/;
+    // Patterns to extract individual fields.
+    const namePattern = /"name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/;
+    const typePattern = /"type"\s*:\s*"([^"\\]*)"/;
+    // ID can be numeric or string (with quotes).
+    const idPattern = /"id"\s*:\s*(-?\d+|"([^"]*)")/;
+    
+    let pendingMetadata = '';
+    const seenIds = new Set<string>();
+    
+    let inString = false;
+    let escapeNext = false;
+    
+    const processBuffer = (): void => {
+        // If we're skipping messages array, count brackets (but ignore those inside strings).
+        if (inMessagesArray) {
+            let i = 0;
+            for (; i < buffer.length; i++) {
+                const char = buffer[i];
+                
+                if (escapeNext) {
+                    escapeNext = false;
+                    continue;
+                }
+                
+                if (char === '\\' && inString) {
+                    escapeNext = true;
+                    continue;
+                }
+                
+                if (char === '"') {
+                    inString = !inString;
+                    continue;
+                }
+                
+                // Only count brackets when NOT inside a string.
+                if (!inString) {
+                    if (char === '[') {
+                        bracketDepth++;
+                    }
+                    else if (char === ']') {
+                        bracketDepth--;
+                        if (bracketDepth === 0) {
+                            inMessagesArray = false;
+                            inString = false;
+                            escapeNext = false;
+                            pendingMetadata = '';
+                            buffer = buffer.slice(i + 1);
+                            processBuffer();
+                            return;
+                        }
+                    }
+                }
+            }
+            // Still inside messages - clear processed portion.
+            buffer = '';
+            return;
+        }
+        
+        // Accumulate text for metadata extraction.
+        pendingMetadata += buffer;
+        
+        // Helper to extract and add a chat from a metadata block.
+        const extractChat = (metaBlock: string): boolean => {
+            const nameMatch = namePattern.exec(metaBlock);
+            const typeMatch = typePattern.exec(metaBlock);
+            const idMatch = idPattern.exec(metaBlock);
+            
+            if (idMatch) {
+                const chatId = idMatch[2] ?? idMatch[1];
+                if (!seenIds.has(chatId)) {
+                    seenIds.add(chatId);
+                    const chatName = nameMatch ? nameMatch[1].replace(/\\(.)/g, '$1') : 'unknown';
+                    groups.push({
+                        chatId,
+                        chatName,
+                        chatType: typeMatch ? typeMatch[1] : undefined,
+                    });
+                    return true;
+                }
+            }
+            return false;
+        };
+        
+        // Look for "messages": [ which signals end of metadata for this chat.
+        const messagesMatch = messagesStartPattern.exec(pendingMetadata);
+        if (messagesMatch) {
+            const metaBlock = pendingMetadata.slice(0, messagesMatch.index);
+            extractChat(metaBlock);
+            
+            // Enter skip mode for messages array.
+            inMessagesArray = true;
+            bracketDepth = 1;
+            buffer = pendingMetadata.slice(messagesMatch.index + messagesMatch[0].length);
+            pendingMetadata = '';
+            processBuffer();
+            return;
+        }
+        
+        // Check for "messages": null (chat with no messages).
+        const nullMatch = messagesNullPattern.exec(pendingMetadata);
+        if (nullMatch) {
+            const metaBlock = pendingMetadata.slice(0, nullMatch.index);
+            extractChat(metaBlock);
+            pendingMetadata = pendingMetadata.slice(nullMatch.index + nullMatch[0].length);
+            buffer = '';
+            processBuffer();
+            return;
+        }
+        
+        // Check for chat boundaries - extract any complete chats.
+        let chatBoundary: RegExpExecArray | null;
+        while ((chatBoundary = chatEndPattern.exec(pendingMetadata)) !== null) {
+            const metaBlock = pendingMetadata.slice(0, chatBoundary.index + 1);
+            extractChat(metaBlock);
+            pendingMetadata = pendingMetadata.slice(chatBoundary.index + chatBoundary[0].length - 1);
+        }
+        
+        buffer = '';
+    };
+    
+    // Stream the file.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+            break;
+        }
+        if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            loadedBytes += value.byteLength;
+            
+            processBuffer();
+            
+            const pct = (100 * loadedBytes / totalBytes).toFixed(1);
+            const status = inMessagesArray ? ' (skipping messages)' : '';
+            self.postMessage({
+                phase: 'scan',
+                loadedBytes,
+                totalBytes,
+                message: `scan ${pct}% | ${groups.length} groups found${status}`,
+            });
+            
+            if (loadedBytes - lastYieldBytes > YIELD_INTERVAL_BYTES) {
+                lastYieldBytes = loadedBytes;
+                await yieldToEventLoop();
+            }
+        }
+    }
+    
+    groups.sort((a, b) => a.chatName.localeCompare(b.chatName));
+    
+    self.postMessage({
+        type: 'scanGroupResult',
+        groups,
+        totalMessages: 0,
+        filteredMessages: 0,
+    });
+};
+
+const filterGroupsProcess = async (
+    file: File,
+    range: UnixRange,
+    selectedGroupIds: string[],
+): Promise<void> => {
+    const selectedSet = new Set(selectedGroupIds);
+    const outputs = new Map<string, ChatOutput>();
+    let totalExtracted = 0;
+
+    self.postMessage({
+        phase: 'filter',
+        loadedBytes: 0,
+        totalBytes: 1,
+        message: `Extracting messages from ${selectedSet.size} selected groups...`,
+    });
+
+    await walkMessages(
+        file,
+        range,
+        ({ chatId, chatName, chatType, message }) => {
+            if (!selectedSet.has(chatId)) {
+                return;
+            }
+
+            const userId = extractUserIdFromMessage(message);
+            const displayName = extractDisplayNameFromMessage(message);
+
+            const enriched: EnrichedMessage = {
+                ...message,
+                chatId,
+                chatName,
+                userId: userId ?? 'unknown',
+                displayName,
+            };
+
+            const existing = outputs.get(chatId);
+            if (existing) {
+                existing.messages.push(enriched);
+            }
+            else {
+                outputs.set(chatId, {
+                    chatId,
+                    chatName,
+                    chatType,
+                    messages: [enriched],
+                });
+            }
+            totalExtracted += 1;
+        },
+        (loadedBytes, totalBytes) => {
+            const pct = (100 * loadedBytes / totalBytes).toFixed(1);
+            self.postMessage({
+                phase: 'filter',
+                loadedBytes,
+                totalBytes,
+                message: `Extracting: ${pct}% | ${totalExtracted.toLocaleString()} msgs from ${outputs.size} groups`,
+            });
+        },
+    );
+
+    const outputsArray = Array.from(outputs.values());
+
+    self.postMessage({
+        type: 'filterResult',
+        outputs: outputsArray,
+        mapping: { version: '1', users: [] },
+        totalMessages: totalExtracted,
+        dateRange: range,
+        selectedGroupIds: Array.from(selectedSet),
+    });
+};
+
+// Global error handler to catch any uncaught errors in the worker.
+self.onerror = (event: ErrorEvent) => {
+    self.postMessage({
+        phase: 'scan',
+        loadedBytes: 0,
+        totalBytes: 0,
+        message: `Worker error: ${event.message}`,
+    });
+};
+
+self.onmessage = (event: MessageEvent<Request>) => {
+    const payload = event.data;
+    if (payload.type === 'scan') {
+        scanProcess(payload.file, payload.range).catch((error: Error) => {
+            self.postMessage({
+                phase: 'scan',
+                loadedBytes: 0,
+                totalBytes: 0,
+                message: `Error: ${error.message}`,
+            });
+        });
+    }
+    else if (payload.type === 'filter') {
+        filterProcess(payload.file, payload.range, payload.selectedUserIds, payload.mapping).catch((error: Error) => {
+            self.postMessage({
+                phase: 'filter',
+                loadedBytes: 0,
+                totalBytes: 0,
+                message: `Error: ${error.message}`,
+            });
+        });
+    }
+    else if (payload.type === 'scanGroups') {
+        scanGroupsProcess(payload.file, payload.range).catch((error: Error) => {
+            self.postMessage({
+                phase: 'scan',
+                loadedBytes: 0,
+                totalBytes: 0,
+                message: `Error: ${error.message}`,
+            });
+        });
+    }
+    else if (payload.type === 'filterGroups') {
+        filterGroupsProcess(payload.file, payload.range, payload.selectedGroupIds).catch((error: Error) => {
+            self.postMessage({
+                phase: 'filter',
+                loadedBytes: 0,
+                totalBytes: 0,
+                message: `Error: ${error.message}`,
+            });
+        });
+    }
+};
+
+self.postMessage({ type: 'workerReady' });

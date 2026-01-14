@@ -1,0 +1,101 @@
+/**
+ * Trader Count Rule
+ *
+ * Triggers when unique trader count exceeds threshold.
+ * Useful for detecting retail interest or whale accumulation.
+ */
+
+import type { Rule, TraderCountRuleConfig, Signal, AnalysisContext } from './types.js';
+
+export class TraderCountRule implements Rule<TraderCountRuleConfig> {
+  constructor(public config: TraderCountRuleConfig) {}
+
+  analyze(context: AnalysisContext): Signal | null {
+    if (!this.config.enabled) return null;
+
+    const { token } = context;
+    const { timeframe, minTraders, minBuyers } = this.config;
+
+    // Get trader counts for timeframe
+    const tradersKey = `traders_${timeframe}` as keyof typeof token;
+    const buyersKey = `buyers_${timeframe}` as keyof typeof token;
+    const sellersKey = `sellers_${timeframe}` as keyof typeof token;
+
+    const traders = (token[tradersKey] as number) ?? 0;
+    const buyers = (token[buyersKey] as number) ?? 0;
+    const sellers = (token[sellersKey] as number) ?? 0;
+
+    if (traders === 0) {
+      return null; // No data
+    }
+
+    // Check if thresholds are met
+    const tradersOk = traders >= minTraders;
+    const buyersOk = !minBuyers || buyers >= minBuyers;
+
+    if (!tradersOk || !buyersOk) {
+      return null; // Below threshold
+    }
+
+    // Calculate buyer/seller ratio
+    const buyerRatio = buyers / (sellers || 1);
+    const isBuyDominant = buyers > sellers;
+
+    // Signal strength based on how much it exceeds threshold
+    const traderStrength = Math.min(traders / (minTraders * 2), 1);
+    const buyerStrength = minBuyers ? Math.min(buyers / (minBuyers * 2), 1) : 0.5;
+    const strength = (traderStrength + buyerStrength) / 2;
+
+    // Determine signal type
+    let signalType: 'buy' | 'sell' | 'alert' = 'alert';
+    if (this.config.type === 'buy' && isBuyDominant) signalType = 'buy';
+    if (this.config.type === 'sell' && !isBuyDominant) signalType = 'sell';
+    if (this.config.type === 'both') {
+      signalType = isBuyDominant ? 'buy' : 'sell';
+    }
+
+    return {
+      ruleId: this.config.id,
+      ruleName: this.config.name,
+      mint: token.mint,
+      symbol: token.symbol,
+      type: signalType,
+      strength,
+      reason: `${traders} unique traders in ${timeframe} (${buyers} buyers, ${sellers} sellers, ratio ${buyerRatio.toFixed(1)}:1)`,
+      data: {
+        traders,
+        buyers,
+        sellers,
+        buyerRatio,
+        minTraders,
+        minBuyers,
+        timeframe,
+      },
+      timestamp: Date.now(),
+    };
+  }
+}
+
+// Factory function
+export function createTraderCountRule(
+  id: string,
+  name: string,
+  options: {
+    timeframe: TraderCountRuleConfig['timeframe'];
+    minTraders: number;
+    minBuyers?: number;
+    type?: 'buy' | 'sell' | 'both';
+  }
+): TraderCountRule {
+  return new TraderCountRule({
+    id,
+    name,
+    description: `Triggers when ${options.minTraders}+ unique traders in ${options.timeframe}`,
+    enabled: true,
+    type: options.type ?? 'both',
+    ruleType: 'trader_count',
+    timeframe: options.timeframe,
+    minTraders: options.minTraders,
+    minBuyers: options.minBuyers,
+  });
+}

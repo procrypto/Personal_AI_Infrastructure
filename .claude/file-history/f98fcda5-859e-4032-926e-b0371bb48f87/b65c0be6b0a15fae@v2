@@ -1,0 +1,98 @@
+---
+phase: 01-data-reception
+plan: 01
+subsystem: api
+tags: [websocket, market-data, typescript, data-feed]
+
+requires: []
+provides:
+  - DataFeedMessage types for market data, OHLCV, trades
+  - IncomingMessage union for WebSocket message routing
+  - In-memory storage for market data feeds
+  - Getter methods for rule engine data access
+  - onDataFeed callback registration
+affects: [02-dual-path-engine, rule-engine]
+
+tech-stack:
+  added: []
+  patterns:
+    - IncomingMessage union type for extensible message routing
+    - Type guard pattern for message discrimination
+    - Circular buffer for bounded trade storage
+
+key-files:
+  created: []
+  modified:
+    - src/websocket-server.ts
+
+key-decisions:
+  - "Union type IncomingMessage = AutopilotCommand | DataFeedMessage for extensible routing"
+  - "Circular buffer (max 1000) for recent trades to bound memory"
+  - "Type guard isDataFeedMessage() for runtime message discrimination"
+
+patterns-established:
+  - "Data feed messages use 'type' field, commands use 'command' field"
+  - "Getter methods return undefined for missing data (not throwing)"
+
+issues-created: []
+
+duration: 2min
+completed: 2026-01-09
+---
+
+# Phase 1 Plan 01: WebSocket Data Feed Handlers Summary
+
+**WebSocket server extended to receive and store incoming market data feeds (TokenMarketData, OHLCV, Trade) with getter methods for rule engine consumption**
+
+## Performance
+
+- **Duration:** 2 min
+- **Started:** 2026-01-09T05:13:46Z
+- **Completed:** 2026-01-09T05:16:30Z
+- **Tasks:** 2
+- **Files modified:** 1
+
+## Accomplishments
+
+- DataFeedMessage union type with market_data_feed, ohlcv_update, trade_feed variants
+- IncomingMessage type unifying commands and data feeds for WebSocket routing
+- In-memory storage (Maps for market data and OHLCV, array for trades)
+- Getter methods for rule engine: getMarketData, getAllMarketData, getOHLCV, getRecentTrades
+- onDataFeed callback registration for real-time notifications
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Define DataFeedMessage types** - `c358b47` (feat)
+2. **Task 2: Add handlers with in-memory storage** - `201c522` (feat)
+
+**Plan metadata:** `3fc7728` (docs: complete plan)
+
+## Files Created/Modified
+
+- `src/websocket-server.ts` - Extended with DataFeedMessage types, storage Maps, message routing, getter methods
+
+## Decisions Made
+
+- Used type guard pattern (`isDataFeedMessage`) for runtime message discrimination instead of explicit type field checks
+- Circular buffer for trades (shift when > 1000) - simple and sufficient for rule engine lookups
+- Getter methods return `undefined` for missing data rather than throwing - matches existing patterns
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None - pre-existing TypeScript errors in cli.ts are unrelated to this plan and were not addressed.
+
+## Next Phase Readiness
+
+- WebSocket server can now receive market data from main app
+- Data accessible via getter methods for rule engine consumption
+- Ready for 01-02: Data validation and normalization layer
+
+---
+*Phase: 01-data-reception*
+*Completed: 2026-01-09*

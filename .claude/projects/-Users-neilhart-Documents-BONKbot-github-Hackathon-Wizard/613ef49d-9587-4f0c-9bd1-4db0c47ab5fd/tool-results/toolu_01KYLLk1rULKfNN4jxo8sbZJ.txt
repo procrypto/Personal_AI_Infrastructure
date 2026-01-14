@@ -1,0 +1,168 @@
+     1→/**
+     2→ * API Client for web-terminal data
+     3→ *
+     4→ * Supports both:
+     5→ * - Local API (localhost:8787) - for development with prod ClickHouse data
+     6→ * - Beta Data API (beta-data.bonkbot.io) - for beta environment
+     7→ */
+     8→
+     9→import type { TokenMarketData, OHLCV, Trade, Resolution, DiscoveryTrendingItem, WhaleMovesItem, WhaleMovesResponse } from './types.js';
+    10→
+    11→export interface ApiClientConfig {
+    12→  baseUrl: string;
+    13→  timeout?: number;
+    14→}
+    15→
+    16→export class ApiClient {
+    17→  private baseUrl: string;
+    18→  private timeout: number;
+    19→
+    20→  constructor(config: ApiClientConfig) {
+    21→    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    22→    this.timeout = config.timeout ?? 30000;
+    23→  }
+    24→
+    25→  private async fetch<T>(path: string, options?: RequestInit): Promise<T> {
+    26→    const controller = new AbortController();
+    27→    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    28→
+    29→    try {
+    30→      const response = await fetch(`${this.baseUrl}${path}`, {
+    31→        ...options,
+    32→        signal: controller.signal,
+    33→        headers: {
+    34→          'Content-Type': 'application/json',
+    35→          ...options?.headers,
+    36→        },
+    37→      });
+    38→
+    39→      if (!response.ok) {
+    40→        throw new Error(`API error: ${response.status} ${response.statusText}`);
+    41→      }
+    42→
+    43→      return response.json() as Promise<T>;
+    44→    } finally {
+    45→      clearTimeout(timeoutId);
+    46→    }
+    47→  }
+    48→
+    49→  /**
+    50→   * Get market data for a single token
+    51→   */
+    52→  async getMarketData(mint: string): Promise<TokenMarketData> {
+    53→    const response = await this.fetch<{ ok: boolean; token: TokenMarketData }>(`/local-api/market_data/${mint}`);
+    54→    return response.token;
+    55→  }
+    56→
+    57→  /**
+    58→   * Get market data for multiple tokens (batched for efficiency)
+    59→   */
+    60→  async getMarketDataBatch(mints: string[]): Promise<Map<string, TokenMarketData>> {
+    61→    if (mints.length === 0) return new Map();
+    62→
+    63→    const query = mints.map(m => `mint=${m}`).join('&');
+    64→    const response = await this.fetch<{ ok: boolean; tokens: TokenMarketData[] }>(`/local-api/market_data_batch?${query}`);
+    65→
+    66→    const map = new Map<string, TokenMarketData>();
+    67→    for (const token of response.tokens ?? []) {
+    68→      map.set(token.mint, token);
+    69→    }
+    70→    return map;
+    71→  }
+    72→
+    73→  /**
+    74→   * Get OHLCV candlestick data for a token
+    75→   */
+    76→  async getOHLCV(mint: string, resolution: Resolution, options?: {
+    77→    startDate?: number;
+    78→    countback?: number;
+    79→  }): Promise<OHLCV[]> {
+    80→    let path = `/local-api/ohlcv/token/${mint}/${resolution}`;
+    81→    const params = new URLSearchParams();
+    82→
+    83→    // API requires start_date - calculate from countback if not provided
+    84→    if (options?.startDate) {
+    85→      params.set('start_date', options.startDate.toString());
+    86→    } else if (options?.countback) {
+    87→      // Calculate start_date based on resolution and countback
+    88→      const resolutionSeconds: Record<string, number> = {
+    89→        '1s': 1, '5s': 5, '15s': 15, '30s': 30,
+    90→        '1m': 60, '5m': 300, '15m': 900, '30m': 1800,
+    91→        '1h': 3600, '4h': 14400, '6h': 21600, '12h': 43200,
+    92→        '1d': 86400, '1w': 604800,
+    93→      };
+    94→      const seconds = resolutionSeconds[resolution] ?? 300; // default 5m
+    95→      const startDate = Math.floor(Date.now() / 1000) - (options.countback * seconds);
+    96→      params.set('start_date', startDate.toString());
+    97→    } else {
+    98→      // Default: last hour
+    99→      const startDate = Math.floor(Date.now() / 1000) - 3600;
+   100→      params.set('start_date', startDate.toString());
+   101→    }
+   102→
+   103→    if (options?.countback) params.set('countback', options.countback.toString());
+   104→
+   105→    if (params.toString()) path += `?${params}`;
+   106→
+   107→    const response = await this.fetch<{ ok: boolean; ohlcv: OHLCV[]; count: number }>(path);
+   108→    return response.ohlcv ?? [];
+   109→  }
+   110→
+   111→  /**
+   112→   * Get recent trades for a token
+   113→   */
+   114→  async getTrades(mint: string, limit = 100): Promise<Trade[]> {
+   115→    return this.fetch<Trade[]>(`/local-api/trades/${mint}?limit=${limit}`);
+   116→  }
+   117→
+   118→  /**
+   119→   * Get holder statistics for a token
+   120→   */
+   121→  async getHoldersStats(mint: string): Promise<any> {
+   122→    return this.fetch(`/local-api/holders_stats/${mint}`);
+   123→  }
+   124→
+   125→  /**
+   126→   * Get whale moves - tokens being traded by whale wallets
+   127→   */
+   128→  async getWhaleMoves(): Promise<WhaleMovesItem[]> {
+   129→    const response = await this.fetch<WhaleMovesResponse>('/local-api/discovery/whale_moves');
+   130→    return response.data ?? [];
+   131→  }
+   132→
+   133→  /**
+   134→   * Get trending tokens
+   135→   */
+   136→  async getTrending(limit = 20): Promise<DiscoveryTrendingItem[]> {
+   137→    return this.fetch<DiscoveryTrendingItem[]>(`/local-api/discovery/trending?limit=${limit}`);
+   138→  }
+   139→
+   140→  /**
+   141→   * Search for tokens by text
+   142→   */
+   143→  async searchTokens(query: string): Promise<any[]> {
+   144→    return this.fetch(`/local-api/search?text=${encodeURIComponent(query)}`);
+   145→  }
+   146→
+   147→  /**
+   148→   * Health check
+   149→   */
+   150→  async healthCheck(): Promise<{ ok: boolean }> {
+   151→    return this.fetch('/health');
+   152→  }
+   153→}
+   154→
+   155→// Default client pointing to local-api
+   156→export const localApi = new ApiClient({
+   157→  baseUrl: 'http://localhost:8787',
+   158→});
+   159→
+   160→// Beta data API client
+   161→export const betaApi = new ApiClient({
+   162→  baseUrl: 'https://beta-data.bonkbot.io/data',
+   163→});
+   164→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

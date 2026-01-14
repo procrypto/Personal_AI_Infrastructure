@@ -1,0 +1,418 @@
+/**
+ * Williams Fractal Trailing Stop Loss
+ *
+ * ============================================================================
+ * STRATEGY OVERVIEW
+ * ============================================================================
+ *
+ * Uses Williams fractals to identify swing lows and trail the stop loss to
+ * the SECOND most recent VALID fractal low. This gives trades room to breathe
+ * while still protecting profits.
+ *
+ * ============================================================================
+ * WILLIAMS FRACTAL DETECTION
+ * ============================================================================
+ *
+ * A Williams fractal low is a bar where the low is the lowest of the
+ * surrounding bars (leftBars on left, rightBars on right).
+ *
+ * With 3/3 settings (our default), a fractal needs:
+ *   - 3 bars to the left with higher lows
+ *   - 3 bars to the right with higher lows
+ *   - Total: 7-bar window, fractal is confirmed 3 bars after it occurs
+ *
+ * Example (fractal at bar 4):
+ *   Bar:  1    2    3   [4]   5    6    7
+ *   Low: 1.05 1.03 1.02 1.00 1.01 1.03 1.04
+ *                       ↑ Lowest of all 7 bars = fractal low
+ *
+ * ============================================================================
+ * VALID FRACTAL FILTERING
+ * ============================================================================
+ *
+ * Not all fractal lows are valid support levels. If a fractal low is
+ * immediately followed by a LOWER fractal low, the first one was broken
+ * and should be discarded.
+ *
+ * Example:
+ *   Fractal lows: $1.00 → $1.02 → $1.05 → $1.03
+ *                                   ↑
+ *                            $1.03 < $1.05, so $1.05 is invalidated
+ *
+ *   Valid lows: $1.00 → $1.02 → $1.03
+ *
+ * ============================================================================
+ * TRAILING LOGIC
+ * ============================================================================
+ *
+ * We trail to the SECOND most recent valid fractal low because:
+ *   1. Most recent low might be too close (normal pullback could stop us out)
+ *   2. Second-to-last represents more significant support
+ *   3. Gives trade room to breathe while still protecting profits
+ *
+ * Rules:
+ *   - Need at least 2 valid fractal lows before trailing begins
+ *   - Stop only moves UP (for longs), never down
+ *   - Exit when price CLOSES below the trailing stop
+ *
+ * ============================================================================
+ * CONFIGURATION
+ * ============================================================================
+ *
+ *   timeframe: '1m'    - Candle resolution for fractal detection
+ *   leftBars: 3        - Bars to the left of fractal
+ *   rightBars: 3       - Bars to the right of fractal (confirmation delay)
+ *   // 3/3 = 7-bar window, fractal confirmed after 3 bars
+ */
+
+import type { OHLCV } from '../api/types.js';
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+/**
+ * A detected fractal low with its price and bar index.
+ */
+export interface FractalLow {
+  /** Price level of the fractal low */
+  price: number;
+  /** Bar index where the fractal occurred */
+  barIndex: number;
+  /** Timestamp of the fractal bar */
+  timestamp: number;
+  /** Whether this fractal is still valid (not invalidated by lower low) */
+  valid: boolean;
+}
+
+/**
+ * Configuration for Williams fractal TSL.
+ */
+export interface WilliamsTslConfig {
+  /** Enable/disable the trailing stop */
+  enabled: boolean;
+  /** Number of bars to the left for fractal detection */
+  leftBars: number;
+  /** Number of bars to the right for fractal detection (confirmation delay) */
+  rightBars: number;
+  /** Buffer below stop level to trigger exit (percentage) */
+  triggerBufferPercent: number;
+}
+
+/**
+ * Trailing stop state for a single position.
+ */
+export interface TrailingStopState {
+  /** Current trailing stop price */
+  stopPrice: number | null;
+  /** All detected fractal lows */
+  fractalLows: FractalLow[];
+  /** Valid fractal lows (not invalidated) */
+  validFractalLows: FractalLow[];
+  /** Last processed bar index */
+  lastBarIndex: number;
+}
+
+/**
+ * Result of checking trailing stop.
+ */
+export interface TslCheckResult {
+  /** Whether stop was triggered */
+  triggered: boolean;
+  /** Current stop price (null if not enough data) */
+  stopPrice: number | null;
+  /** Human-readable details */
+  details: string;
+}
+
+// ============================================================================
+// DEFAULT CONFIGURATION
+// ============================================================================
+
+export const DEFAULT_WILLIAMS_TSL_CONFIG: WilliamsTslConfig = {
+  enabled: true,
+  leftBars: 3,
+  rightBars: 3,
+  triggerBufferPercent: 0.1, // 0.1% buffer below stop to trigger
+};
+
+// ============================================================================
+// WILLIAMS FRACTAL TSL
+// ============================================================================
+
+/**
+ * WilliamsTsl - Trailing stop loss using Williams fractals.
+ *
+ * Tracks fractal lows on 1m candles and trails stop to the second most
+ * recent valid fractal low.
+ */
+export class WilliamsTsl {
+  private config: WilliamsTslConfig;
+  /** Trailing stop state per mint */
+  private states: Map<string, TrailingStopState> = new Map();
+
+  constructor(config: Partial<WilliamsTslConfig> = {}) {
+    this.config = { ...DEFAULT_WILLIAMS_TSL_CONFIG, ...config };
+  }
+
+  /**
+   * Update configuration at runtime.
+   */
+  updateConfig(config: Partial<WilliamsTslConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
+   * Get or create state for a mint.
+   */
+  private getState(mint: string): TrailingStopState {
+    let state = this.states.get(mint);
+    if (!state) {
+      state = {
+        stopPrice: null,
+        fractalLows: [],
+        validFractalLows: [],
+        lastBarIndex: -1,
+      };
+      this.states.set(mint, state);
+    }
+    return state;
+  }
+
+  /**
+   * Clear state for a mint (call when position is closed).
+   */
+  clearState(mint: string): void {
+    this.states.delete(mint);
+  }
+
+  /**
+   * Detect Williams fractal lows in OHLCV data.
+   *
+   * A fractal low at index i requires:
+   *   - low[i] <= low[j] for all j in [i-leftBars, i+rightBars]
+   *
+   * @param candles - OHLCV candle data (oldest first)
+   * @returns Array of detected fractal lows
+   */
+  detectFractalLows(candles: OHLCV[]): FractalLow[] {
+    const { leftBars, rightBars } = this.config;
+    const fractals: FractalLow[] = [];
+
+    // Need enough bars on each side
+    if (candles.length < leftBars + rightBars + 1) {
+      return fractals;
+    }
+
+    // Check each bar that has enough neighbors
+    for (let i = leftBars; i < candles.length - rightBars; i++) {
+      const candle = candles[i];
+      let isFractal = true;
+
+      // Check left bars
+      for (let j = i - leftBars; j < i; j++) {
+        if (candles[j].low < candle.low) {
+          isFractal = false;
+          break;
+        }
+      }
+
+      // Check right bars
+      if (isFractal) {
+        for (let j = i + 1; j <= i + rightBars; j++) {
+          if (candles[j].low < candle.low) {
+            isFractal = false;
+            break;
+          }
+        }
+      }
+
+      if (isFractal) {
+        fractals.push({
+          price: candle.low,
+          barIndex: i,
+          timestamp: candle.timestamp,
+          valid: true, // Will be filtered later
+        });
+      }
+    }
+
+    return fractals;
+  }
+
+  /**
+   * Filter fractal lows to keep only valid ones.
+   *
+   * A fractal low is invalid if it's followed by a LOWER fractal low,
+   * meaning support was broken.
+   *
+   * @param fractals - All detected fractal lows (chronological order)
+   * @returns Array of valid fractal lows
+   */
+  filterValidFractals(fractals: FractalLow[]): FractalLow[] {
+    if (fractals.length === 0) return [];
+
+    const valid: FractalLow[] = [];
+
+    for (let i = 0; i < fractals.length; i++) {
+      const current = fractals[i];
+
+      // Check if any subsequent fractal is lower
+      let isInvalidated = false;
+      for (let j = i + 1; j < fractals.length; j++) {
+        if (fractals[j].price < current.price) {
+          // This fractal was followed by a lower one - invalidated
+          isInvalidated = true;
+          break;
+        }
+      }
+
+      if (!isInvalidated) {
+        valid.push({ ...current, valid: true });
+      }
+    }
+
+    return valid;
+  }
+
+  /**
+   * Calculate the trailing stop price from valid fractal lows.
+   *
+   * Uses the SECOND most recent valid fractal low.
+   *
+   * @param validFractals - Valid fractal lows
+   * @param currentStopPrice - Current stop price (to ensure we only move up)
+   * @returns New stop price, or null if not enough data
+   */
+  calculateStopPrice(
+    validFractals: FractalLow[],
+    currentStopPrice: number | null
+  ): number | null {
+    // Need at least 2 valid fractals
+    if (validFractals.length < 2) {
+      return currentStopPrice;
+    }
+
+    // Get second most recent valid fractal low
+    const secondMostRecent = validFractals[validFractals.length - 2];
+    const newStopPrice = secondMostRecent.price;
+
+    // Only move stop UP for longs, never down
+    if (currentStopPrice !== null && newStopPrice <= currentStopPrice) {
+      return currentStopPrice;
+    }
+
+    return newStopPrice;
+  }
+
+  /**
+   * Update trailing stop state with new candle data.
+   *
+   * @param mint - Token mint address
+   * @param candles - OHLCV candle data (oldest first)
+   * @returns Updated trailing stop state
+   */
+  updateState(mint: string, candles: OHLCV[]): TrailingStopState {
+    const state = this.getState(mint);
+
+    if (candles.length === 0) {
+      return state;
+    }
+
+    // Detect all fractal lows
+    const allFractals = this.detectFractalLows(candles);
+
+    // Filter to valid fractals only
+    const validFractals = this.filterValidFractals(allFractals);
+
+    // Calculate new stop price
+    const newStopPrice = this.calculateStopPrice(validFractals, state.stopPrice);
+
+    // Update state
+    state.fractalLows = allFractals;
+    state.validFractalLows = validFractals;
+    state.stopPrice = newStopPrice;
+    state.lastBarIndex = candles.length - 1;
+
+    return state;
+  }
+
+  /**
+   * Check if trailing stop is triggered.
+   *
+   * @param mint - Token mint address
+   * @param currentPrice - Current price
+   * @param candles - OHLCV candle data for state update
+   * @returns TslCheckResult
+   */
+  check(mint: string, currentPrice: number, candles: OHLCV[]): TslCheckResult {
+    if (!this.config.enabled) {
+      return {
+        triggered: false,
+        stopPrice: null,
+        details: 'Williams TSL disabled',
+      };
+    }
+
+    // Update state with latest candles
+    const state = this.updateState(mint, candles);
+
+    // No stop price yet (check for both null and undefined)
+    if (state.stopPrice == null) {
+      return {
+        triggered: false,
+        stopPrice: null,
+        details: `Need ${2 - state.validFractalLows.length} more valid fractal lows`,
+      };
+    }
+
+    // Check if price closed below stop (with buffer)
+    const triggerPrice = state.stopPrice * (1 - this.config.triggerBufferPercent / 100);
+    const triggered = currentPrice < triggerPrice;
+
+    if (triggered) {
+      return {
+        triggered: true,
+        stopPrice: state.stopPrice,
+        details: `Price ${currentPrice.toFixed(8)} below TSL ${state.stopPrice.toFixed(8)} (trigger: ${triggerPrice.toFixed(8)})`,
+      };
+    }
+
+    return {
+      triggered: false,
+      stopPrice: state.stopPrice,
+      details: `TSL at ${state.stopPrice.toFixed(8)} | ${state.validFractalLows.length} valid fractals`,
+    };
+  }
+
+  /**
+   * Get current trailing stop price for a mint.
+   */
+  getStopPrice(mint: string): number | null {
+    return this.states.get(mint)?.stopPrice ?? null;
+  }
+
+  /**
+   * Get full state for a mint (for debugging).
+   */
+  getFullState(mint: string): TrailingStopState | null {
+    return this.states.get(mint) ?? null;
+  }
+
+  /**
+   * Get current configuration.
+   */
+  getConfig(): WilliamsTslConfig {
+    return { ...this.config };
+  }
+}
+
+// ============================================================================
+// SINGLETON INSTANCE
+// ============================================================================
+
+/**
+ * Default Williams TSL instance.
+ * Used by magic exits for trailing stop management.
+ */
+export const williamsTsl = new WilliamsTsl();

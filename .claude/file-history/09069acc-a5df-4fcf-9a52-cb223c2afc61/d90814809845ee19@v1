@@ -1,0 +1,393 @@
+---
+phase: 01-foundation
+plan: 02
+type: execute
+---
+
+<objective>
+Set up Vercel KV integration with typed store functions for all entities.
+
+Purpose: Create the persistence layer that stores QA tickets, tester profiles, and Linear message mappings. This is the source of truth for the coordination system.
+Output: `src/coordination/store/` with KV client wrapper and entity-specific store modules.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/codebase/CONVENTIONS.md
+@src/coordination/types.ts
+
+**Discovery findings (Vercel KV):**
+- Package: @vercel/kv
+- Hash methods: kv.hset(key, {field: value}), kv.hget(key, field), kv.hgetall(key)
+- String methods: kv.set(key, value), kv.get(key)
+- Environment: KV_REST_API_URL, KV_REST_API_TOKEN auto-injected in Vercel
+- Pattern: Store entities as JSON in hashes, keyed by entity type + ID
+
+**Storage schema design:**
+- tickets:{id} → QATicket hash
+- testers:{id} → TesterProfile hash
+- linear-messages:{slackMessageTs} → LinearMessage hash
+- sessions:{id} → QASession hash
+- indexes:tickets-by-status:{status} → Set of ticket IDs
+- indexes:tickets-by-tester:{testerId} → Set of ticket IDs
+
+**Depends on:** Plan 01-01 (types.ts must exist)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Install @vercel/kv and create KV client wrapper</name>
+  <files>package.json, src/coordination/store/kv-client.ts</files>
+  <action>
+1. Install @vercel/kv:
+```bash
+npm install @vercel/kv
+```
+
+2. Create src/coordination/store/ directory
+
+3. Create kv-client.ts with typed wrapper:
+
+```typescript
+import { kv, createClient } from '@vercel/kv';
+import type { VercelKV } from '@vercel/kv';
+
+// Re-export the default kv client for simple usage
+export { kv };
+
+// Create custom client for testing or custom config
+export function createKVClient(config?: {
+  url?: string;
+  token?: string;
+}): VercelKV {
+  if (config?.url && config?.token) {
+    return createClient({
+      url: config.url,
+      token: config.token,
+    });
+  }
+  return kv;
+}
+
+// Key prefixes for different entity types
+export const KV_KEYS = {
+  ticket: (id: string) => `tickets:${id}`,
+  tester: (id: string) => `testers:${id}`,
+  linearMessage: (slackTs: string) => `linear-messages:${slackTs}`,
+  session: (id: string) => `sessions:${id}`,
+  // Index keys
+  ticketsByStatus: (status: string) => `indexes:tickets-by-status:${status}`,
+  ticketsByTester: (testerId: string) => `indexes:tickets-by-tester:${testerId}`,
+  pendingTickets: () => 'indexes:pending-tickets',
+} as const;
+
+// Helper to generate unique IDs (use crypto.randomUUID in Node 18+)
+export function generateId(): string {
+  return crypto.randomUUID();
+}
+```
+
+Export all functions and constants.
+  </action>
+  <verify>npm ls @vercel/kv shows package installed; tsc --noEmit src/coordination/store/kv-client.ts compiles</verify>
+  <done>@vercel/kv installed, kv-client.ts created with typed client wrapper and key constants</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create ticket store functions</name>
+  <files>src/coordination/store/ticket-store.ts</files>
+  <action>
+Create ticket-store.ts with CRUD operations:
+
+```typescript
+import { kv } from './kv-client.js';
+import { KV_KEYS, generateId } from './kv-client.js';
+import type { QATicket, TicketStatus, TicketSource } from '../types.js';
+
+// Create a new ticket
+export async function createTicket(
+  data: Omit<QATicket, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'assignedTo' | 'claimedAt'>
+): Promise<QATicket> {
+  const id = data.linearUrl.split('/').pop() || generateId(); // Use Linear ID if available
+  const now = new Date().toISOString();
+
+  const ticket: QATicket = {
+    ...data,
+    id,
+    status: 'pending',
+    assignedTo: null,
+    claimedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await kv.hset(KV_KEYS.ticket(id), ticket as Record<string, unknown>);
+
+  // Add to pending tickets index
+  await kv.sadd(KV_KEYS.ticketsByStatus('pending'), id);
+  await kv.sadd(KV_KEYS.pendingTickets(), id);
+
+  return ticket;
+}
+
+// Get ticket by ID
+export async function getTicket(id: string): Promise<QATicket | null> {
+  const data = await kv.hgetall(KV_KEYS.ticket(id));
+  if (!data || Object.keys(data).length === 0) return null;
+  return data as unknown as QATicket;
+}
+
+// Update ticket (partial update)
+export async function updateTicket(
+  id: string,
+  updates: Partial<Omit<QATicket, 'id' | 'createdAt'>>
+): Promise<QATicket | null> {
+  const existing = await getTicket(id);
+  if (!existing) return null;
+
+  const oldStatus = existing.status;
+  const updated: QATicket = {
+    ...existing,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await kv.hset(KV_KEYS.ticket(id), updated as Record<string, unknown>);
+
+  // Update status indexes if status changed
+  if (updates.status && updates.status !== oldStatus) {
+    await kv.srem(KV_KEYS.ticketsByStatus(oldStatus), id);
+    await kv.sadd(KV_KEYS.ticketsByStatus(updates.status), id);
+
+    if (oldStatus === 'pending') {
+      await kv.srem(KV_KEYS.pendingTickets(), id);
+    }
+    if (updates.status === 'pending') {
+      await kv.sadd(KV_KEYS.pendingTickets(), id);
+    }
+  }
+
+  // Update tester index if assignee changed
+  if (updates.assignedTo !== undefined) {
+    if (existing.assignedTo) {
+      await kv.srem(KV_KEYS.ticketsByTester(existing.assignedTo), id);
+    }
+    if (updates.assignedTo) {
+      await kv.sadd(KV_KEYS.ticketsByTester(updates.assignedTo), id);
+    }
+  }
+
+  return updated;
+}
+
+// List tickets by status
+export async function listTicketsByStatus(status: TicketStatus): Promise<QATicket[]> {
+  const ids = await kv.smembers(KV_KEYS.ticketsByStatus(status));
+  if (!ids || ids.length === 0) return [];
+
+  const tickets = await Promise.all(ids.map(id => getTicket(id as string)));
+  return tickets.filter((t): t is QATicket => t !== null);
+}
+
+// List pending tickets (convenience function)
+export async function listPendingTickets(): Promise<QATicket[]> {
+  return listTicketsByStatus('pending');
+}
+
+// List tickets assigned to a tester
+export async function listTicketsByTester(testerId: string): Promise<QATicket[]> {
+  const ids = await kv.smembers(KV_KEYS.ticketsByTester(testerId));
+  if (!ids || ids.length === 0) return [];
+
+  const tickets = await Promise.all(ids.map(id => getTicket(id as string)));
+  return tickets.filter((t): t is QATicket => t !== null);
+}
+
+// Claim a ticket
+export async function claimTicket(id: string, testerId: string): Promise<QATicket | null> {
+  return updateTicket(id, {
+    status: 'claimed',
+    assignedTo: testerId,
+    claimedAt: new Date().toISOString(),
+  });
+}
+```
+
+Use .js extensions in imports for ESM compatibility. Export all functions.
+  </action>
+  <verify>tsc --noEmit src/coordination/store/ticket-store.ts compiles without errors</verify>
+  <done>ticket-store.ts created with create, get, update, list, and claim functions</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Create tester profile and linear message stores</name>
+  <files>src/coordination/store/tester-store.ts, src/coordination/store/linear-message-store.ts, src/coordination/store/index.ts</files>
+  <action>
+1. Create tester-store.ts:
+
+```typescript
+import { kv } from './kv-client.js';
+import { KV_KEYS, generateId } from './kv-client.js';
+import type { TesterProfile, TesterAvailability } from '../types.js';
+
+// Create or update tester profile (upsert pattern for sync)
+export async function upsertTester(
+  data: Omit<TesterProfile, 'currentLoad' | 'totalCompleted' | 'avgCompletionTimeMs' | 'lastActiveAt'> & {
+    currentLoad?: number;
+    totalCompleted?: number;
+    avgCompletionTimeMs?: number;
+  }
+): Promise<TesterProfile> {
+  const existing = await getTester(data.id);
+
+  const tester: TesterProfile = {
+    currentLoad: existing?.currentLoad ?? 0,
+    totalCompleted: existing?.totalCompleted ?? 0,
+    avgCompletionTimeMs: existing?.avgCompletionTimeMs ?? 0,
+    ...data,
+    lastActiveAt: new Date().toISOString(),
+  };
+
+  await kv.hset(KV_KEYS.tester(data.id), tester as Record<string, unknown>);
+  return tester;
+}
+
+// Get tester by ID
+export async function getTester(id: string): Promise<TesterProfile | null> {
+  const data = await kv.hgetall(KV_KEYS.tester(id));
+  if (!data || Object.keys(data).length === 0) return null;
+  return data as unknown as TesterProfile;
+}
+
+// Update tester (partial update)
+export async function updateTester(
+  id: string,
+  updates: Partial<Omit<TesterProfile, 'id' | 'linearUserId'>>
+): Promise<TesterProfile | null> {
+  const existing = await getTester(id);
+  if (!existing) return null;
+
+  const updated: TesterProfile = {
+    ...existing,
+    ...updates,
+    lastActiveAt: new Date().toISOString(),
+  };
+
+  await kv.hset(KV_KEYS.tester(id), updated as Record<string, unknown>);
+  return updated;
+}
+
+// List all testers (scan pattern - use sparingly)
+export async function listTesters(): Promise<TesterProfile[]> {
+  const testers: TesterProfile[] = [];
+  for await (const key of kv.scanIterator({ match: 'testers:*' })) {
+    const data = await kv.hgetall(key);
+    if (data && Object.keys(data).length > 0) {
+      testers.push(data as unknown as TesterProfile);
+    }
+  }
+  return testers;
+}
+
+// Get available testers for assignment
+export async function getAvailableTesters(): Promise<TesterProfile[]> {
+  const all = await listTesters();
+  return all.filter(t => t.availability === 'available');
+}
+
+// Increment tester load (when assigned)
+export async function incrementTesterLoad(id: string): Promise<void> {
+  const tester = await getTester(id);
+  if (tester) {
+    await updateTester(id, { currentLoad: tester.currentLoad + 1 });
+  }
+}
+
+// Decrement tester load (when ticket completed)
+export async function decrementTesterLoad(id: string): Promise<void> {
+  const tester = await getTester(id);
+  if (tester && tester.currentLoad > 0) {
+    await updateTester(id, { currentLoad: tester.currentLoad - 1 });
+  }
+}
+```
+
+2. Create linear-message-store.ts:
+
+```typescript
+import { kv } from './kv-client.js';
+import { KV_KEYS } from './kv-client.js';
+import type { LinearMessage } from '../types.js';
+
+// Store a Linear message mapping
+export async function storeLinearMessage(data: LinearMessage): Promise<LinearMessage> {
+  await kv.hset(
+    KV_KEYS.linearMessage(data.slackMessageTs),
+    data as Record<string, unknown>
+  );
+  return data;
+}
+
+// Get Linear message by Slack timestamp
+export async function getLinearMessage(slackTs: string): Promise<LinearMessage | null> {
+  const data = await kv.hgetall(KV_KEYS.linearMessage(slackTs));
+  if (!data || Object.keys(data).length === 0) return null;
+  return data as unknown as LinearMessage;
+}
+
+// Find Linear message by issue ID (scan - use when needed)
+export async function findLinearMessageByIssueId(issueId: string): Promise<LinearMessage | null> {
+  for await (const key of kv.scanIterator({ match: 'linear-messages:*' })) {
+    const data = await kv.hgetall(key);
+    if (data && (data as Record<string, unknown>).linearIssueId === issueId) {
+      return data as unknown as LinearMessage;
+    }
+  }
+  return null;
+}
+```
+
+3. Create index.ts barrel file:
+
+```typescript
+// Re-export all store modules
+export * from './kv-client.js';
+export * from './ticket-store.js';
+export * from './tester-store.js';
+export * from './linear-message-store.js';
+```
+
+Export all functions from each module.
+  </action>
+  <verify>tsc --noEmit src/coordination/store/index.ts compiles without errors</verify>
+  <done>tester-store.ts, linear-message-store.ts, and index.ts barrel created with all store functions</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm ls @vercel/kv` shows package installed
+- [ ] `npx tsc --noEmit` passes without errors
+- [ ] All store modules export typed functions
+- [ ] Index file re-exports all store modules
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Store functions cover tickets, testers, and linear message mappings
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-foundation/01-02-SUMMARY.md`
+</output>

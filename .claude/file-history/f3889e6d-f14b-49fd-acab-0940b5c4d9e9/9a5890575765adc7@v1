@@ -1,0 +1,209 @@
+---
+phase: 06-community-endpoints
+plan: 02
+type: execute
+---
+
+<objective>
+Create community tracker GET and POST endpoints for ClickHouse data persistence.
+
+Purpose: Enable frontend to fetch and save community tracker data to ClickHouse.
+Output: New community_tracker.ts endpoint with GET (fetch) and POST (save) routes.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/06-community-endpoints/06-01-SUMMARY.md
+@src/clickhouse/client.ts
+@src/endpoints/_template.ts
+
+**Reference PHP implementation:**
+/Users/neilhart/Downloads/community-clickhouse.php
+
+**Database schema (from PHP):**
+Tables: community_tracker, community_member_history
+
+community_tracker columns:
+- mint, community_id, community_url, community_name, description
+- member_count, moderator_count, banner_url, community_created_at
+- activity_level, activity_tier, last_activity_check, last_updated
+- added_at, symbol, name, image, market_cap_usd, source
+
+community_member_history columns:
+- community_id, timestamp, count
+
+**Response format (GET):**
+Reconstructs nested format with communityData object and memberCountHistory array.
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create community tracker GET endpoint</name>
+  <files>src/endpoints/generic/community_tracker.ts</files>
+  <action>
+Create endpoint to fetch and reconstruct community tracker data from ClickHouse.
+
+Route: GET /local-api/community-tracker
+
+Implementation:
+1. Query community_tracker table: SELECT * FROM community_tracker
+2. Query community_member_history: SELECT * FROM community_member_history ORDER BY timestamp
+3. Group history by community_id
+4. Reconstruct nested format for each entry:
+
+```typescript
+{
+  entries: [{
+    mint: string,
+    symbol: string,
+    name: string,
+    image: string,
+    communityUrl: string,
+    communityId: string,
+    marketCapUsd: string,
+    source: string,
+    addedAt: number,
+    isLoading: false,
+    error: null,
+    communityData: {
+      communityId: string,
+      name: string,
+      description: string,
+      memberCount: number,
+      moderatorCount: number,
+      bannerUrl: string | null,
+      createdAt: string,
+      memberCountHistory: [{ timestamp: number, count: number }],
+      lastUpdated: number,
+      activityLevel: number,
+      activityTier: string,
+      lastActivityCheck: number
+    }
+  }],
+  lastUpdated: number // current timestamp in ms
+}
+```
+
+5. Return { ok: true, ...data } format consistent with other endpoints
+  </action>
+  <verify>
+Start server, then: `curl http://localhost:8787/local-api/community-tracker | jq`
+Should return { ok: true, entries: [], lastUpdated: ... } (empty if no data)
+  </verify>
+  <done>GET endpoint returns reconstructed nested community tracker data</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create community tracker POST endpoint</name>
+  <files>src/endpoints/generic/community_tracker.ts, src/server.ts</files>
+  <action>
+Add POST handler to save community tracker data to ClickHouse.
+
+Route: POST /local-api/community-tracker
+
+Request body:
+```typescript
+{
+  entries: [{
+    mint: string,
+    communityId: string,
+    communityUrl: string,
+    symbol: string,
+    name: string,
+    image: string,
+    marketCapUsd: string,
+    source: string,
+    addedAt: number,
+    communityData: {
+      name: string,
+      description: string,
+      memberCount: number,
+      moderatorCount: number,
+      bannerUrl: string | null,
+      createdAt: string,
+      memberCountHistory: [{ timestamp: number, count: number }],
+      lastUpdated: number,
+      activityLevel: number,
+      activityTier: string,
+      lastActivityCheck: number
+    }
+  }]
+}
+```
+
+Implementation:
+1. Parse request body
+2. Return early if entries empty: { ok: true, saved: 0 }
+3. Flatten entries into community_tracker rows (map nested fields to flat columns)
+4. Extract history rows from memberCountHistory arrays
+5. Use clickhouseInsert for both tables
+6. Return { ok: true, saved: count }
+
+Column mapping (camelCase to snake_case):
+- communityId → community_id
+- communityUrl → community_url
+- communityData.name → community_name
+- etc. (follow PHP pattern)
+
+Register both GET and POST in server.ts.
+  </action>
+  <verify>
+Test POST:
+```bash
+curl -X POST http://localhost:8787/local-api/community-tracker \
+  -H 'content-type: application/json' \
+  -d '{"entries":[]}'
+```
+Should return { ok: true, saved: 0 }
+  </verify>
+  <done>POST endpoint accepts entries, flattens data, inserts to ClickHouse</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Update documentation</name>
+  <files>ENDPOINTS.md, ai.md</files>
+  <action>
+Add documentation for new endpoints.
+
+ENDPOINTS.md - Add to Generic Endpoints table:
+| `GET /local-api/community-tracker` | Fetch community tracker data |
+| `POST /local-api/community-tracker` | Save community tracker data |
+| `GET /local-api/twitter-proxy` | Proxy Twitter community API |
+
+ai.md - Add to APIs/Interfaces table:
+| `/local-api/community-tracker` | REST GET/POST | Community tracker persistence |
+| `/local-api/twitter-proxy` | REST GET | Twitter community API proxy |
+  </action>
+  <verify>Check ENDPOINTS.md has new entries</verify>
+  <done>Documentation updated with new endpoints</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run --bun src/server.ts` starts without errors
+- [ ] GET /local-api/community-tracker returns valid JSON
+- [ ] POST /local-api/community-tracker accepts and processes entries
+- [ ] GET /local-api/twitter-proxy works (from 06-01)
+- [ ] Documentation updated
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Phase 6 complete - all PHP endpoints ported to TypeScript
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/06-community-endpoints/06-02-SUMMARY.md`
+</output>

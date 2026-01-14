@@ -1,0 +1,205 @@
+/**
+ * Data Validation Layer
+ *
+ * Fast, synchronous validation functions for incoming market data.
+ * Ensures data integrity before passing to rule engine.
+ */
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * Validate TokenMarketData structure
+ * Required: mint, symbol, price_sol, price_usd
+ * Optional fields validated if present
+ */
+export function validateTokenMarketData(data: unknown): ValidationResult {
+  const errors: string[] = [];
+
+  if (!data || typeof data !== 'object') {
+    return { valid: false, errors: ['data: must be an object'] };
+  }
+
+  const d = data as Record<string, unknown>;
+
+  // Required fields
+  if (typeof d.mint !== 'string' || d.mint.length === 0) {
+    errors.push('mint: required non-empty string');
+  }
+
+  if (typeof d.symbol !== 'string') {
+    errors.push('symbol: required string');
+  }
+
+  if (typeof d.price_sol !== 'number' || d.price_sol < 0) {
+    errors.push('price_sol: required number >= 0');
+  }
+
+  if (typeof d.price_usd !== 'number' || d.price_usd < 0) {
+    errors.push('price_usd: required number >= 0');
+  }
+
+  // Early return if required fields invalid
+  if (errors.length > 0) {
+    return { valid: false, errors };
+  }
+
+  // Optional volume fields - validate if present
+  const volumeFields = [
+    'buy_volume_sol_5m', 'sell_volume_sol_5m',
+    'buy_volume_sol_1h', 'sell_volume_sol_1h',
+    'buy_volume_sol_6h', 'sell_volume_sol_6h',
+    'buy_volume_sol_24h', 'sell_volume_sol_24h',
+    'volume_24h_sol'
+  ];
+
+  for (const field of volumeFields) {
+    if (field in d && (typeof d[field] !== 'number' || (d[field] as number) < 0)) {
+      errors.push(`${field}: must be number >= 0`);
+    }
+  }
+
+  // Optional count fields - validate as integers >= 0
+  const countFields = [
+    'buys_5m', 'buys_1h', 'buys_6h', 'buys_24h',
+    'sells_5m', 'sells_1h', 'sells_6h', 'sells_24h',
+    'buyers_5m', 'buyers_1h', 'buyers_6h', 'buyers_24h',
+    'sellers_5m', 'sellers_1h', 'sellers_6h', 'sellers_24h',
+    'traders_5m', 'traders_1h', 'traders_6h', 'traders_24h'
+  ];
+
+  for (const field of countFields) {
+    if (field in d) {
+      const val = d[field];
+      if (typeof val !== 'number' || val < 0 || !Number.isInteger(val)) {
+        errors.push(`${field}: must be integer >= 0`);
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Validate OHLCV candle data
+ * Required: timestamp, open, high, low, close, volume
+ * Validates OHLC relationships (high >= low, etc.)
+ */
+export function validateOHLCV(data: unknown): ValidationResult {
+  const errors: string[] = [];
+
+  if (!data || typeof data !== 'object') {
+    return { valid: false, errors: ['data: must be an object'] };
+  }
+
+  const d = data as Record<string, unknown>;
+
+  // Required fields
+  if (typeof d.timestamp !== 'number' || d.timestamp <= 0) {
+    errors.push('timestamp: required number > 0');
+  }
+
+  if (typeof d.open !== 'number' || d.open <= 0) {
+    errors.push('open: required number > 0');
+  }
+
+  if (typeof d.high !== 'number' || d.high <= 0) {
+    errors.push('high: required number > 0');
+  }
+
+  if (typeof d.low !== 'number' || d.low <= 0) {
+    errors.push('low: required number > 0');
+  }
+
+  if (typeof d.close !== 'number' || d.close <= 0) {
+    errors.push('close: required number > 0');
+  }
+
+  if (typeof d.volume !== 'number' || d.volume < 0) {
+    errors.push('volume: required number >= 0');
+  }
+
+  // Early return if basic validation fails
+  if (errors.length > 0) {
+    return { valid: false, errors };
+  }
+
+  // OHLC relationship validation
+  const { open, high, low, close } = d as { open: number; high: number; low: number; close: number };
+
+  if (high < low) {
+    errors.push('high must be >= low');
+  }
+
+  if (high < open) {
+    errors.push('high must be >= open');
+  }
+
+  if (high < close) {
+    errors.push('high must be >= close');
+  }
+
+  if (low > open) {
+    errors.push('low must be <= open');
+  }
+
+  if (low > close) {
+    errors.push('low must be <= close');
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Validate Trade data
+ * Required: mint, direction, sol_amount, timestamp
+ * Optional: token_amount, maker, signature
+ */
+export function validateTrade(data: unknown): ValidationResult {
+  const errors: string[] = [];
+
+  if (!data || typeof data !== 'object') {
+    return { valid: false, errors: ['data: must be an object'] };
+  }
+
+  const d = data as Record<string, unknown>;
+
+  // Required fields
+  if (typeof d.mint !== 'string' || d.mint.length === 0) {
+    errors.push('mint: required non-empty string');
+  }
+
+  if (d.direction !== 'buy' && d.direction !== 'sell') {
+    errors.push('direction: must be "buy" or "sell"');
+  }
+
+  if (typeof d.sol_amount !== 'number' || d.sol_amount <= 0) {
+    errors.push('sol_amount: required number > 0');
+  }
+
+  if (typeof d.timestamp !== 'number' || d.timestamp <= 0) {
+    errors.push('timestamp: required number > 0');
+  }
+
+  // Early return if required fields invalid
+  if (errors.length > 0) {
+    return { valid: false, errors };
+  }
+
+  // Optional fields - validate if present
+  if ('token_amount' in d && typeof d.token_amount !== 'number') {
+    errors.push('token_amount: must be number');
+  }
+
+  if ('maker' in d && typeof d.maker !== 'string') {
+    errors.push('maker: must be string');
+  }
+
+  if ('signature' in d && typeof d.signature !== 'string') {
+    errors.push('signature: must be string');
+  }
+
+  return { valid: errors.length === 0, errors };
+}

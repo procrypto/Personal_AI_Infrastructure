@@ -1,0 +1,142 @@
+# Context for ceremony
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Internal deployment orchestration tool that coordinates weekly multi-team production releases. Tracks deployment steps with status and timing across 5 workstreams, manages cross-team dependencies, imports release scope from Linear, and maintains complete ceremony history.
+
+**Critical constraint**: This tool is used during live production deployments - reliability and data persistence are essential.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Frontend | React 18 (CDN) + Tailwind CSS | Single-file UI |
+| Backend | Vercel Serverless Functions | API endpoints |
+| Storage | Vercel KV (Redis) | Live ceremony state |
+| Archive | Vercel Blob | Historical ceremonies |
+| Integration | Linear SDK | Release scope import |
+
+### Key Components
+
+```
+index.html          # Single-file React app (3,977 lines)
+authConfig.js       # User/role definitions (25+ users)
+api/                # 5 serverless endpoints
+lib/                # KV, Blob, Linear, user mapping utilities
+docs/               # 8 comprehensive guides
+```
+
+### Workstreams (5)
+
+| Workstream | Scope |
+|------------|-------|
+| Frontend | Vercel deployment |
+| TG Bot | Migration, Furiosa, Alt Bots, Bot Node |
+| Web API | REST/WebSocket API |
+| PUM3 | Price Update Machine |
+| Data/Infra | Multi-region (Asia, US, EU) |
+
+## Capabilities
+
+### Features
+
+| Feature | Purpose |
+|---------|---------|
+| Real-time Coordination | Live timer, progress tracking |
+| Step Dependencies | Steps can block on other steps/workstreams |
+| Linear Integration | Import release scope, auto-assign engineers |
+| Offline Resilience | localStorage fallback if API unavailable |
+| History | Complete archive of all ceremonies |
+
+### User Roles
+
+| Role | Users | Permissions |
+|------|-------|-------------|
+| ADMIN | 1 | Full system access |
+| LEADER | Will, James, Oleh, Krystian | Manage all workstreams |
+| ENGINEER | 20+ | Assigned workstreams only |
+
+### API Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/save-ceremony` | Persist ceremony state |
+| `GET /api/get-ceremonies` | Paginated list |
+| `POST /api/linear/fetch-release-scope` | Import from Linear |
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- Single-file React pattern (index.html contains all UI code)
+- Babel in-browser transpilation (no build step)
+- User definitions in authConfig.js
+- Workstream configuration in INITIAL_DATA
+
+### Common Tasks
+
+#### Local Development
+
+```bash
+vercel link
+vercel dev
+```
+
+#### Add Workstream
+
+1. Edit INITIAL_DATA in `index.html`
+2. Update workstream config in `authConfig.js`
+
+#### Add Engineer
+
+Update USER_DEFINITIONS in `authConfig.js`
+
+#### Finding Code
+
+- Main UI: `index.html`
+- User config: `authConfig.js`
+- API handlers: `api/`
+- Storage utilities: `lib/`
+- Documentation: `docs/`
+
+### Things to Avoid
+
+- Breaking changes during active ceremonies
+- Modifying user roles without team coordination
+- Removing historical data from Vercel Blob
+- Changing Linear integration without testing
+
+## Related Documentation
+
+- [docs/](docs/) - 8 comprehensive guides covering all aspects
+- [README.md](README.md) - Quick start
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| Linear | Release scope, issue tracking |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| None | Human coordination only |
+
+**Note**: This tool has NO programmatic integration with production systems - it's purely for human coordination during deployments.
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] Ceremony process documentation
+- [ ] Emergency rollback procedures
+- [ ] Step template best practices
+- [ ] Post-ceremony checklist
+-->

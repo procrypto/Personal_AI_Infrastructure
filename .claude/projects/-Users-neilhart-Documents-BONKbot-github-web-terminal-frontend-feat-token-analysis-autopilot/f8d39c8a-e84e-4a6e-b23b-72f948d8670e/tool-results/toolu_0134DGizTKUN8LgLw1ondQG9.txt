@@ -1,0 +1,104 @@
+     1→/**
+     2→ * useAutopilotTokensWithPrices
+     3→ *
+     4→ * Provides price and change data for screener tokens.
+     5→ *
+     6→ * Data flow:
+     7→ * - Trending/Watchlist: Use embedded market_data from WebSocket stores (full data)
+     8→ * - Whales: Use embedded market_cap, fall back to NATS for price/change (limited data)
+     9→ *
+    10→ * This hook maintains backward compatibility with the existing widget interface.
+    11→ */
+    12→
+    13→import { useMemo } from "react";
+    14→import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+    15→import { useAutopilotDiscoveryTokens } from "./useAutopilotDiscoveryTokens";
+    16→import type { ScreenerTokenData } from "./types";
+    17→
+    18→/**
+    19→ * Token with enriched price data for widget display.
+    20→ * Extends ScreenerTokenData with computed price fields.
+    21→ */
+    22→export interface AutopilotTokenWithPrices {
+    23→  mint: string;
+    24→  symbol: string;
+    25→  source: "watchlist" | "trending" | "whales";
+    26→  priceUsd: number | undefined;
+    27→  change1h: number | undefined;
+    28→  marketCapUsd: number | undefined;
+    29→  hasPosition?: boolean;
+    30→}
+    31→
+    32→/**
+    33→ * Token lists with enriched price data.
+    34→ */
+    35→export interface AutopilotTokenListWithPrices {
+    36→  watchlist: AutopilotTokenWithPrices[];
+    37→  trending: AutopilotTokenWithPrices[];
+    38→  whales: AutopilotTokenWithPrices[];
+    39→}
+    40→
+    41→/**
+    42→ * Parse a string or number value to a number, returning undefined if invalid.
+    43→ */
+    44→const parseNumber = (
+    45→  value: string | number | undefined
+    46→): number | undefined => {
+    47→  if (value === undefined) return undefined;
+    48→  const num = typeof value === "string" ? parseFloat(value) : value;
+    49→  return isNaN(num) ? undefined : num;
+    50→};
+    51→
+    52→/**
+    53→ * Calculate price change percentage from current price and earliest price.
+    54→ */
+    55→const calculatePriceChange = (
+    56→  currentPrice: number | undefined,
+    57→  earliestPrice: string | undefined
+    58→): number | undefined => {
+    59→  if (currentPrice === undefined || !earliestPrice) return undefined;
+    60→  const earliest = parseFloat(earliestPrice);
+    61→  if (isNaN(earliest) || earliest === 0) return undefined;
+    62→  return ((currentPrice - earliest) / earliest) * 100;
+    63→};
+    64→
+    65→/**
+    66→ * Hook to get autopilot token lists with price data.
+    67→ *
+    68→ * For trending/watchlist: Uses embedded WebSocket market_data (has full trading_stats)
+    69→ * For whales: Uses embedded market_cap, falls back to NATS for price data
+    70→ */
+    71→export const useAutopilotTokensWithPrices =
+    72→  (): AutopilotTokenListWithPrices => {
+    73→    // Get token lists with embedded market_data from WebSocket stores
+    74→    const tokenList = useAutopilotDiscoveryTokens();
+    75→
+    76→    // NATS market data - fallback for whales that don't have WebSocket data
+    77→    const natsMarketDataMap = useGlobalStore(
+    78→      useShallow(state => state.websocketMessages.market_data.data)
+    79→    );
+    80→
+    81→    // SOL price for USD conversion (fallback)
+    82→    const solPriceUsdStr = useGlobalStore(state => state.solanaPrice.usd);
+    83→    const solPriceUsd = solPriceUsdStr ? parseFloat(solPriceUsdStr) : undefined;
+    84→
+    85→    // Enrich token with price data
+    86→    // Prefers embedded market_data from WebSocket, falls back to NATS
+    87→    const enrichToken = useMemo(() => {
+    88→      return (token: ScreenerTokenData): AutopilotTokenWithPrices => {
+    89→        const md = token.market_data;
+    90→
+    91→        // Try to get price data from embedded market_data first
+    92→        if (md) {
+    93→          // Parse prices from embedded market_data
+    94→          const priceUsd = parseNumber(md.price_usd);
+    95→          const priceSol = parseNumber(md.price_sol);
+    96→          const marketCapUsd = parseNumber(md.market_cap_usd);
+    97→
+    98→          // Calculate 1h change from trading_stats if available
+    99→          let change1h: number | undefined = undefined;
+   100→          if (md.trading_stats_1h && priceSol !== undefined) {
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

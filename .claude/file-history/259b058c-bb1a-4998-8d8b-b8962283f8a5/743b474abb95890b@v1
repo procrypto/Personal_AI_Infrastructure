@@ -1,0 +1,118 @@
+/**
+ * useAutopilotPositions
+ *
+ * Combines autopilot position entries with NATS market data to calculate
+ * live P&L. Position entry data comes from autopilot backend, live prices
+ * come from NATS market_data subscriptions.
+ */
+
+import { useMemo } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type { AutopilotPositionEntry } from "@/store/memoryStore/slices/autopilot-store/types";
+
+/**
+ * Position with calculated P&L.
+ * Current price and P&L are nullable - null when market data isn't available.
+ */
+export interface AutopilotPositionWithPnL extends AutopilotPositionEntry {
+  currentPriceSol: number | null;
+  pnlPercent: number | null;
+  pnlSol: number | null;
+}
+
+/**
+ * Hook to get autopilot positions with live P&L calculated from NATS market data.
+ */
+export const useAutopilotPositions = (): AutopilotPositionWithPnL[] => {
+  // Get position entries from autopilot store
+  const positions = useGlobalStore(
+    useShallow(state => Array.from(state.autopilot.positions.values()))
+  );
+
+  // Get market data map
+  const marketDataMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.market_data.data)
+  );
+
+  // Combine positions with live prices
+  return useMemo(() => {
+    // DIAGNOSTIC: Log market data state once per memo recalculation
+    if (positions.length > 0) {
+      const marketDataKeys = Object.keys(marketDataMap);
+      console.log(
+        "[Autopilot] useAutopilotPositions: positions count:",
+        positions.length,
+        "| marketDataMap keys:",
+        marketDataKeys.length,
+        marketDataKeys.slice(0, 3)
+      );
+    }
+
+    return positions.map(position => {
+      // Get latest market data for this mint
+      const mintData = marketDataMap[position.mint];
+
+      // DIAGNOSTIC: Log lookup result for each position
+      console.log(
+        "[Autopilot] Position lookup:",
+        position.symbol,
+        "mint:",
+        position.mint.slice(0, 8) + "...",
+        "| found:",
+        !!mintData,
+        mintData ? `size=${mintData.size}` : ""
+      );
+
+      if (!mintData || mintData.size === 0) {
+        // No market data available yet
+        return {
+          ...position,
+          currentPriceSol: null,
+          pnlPercent: null,
+          pnlSol: null,
+        };
+      }
+
+      // Get the latest market data (there's only one item keyed as "latest")
+      const latestMarketData = Array.from(mintData.values())[0];
+
+      if (!latestMarketData?.price_sol) {
+        return {
+          ...position,
+          currentPriceSol: null,
+          pnlPercent: null,
+          pnlSol: null,
+        };
+      }
+
+      // price_sol is a number in TokenMarketData
+      const currentPriceSol = latestMarketData.price_sol;
+
+      if (
+        typeof currentPriceSol !== "number" ||
+        isNaN(currentPriceSol) ||
+        position.entryPriceSol === 0
+      ) {
+        return {
+          ...position,
+          currentPriceSol: null,
+          pnlPercent: null,
+          pnlSol: null,
+        };
+      }
+
+      // Calculate P&L
+      const pnlPercent =
+        ((currentPriceSol - position.entryPriceSol) / position.entryPriceSol) *
+        100;
+      const pnlSol = (pnlPercent / 100) * position.positionSizeSol;
+
+      return {
+        ...position,
+        currentPriceSol,
+        pnlPercent,
+        pnlSol,
+      };
+    });
+  }, [positions, marketDataMap]);
+};

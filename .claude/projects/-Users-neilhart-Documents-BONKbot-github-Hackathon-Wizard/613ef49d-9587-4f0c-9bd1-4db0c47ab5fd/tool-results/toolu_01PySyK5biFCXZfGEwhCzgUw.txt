@@ -1,0 +1,44 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/trading/trigger.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+    68→      paperTracker.recordEvent(event);
+    69→      return { triggered: false, reason: event.reason, event };
+    70→    }
+    71→
+    72→    // Check for existing open trade on this mint
+    73→    const existingTrade = paperTracker.getOpenTradeForMint(params.mint);
+    74→    if (existingTrade) {
+    75→      // If same direction, skip
+    76→      if (existingTrade.action === params.action) {
+    77→        event.reason = `Already have ${params.action} position open`;
+    78→        paperTracker.recordEvent(event);
+    79→        return { triggered: false, reason: event.reason, event };
+    80→      }
+    81→
+    82→      // Opposite direction - check config
+    83→      if (this.config.onOppositeSignal === 'ignore') {
+    84→        event.reason = `Ignoring opposite signal (have ${existingTrade.action} open)`;
+    85→        paperTracker.recordEvent(event);
+    86→        return { triggered: false, reason: event.reason, event };
+    87→      }
+    88→
+    89→      // Close the existing position
+    90→      const closed = paperTracker.closeTrade(existingTrade.id, params.priceSol, params.priceUsd);
+    91→      if (closed) {
+    92→        const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+    93→        console.log(`\n[CLOSE] ${closed.action.toUpperCase()} ${closed.symbol} -> ${pnlSign}${closed.pnlPercent?.toFixed(2)}% (${pnlSign}${closed.pnlSol?.toFixed(4)} SOL)`);
+    94→        console.log(`  Reason: Opposite ${params.action.toUpperCase()} signal`);
+    95→      }
+    96→
+    97→      // If 'close' mode, don't open new position
+    98→      if (this.config.onOppositeSignal === 'close') {
+    99→        event.triggered = true;
+   100→        event.reason = 'Closed on opposite signal';
+   101→        paperTracker.recordEvent(event);
+   102→        lastTriggerTime.set(params.mint, Date.now());
+   103→        return { triggered: true, event };
+   104→      }
+   105→      // 'flip' mode continues to open new position below
+   106→    }
+   107→
+   108→    // Determine position size
+   109→    let positionSizeSol = this.config.defaultPositionSizeSol;
+   110→    // Scale by confidence (50-100% of default size)

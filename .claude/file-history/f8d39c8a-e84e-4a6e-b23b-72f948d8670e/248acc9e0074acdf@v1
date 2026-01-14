@@ -1,0 +1,259 @@
+/**
+ * Autopilot Store Types
+ *
+ * Types for the token-analysis-autopilot integration.
+ * Position entries do NOT include current price - that comes from NATS market_data.
+ *
+ * LOIS INTEGRATION READINESS
+ * ==========================
+ * These frontend types intentionally mirror backend websocket-server.ts for consistency.
+ * See backend types for full LOIS compatibility documentation.
+ *
+ * Summary:
+ * - All types designed for future LOIS live trading integration
+ * - Partial types (positions, signals, config) need extensions for live execution
+ * - Full types (stats, market status, strategies) are execution-agnostic
+ */
+
+// LOIS COMPATIBLE: partial - paper-only (no execution IDs, fill prices)
+// Position entry data (no current price - frontend fetches via NATS)
+export interface AutopilotPositionEntry {
+  mint: string;
+  symbol: string;
+  action: "buy" | "sell";
+  entryPriceSol: number;
+  positionSizeSol: number;
+  entryTime: number;
+}
+
+// LOIS COMPATIBLE: partial - signalType maps to LOIS TriggerEvent
+export interface AutopilotSignal {
+  timestamp: number;
+  mint: string;
+  symbol: string;
+  signalType: "magic_buy" | "magic_exit" | "dump_exit" | "rule_signal";
+  action: "buy" | "sell" | "close";
+  reason: string;
+  pnlPercent?: number;
+  entryType?: string;
+}
+
+// LOIS COMPATIBLE: yes - risk assessment gates for paper and live
+export interface AutopilotMarketStatus {
+  state: "NORMAL" | "CAUTION" | "DUMP";
+  solPriceUsd?: number; // Frontend-derived from NATS
+  solPriceChangePercent: number;
+  blockEntries: boolean;
+  exitAll: boolean;
+}
+
+// LOIS COMPATIBLE: yes - aggregate stats format identical for paper/live
+export interface AutopilotStats {
+  totalTrades: number;
+  openTrades: number;
+  closedTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnlSol: number;
+  totalPnlUsd: number;
+  avgPnlPercent: number;
+}
+
+export interface AutopilotScanTick {
+  timestamp: number;
+  scanNumber: number;
+  tokenCount: number;
+  openPositions: number;
+}
+
+// Last analyzed token - for debugging/visibility
+export interface AutopilotLastAnalysis {
+  mint: string;
+  symbol: string;
+  timestamp: number;
+  priceChange5m: number | null;
+  priceChange1h: number | null;
+  volumeRatio: number | null;
+  buyersCount: number | null;
+  sellersCount: number | null;
+  buySellRatio: number | null;
+  rulesChecked: number;
+  rulesMatched: number;
+  outcome: "no_signal" | "buy_signal" | "sell_signal" | "skipped";
+  reason: string;
+}
+
+export interface AutopilotWatchedToken {
+  mint: string;
+  symbol: string;
+  source: "watchlist" | "trending" | "whales";
+  hasPosition?: boolean;
+  // Optional price data - populated from NATS market_data subscription, not autopilot backend
+  priceUsd?: number;
+  change1h?: number;
+}
+
+export interface AutopilotTokenList {
+  watchlist: AutopilotWatchedToken[];
+  trending: AutopilotWatchedToken[];
+  whales: AutopilotWatchedToken[];
+}
+
+// LOIS COMPATIBLE: partial - mode controls paper vs live (live not yet implemented)
+export interface AutopilotConfig {
+  autoSourcesEnabled: boolean;
+  trendingEnabled: boolean;
+  whalesEnabled: boolean;
+  marketFilterEnabled: boolean;
+  mode: "paper" | "live";
+  positionSizeSol: number;
+  pollIntervalMs: number;
+}
+
+// LOIS COMPATIBLE: yes - strategy templates are execution-agnostic
+export interface AutopilotStrategy {
+  id: string;
+  name: string;
+  description: string;
+  mode: "all" | "any";
+  ruleCount: number;
+  summary: string;
+}
+
+// LOIS COMPATIBLE: yes - strategy state is execution-agnostic
+export interface AutopilotStrategies {
+  available: AutopilotStrategy[];
+  active: string[];
+}
+
+export interface AutopilotStore {
+  // Connection status
+  isConnected: boolean;
+  setIsConnected: (connected: boolean) => void;
+
+  // Position entries (no price data - frontend calculates P&L with NATS data)
+  positions: Map<string, AutopilotPositionEntry>;
+  setPositions: (positions: AutopilotPositionEntry[]) => void;
+
+  // Signals history (last 50)
+  signals: AutopilotSignal[];
+  addSignal: (signal: AutopilotSignal) => void;
+  clearSignals: () => void;
+
+  // Market status
+  marketStatus: AutopilotMarketStatus;
+  setMarketStatus: (status: AutopilotMarketStatus) => void;
+
+  // Trading stats
+  stats: AutopilotStats;
+  setStats: (stats: AutopilotStats) => void;
+
+  // Scan metadata
+  scanTick: AutopilotScanTick | null;
+  setScanTick: (tick: AutopilotScanTick) => void;
+
+  // Last analyzed token
+  lastAnalysis: AutopilotLastAnalysis | null;
+  setLastAnalysis: (analysis: AutopilotLastAnalysis) => void;
+
+  // Token lists
+  tokenList: AutopilotTokenList;
+  setTokenList: (list: AutopilotTokenList) => void;
+
+  // Config
+  config: AutopilotConfig;
+  setConfig: (config: AutopilotConfig) => void;
+
+  // Strategies
+  strategies: AutopilotStrategies;
+  setStrategies: (strategies: AutopilotStrategies) => void;
+
+  // Reset all
+  reset: () => void;
+}
+
+/**
+ * LOIS INTEGRATION NOTES
+ * ======================
+ *
+ * Type Alignment:
+ * - Frontend types mirror backend websocket-server.ts exactly
+ * - Naming convention: Frontend uses "Autopilot" prefix (AutopilotPositionEntry vs PositionData)
+ * - This is intentional for namespace clarity in the frontend codebase
+ *
+ * Intentional Differences:
+ * - AutopilotWatchedToken omits optional price/volume fields (frontend fetches via NATS)
+ * - AutopilotStore interface is frontend-only (Zustand store shape)
+ *
+ * Data Flow (Paper Trading - Current):
+ * 1. Backend (token-analysis-autopilot) runs analysis loop
+ * 2. Events broadcast via WebSocket (ws://localhost:8765)
+ * 3. Frontend useAutopilotSubscription receives events
+ * 4. Zustand autopilot store updated (positions, signals, stats, etc.)
+ * 5. For P&L: Frontend subscribes to NATS market_data for open position mints
+ * 6. P&L calculated in frontend from entry price + current NATS price
+ *
+ * Live Trading Changes (Future LOIS Integration):
+ * - AutopilotPositionEntry needs: txSignature, executionPrice, fillStatus, orderId
+ * - AutopilotSignal needs: confidence score, urgency level, slippage tolerance
+ * - AutopilotConfig needs: walletAddress, rpcEndpoint, slippage config
+ * - signalType mapping to LOIS TriggerEvent:
+ *   * magic_buy -> TriggerEvent.ENTRY_SIGNAL
+ *   * magic_exit, dump_exit -> TriggerEvent.EXIT_SIGNAL
+ *   * rule_signal -> TriggerEvent.STRATEGY_MATCH
+ * - New event types needed: order_submitted, order_filled, order_failed
+ *
+ * PUM3 Team Reference:
+ * - Backend types: token-analysis-autopilot/src/websocket-server.ts
+ * - LOIS types: (TBD - will be in LOIS repo once live trading is implemented)
+ */
+
+/**
+ * LOIS DATA FORMAT DIFFERENCES
+ * ============================
+ *
+ * When integrating autopilot with LOIS for live trading, the following data format
+ * differences must be handled at the integration boundary:
+ *
+ * 1. Field Naming Convention:
+ *    - Autopilot: camelCase (entryPriceSol, positionSizeSol, signalType)
+ *    - LOIS: snake_case (entry_price_sol, position_size_sol, signal_type)
+ *    - Conversion needed at WebSocket message boundary
+ *
+ * 2. Price Format:
+ *    - Autopilot: JavaScript number (e.g., 0.00001234)
+ *    - LOIS: DecimalString (e.g., "0.00001234")
+ *    - Use parseFloat() when reading from LOIS, toString() when writing
+ *
+ * 3. Timestamp Format:
+ *    - Autopilot: Unix milliseconds number (e.g., 1704067200000)
+ *    - LOIS: ISO 8601 string (e.g., "2024-01-01T00:00:00.000Z")
+ *    - Use new Date(ts).toISOString() / Date.parse(iso) for conversion
+ *
+ * 4. Signal Type Mapping:
+ *    - Already documented above in LOIS INTEGRATION NOTES
+ *    - magic_buy -> TriggerEvent.ENTRY_SIGNAL
+ *    - magic_exit, dump_exit -> TriggerEvent.EXIT_SIGNAL
+ *    - rule_signal -> TriggerEvent.STRATEGY_MATCH
+ *
+ * 5. Position Data Fields:
+ *    - Autopilot (paper): Entry-only data (mint, symbol, entryPriceSol, entryTime)
+ *    - LOIS (live): Includes execution data (txSignature, fillPrice, fillStatus, orderId)
+ *    - Frontend P&L calculation remains the same (entry price vs NATS current price)
+ *
+ * 6. Wallet Address Format:
+ *    - Autopilot: Not present (paper trading has no wallet)
+ *    - LOIS: Base58-encoded Solana pubkey string
+ *
+ * Integration Pattern:
+ * When LOIS integration is implemented, create adapter functions in a dedicated
+ * lois-adapter.ts file to handle conversions at the WebSocket message boundary.
+ * Keep autopilot types unchanged to maintain backward compatibility with paper mode.
+ */
+
+/**
+ * Type Aliases for Backward Compatibility
+ * These aliases maintain widget imports without renaming.
+ */
+export type WatchedToken = AutopilotWatchedToken;

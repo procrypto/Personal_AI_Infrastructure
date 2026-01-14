@@ -1,0 +1,35 @@
+# Issues
+
+Deferred issues and enhancements discovered during implementation.
+
+## ISS-001: Turbo user scanner bracket-tracking state corruption
+
+**Discovered:** Phase 01-01 (Turbo User Scan)
+**Priority:** Medium
+**Type:** Bug
+
+**Description:**
+The experimental turbo user scanner (`scanProcess` with `FAST_USER_SCAN = true`) has state tracking issues across chunk boundaries that cause it to miss users. Testing with a file that should have hundreds of users only found 24.
+
+**Root Cause:**
+1. Buffer truncation (keeping only 512 bytes) desynchronizes `braceDepth`/`bracketDepth` counters from the actual JSON structure
+2. The `inMessagesArray` exit condition checks `bracketDepth === 0` but nested arrays (like `text_entities`) keep depth > 0
+3. Cross-chunk `"messages": [` detection via lookback is fragile
+
+**Current State:**
+- `FAST_USER_SCAN` flag set to `false` (uses working legacy regex scanner)
+- Turbo scanner code preserved for future fix
+- Test suite validates core extraction logic
+
+**Fix Approach:**
+1. Track the specific `bracketDepth` when entering messages array
+2. Exit messages array when returning to that exact depth
+3. Reset depth counters when buffer is truncated, or don't truncate during active parsing
+4. Consider simpler approach: regex for user fields + bracket tracking only for skipping content
+
+**Files:**
+- `src/streamWorker.ts:512-738` - Turbo scanner implementation
+
+---
+
+*Last updated: 2026-01-09*

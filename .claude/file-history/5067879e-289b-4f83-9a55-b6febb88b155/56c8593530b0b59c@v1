@@ -1,0 +1,237 @@
+# Context for team-skills
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Shared Claude Code skills repository for the BonkBot team. Provides team-specific capabilities, workflows, and quality standards as reusable skills that extend Claude's functionality.
+
+Created by Victor (vem), senior data expert with FAANG background. Skills follow the `telemetry-*` naming convention for team identification.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Runtime | Claude Code Skills | Claude capability extension |
+| Distribution | Symlinks + .skill packages | Install via `make install` |
+| Format | MADR-style SKILL.md | YAML frontmatter + markdown |
+
+### Project Structure
+
+```
+team-skills/
+├── Makefile                    # Install/uninstall/package commands
+├── PROGRESS.md                 # Session memory, changelog
+├── README.md                   # Quickstart guide
+├── scripts/
+│   ├── install.sh              # Symlink to ~/.claude/skills/
+│   ├── uninstall.sh            # Remove symlinks
+│   └── package.sh              # Create .skill zip distribution
+├── skills/
+│   ├── telemetry-judge/        # Adversarial quality evaluation
+│   ├── telemetry-webapp-screenshot/  # Playwright visual capture
+│   ├── telemetry-bootstrap/    # Create new skills repos
+│   ├── mermaid-architecture/   # Architecture diagrams
+│   └── adr/                    # Architectural Decision Records
+└── dist/                       # Generated .skill packages
+```
+
+## Available Skills
+
+### telemetry-judge (Core)
+
+**Purpose:** Adversarial quality evaluation representing "James's" epistemic standards.
+
+**Triggers:** "judge this", "evaluate output", "review quality", "is this good enough"
+
+**Key Concepts:**
+
+| Concept | Description |
+|---------|-------------|
+| Generous Skepticism | Assume good intent, question everything |
+| Surface vs Substance | Does it *actually work* vs *look right*? |
+| Specificity as Proof | Generic = disqualifying |
+
+**Seven Failure Modes (FM1-FM7):**
+
+| FM | Name | Detection |
+|----|------|-----------|
+| FM1 | Dressed-Up Universals | Would this surprise an MBA student? |
+| FM2 | Assertion Without Demonstration | "Show me the messages" |
+| FM3 | False Comprehensiveness | 10-second rule - does value hit immediately? |
+| FM4 | Confidence-Calibration Failures | Stating uncertain things with confidence |
+| FM5 | Scope Blur | Including "for completeness" not purpose |
+| FM6 | Tiger-Style Mimicry | *What* vs *why/how* |
+| FM7 | Confidence Games (Cardinal Sin) | Unverified claims as fact |
+
+**Verdicts:** PASS / REVISE / REJECT
+
+### telemetry-webapp-screenshot
+
+**Purpose:** Playwright-based screenshot and GIF capture for web apps.
+
+**Triggers:** "take screenshot", "capture webapp", "record demo"
+
+**Capabilities:**
+- Single/full-page/element screenshots
+- Multi-step workflow capture
+- GIF creation from sequences
+- Video recording
+- SSH tunnel support for remote apps
+
+### mermaid-architecture
+
+**Purpose:** Generate GitHub-native Mermaid diagrams.
+
+**Triggers:** "architecture diagram", "system diagram", "flowchart", "sequence diagram"
+
+**Diagram Types:** flowchart, sequenceDiagram, erDiagram, stateDiagram-v2, classDiagram, gitGraph, journey
+
+### adr (Architectural Decision Records)
+
+**Purpose:** Document significant technical decisions using MADR format.
+
+**Triggers:** "create ADR", "document decision", "why did we choose"
+
+**Structure:** Context → Decision Drivers → Options → Outcome → Consequences
+
+**Status Lifecycle:** proposed → accepted → [deprecated | superseded]
+
+### telemetry-bootstrap
+
+**Purpose:** Guide for creating new team skills repositories.
+
+**Triggers:** "create skills repo", "bootstrap skills", "set up team skills"
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- Skill names prefixed with `telemetry-` for namespace
+- Every skill has `SKILL.md` with YAML frontmatter
+- `USE WHEN` in description field for trigger phrases
+- Keep SKILL.md concise - use `references/` for details
+
+### Common Tasks
+
+#### Installing Skills
+
+```bash
+# Install all skills
+make install
+
+# Install specific skill
+make install SKILL=telemetry-judge
+
+# List available
+make list
+```
+
+#### Creating a New Skill
+
+```bash
+mkdir skills/telemetry-myskill
+cat > skills/telemetry-myskill/SKILL.md << 'EOF'
+---
+name: telemetry-myskill
+description: What it does. USE WHEN user says "trigger", OR needs capability.
+version: 1.0.0
+---
+
+# My Skill
+
+Instructions for Claude...
+EOF
+
+make install SKILL=telemetry-myskill
+```
+
+#### Packaging for Distribution
+
+```bash
+make package SKILL=telemetry-judge
+# Creates dist/telemetry-judge.skill
+```
+
+### Finding Code
+
+| Task | Location |
+|------|----------|
+| Add new skill | `skills/telemetry-<name>/SKILL.md` |
+| Modify install logic | `scripts/install.sh` |
+| Add reference docs | `skills/<name>/references/` |
+| Track progress | `PROGRESS.md` |
+
+### Things to Avoid
+
+- Don't use generic skill names (prefix with `telemetry-`)
+- Don't make SKILL.md too long - Claude is smart
+- Don't skip the `USE WHEN` in description
+- Don't commit .skill files (they're generated)
+
+## Related Documentation
+
+- [README.md](README.md) - Quickstart and contribution guide
+- [PROGRESS.md](PROGRESS.md) - Session memory and changelog
+- [Claude Code Skills Docs](https://docs.anthropic.com/en/docs/claude-code)
+
+## Cross-System Context
+
+### Integration Points
+
+| System | Integration |
+|--------|-------------|
+| Claude Code | Skills extend Claude's capabilities |
+| PAI | Similar skill system - potential alignment |
+| web-terminal-frontend-tests | Could use screenshot skill |
+
+### Quality Workflow
+
+```
+Work Session N
+      │
+      ▼
+┌─────────────┐
+│ telemetry-  │
+│   judge     │
+└─────┬───────┘
+      │
+      ├── PASS → Output advances
+      ├── REVISE → Session N+1 gets feedback
+      └── REJECT → Must reformulate approach
+```
+
+### Ralph Loop Integration
+
+For iterative refinement with quality gates:
+
+```bash
+/ralph-loop "Write X. Use /judge to evaluate. Output <promise>PASS</promise> when Judge returns PASS." --completion-promise "PASS" --max-iterations 5
+```
+
+## Configuration
+
+### Installation Location
+
+Skills symlinked to `~/.claude/skills/`
+
+### SKILL.md Frontmatter
+
+```yaml
+---
+name: skill-name           # Required
+description: ...           # Required - includes USE WHEN triggers
+version: 1.0.0            # Optional
+---
+```
+
+## Future Skill Ideas
+
+From README (roadmap):
+- `solana-patterns` - Solana dev conventions
+- `bonkbot-api` - Internal API documentation
+- `clickhouse-queries` - Analytics schema and patterns
+- `incident-response` - PagerDuty runbooks
+- `pr-review` - Team code review checklist

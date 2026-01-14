@@ -1,0 +1,263 @@
+/**
+ * LOIS-Ready Interface Types
+ *
+ * Minimal, language-agnostic interfaces designed for future Rust reimplementation.
+ * These types map 1:1 to Rust structs - avoid TypeScript-specific patterns.
+ *
+ * Design principles:
+ * - No optional fields with complex defaults
+ * - No Record<string, any> - use typed fields or omit
+ * - Discriminated unions are OK (Rust has enums)
+ * - All numeric values are numbers (map to f64 in Rust)
+ */
+
+// =============================================================================
+// Core Signal Types
+// =============================================================================
+
+/**
+ * Signal type for actionable signals.
+ * Maps to Rust: enum SignalType { Buy, Sell, Alert }
+ */
+export type ISignalType = 'buy' | 'sell' | 'alert';
+
+/**
+ * Core signal output from rule evaluation.
+ * This is the primary output of the signal processing system.
+ *
+ * Rust equivalent:
+ * ```rust
+ * pub struct Signal {
+ *     pub rule_id: String,
+ *     pub mint: String,
+ *     pub signal_type: SignalType,
+ *     pub strength: f64,
+ *     pub reason: String,
+ *     pub timestamp: i64,
+ * }
+ * ```
+ */
+export interface ISignal {
+  /** Unique identifier of the rule that generated this signal */
+  ruleId: string;
+  /** Token mint address */
+  mint: string;
+  /** Type of signal: buy, sell, or alert */
+  type: ISignalType;
+  /** Confidence level from 0.0 to 1.0 */
+  strength: number;
+  /** Human-readable reason for the signal */
+  reason: string;
+  /** Unix timestamp in milliseconds */
+  timestamp: number;
+}
+
+// =============================================================================
+// Market Data Input Types
+// =============================================================================
+
+/**
+ * Minimal market data input for simple rules.
+ * Subset of TokenMarketData containing only fields needed by simple (non-OHLCV) rules.
+ *
+ * Rust equivalent:
+ * ```rust
+ * pub struct MarketDataInput {
+ *     pub mint: String,
+ *     pub price_sol: f64,
+ *     pub volume_5m: f64,
+ *     pub volume_1h: f64,
+ *     pub volume_6h: f64,
+ *     pub volume_24h: f64,
+ *     pub buys_5m: i64,
+ *     pub sells_5m: i64,
+ *     pub buyers_5m: i64,
+ *     pub sellers_5m: i64,
+ *     pub earliest_price_5m: f64,
+ *     pub earliest_price_1h: f64,
+ * }
+ * ```
+ */
+export interface IMarketDataInput {
+  /** Token mint address */
+  mint: string;
+  /** Current price in SOL */
+  priceSol: number;
+
+  /** Buy volume in SOL for timeframes */
+  buyVolume5m: number;
+  sellVolume5m: number;
+  buyVolume1h: number;
+  sellVolume1h: number;
+  buyVolume6h: number;
+  sellVolume6h: number;
+  buyVolume24h: number;
+  sellVolume24h: number;
+
+  /** Buy/sell transaction counts */
+  buys5m: number;
+  sells5m: number;
+  buys1h: number;
+  sells1h: number;
+  buys6h: number;
+  sells6h: number;
+  buys24h: number;
+  sells24h: number;
+
+  /** Unique buyer/seller counts */
+  buyers5m: number;
+  sellers5m: number;
+  buyers1h: number;
+  sellers1h: number;
+  buyers6h: number;
+  sellers6h: number;
+  buyers24h: number;
+  sellers24h: number;
+
+  /** Earliest price for % change calculations */
+  earliestPrice5m: number;
+  earliestPrice1h: number;
+  earliestPrice6h: number;
+  earliestPrice24h: number;
+}
+
+// =============================================================================
+// OHLCV Types
+// =============================================================================
+
+/**
+ * Single OHLCV candle.
+ * Direct mapping to existing OHLCV type, explicit interface for LOIS.
+ *
+ * Rust equivalent:
+ * ```rust
+ * pub struct OHLCVCandle {
+ *     pub timestamp: i64,
+ *     pub open: f64,
+ *     pub high: f64,
+ *     pub low: f64,
+ *     pub close: f64,
+ *     pub volume: f64,
+ * }
+ * ```
+ */
+export interface IOHLCVCandle {
+  /** Unix timestamp in milliseconds */
+  timestamp: number;
+  /** Opening price */
+  open: number;
+  /** Highest price in period */
+  high: number;
+  /** Lowest price in period */
+  low: number;
+  /** Closing price */
+  close: number;
+  /** Volume traded in period */
+  volume: number;
+}
+
+// =============================================================================
+// Processor Interface
+// =============================================================================
+
+/**
+ * Signal processor contract.
+ * Defines the dual-path processing interface for signal generation.
+ *
+ * Rust equivalent:
+ * ```rust
+ * pub trait SignalProcessor {
+ *     fn process_market_data(&self, data: MarketDataInput) -> Vec<Signal>;
+ *     fn process_ohlcv(&self, mint: &str, ohlcv: &[OHLCVCandle]) -> Vec<Signal>;
+ * }
+ * ```
+ */
+export interface ISignalProcessor {
+  /**
+   * Fast path: Process market data with simple rules (no OHLCV required).
+   * @param data Minimal market data input
+   * @returns Array of signals (empty if no triggers)
+   */
+  processMarketData(data: IMarketDataInput): ISignal[];
+
+  /**
+   * Complex path: Process OHLCV data with rules requiring candlestick analysis.
+   * @param mint Token mint address
+   * @param ohlcv Array of OHLCV candles (at least 2 required)
+   * @returns Array of signals (empty if insufficient data or no triggers)
+   */
+  processOHLCV(mint: string, ohlcv: IOHLCVCandle[]): ISignal[];
+}
+
+// =============================================================================
+// Data Feed Types
+// =============================================================================
+
+/**
+ * Market data feed message.
+ * Discriminated union - maps to Rust enum with struct variants.
+ */
+export interface IMarketDataFeedMessage {
+  type: 'market_data_feed';
+  data: IMarketDataInput;
+}
+
+/**
+ * OHLCV update message.
+ */
+export interface IOHLCVUpdateMessage {
+  type: 'ohlcv_update';
+  mint: string;
+  ohlcv: IOHLCVCandle[];
+}
+
+/**
+ * Data feed message union.
+ * Discriminated union for routing incoming data to appropriate processor.
+ *
+ * Rust equivalent:
+ * ```rust
+ * pub enum DataFeedMessage {
+ *     MarketData { data: MarketDataInput },
+ *     OHLCVUpdate { mint: String, ohlcv: Vec<OHLCVCandle> },
+ * }
+ * ```
+ */
+export type IDataFeedMessage = IMarketDataFeedMessage | IOHLCVUpdateMessage;
+
+// =============================================================================
+// Pipeline Interface
+// =============================================================================
+
+/**
+ * Signal callback type.
+ */
+export type ISignalCallback = (signal: ISignal) => void;
+
+/**
+ * Signal pipeline contract.
+ * Wires data feeds to signal processor and manages signal emission.
+ *
+ * Rust equivalent:
+ * ```rust
+ * pub trait SignalPipeline {
+ *     fn handle_data_feed(&mut self, message: DataFeedMessage) -> Vec<Signal>;
+ *     fn on_signal(&mut self, callback: Box<dyn Fn(Signal)>);
+ * }
+ * ```
+ */
+export interface ISignalPipeline {
+  /**
+   * Handle incoming data feed message.
+   * Routes to appropriate processor method based on message type.
+   * @param message Data feed message
+   * @returns Array of signals generated
+   */
+  handleDataFeed(message: IDataFeedMessage): ISignal[];
+
+  /**
+   * Register callback for real-time signal emission.
+   * @param callback Function called for each signal
+   */
+  onSignal(callback: ISignalCallback): void;
+}

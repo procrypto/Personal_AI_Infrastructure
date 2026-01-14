@@ -1,0 +1,218 @@
+     1→# Custom Skill System
+     2→
+     3→**The MANDATORY configuration system for ALL PAI skills.**
+     4→
+     5→---
+     6→
+     7→## THIS IS THE AUTHORITATIVE SOURCE
+     8→
+     9→This document defines the **required structure** for every skill in the PAI system.
+    10→
+    11→**ALL skill creation MUST follow this structure.**
+    12→
+    13→**"Canonicalize a skill"** = Restructure it to match this exact format, including TitleCase naming.
+    14→
+    15→---
+    16→
+    17→## TitleCase Naming Convention (MANDATORY)
+    18→
+    19→**All naming in the skill system MUST use TitleCase (PascalCase).**
+    20→
+    21→| Component | Wrong | Correct |
+    22→|-----------|-------|---------|
+    23→| Skill directory | `createskill`, `create-skill` | `Createskill` |
+    24→| Workflow files | `create.md`, `update-info.md` | `Create.md`, `UpdateInfo.md` |
+    25→| Reference docs | `prosody-guide.md` | `ProsodyGuide.md` |
+    26→| Tool files | `manage-server.ts` | `ManageServer.ts` |
+    27→| YAML name | `name: create-skill` | `name: Createskill` |
+    28→
+    29→**Exception:** `SKILL.md` is always uppercase (convention for the main skill file).
+    30→
+    31→---
+    32→
+    33→## The Required Structure
+    34→
+    35→Every SKILL.md has two parts:
+    36→
+    37→### 1. YAML Frontmatter (Single-Line Description)
+    38→
+    39→```yaml
+    40→---
+    41→name: SkillName
+    42→description: [What it does]. USE WHEN [intent triggers using OR]. [Additional capabilities].
+    43→---
+    44→```
+    45→
+    46→**Rules:**
+    47→- `name` uses **TitleCase**
+    48→- `description` is a **single line** (not multi-line with `|`)
+    49→- `USE WHEN` keyword is **MANDATORY** (Claude Code parses this for skill activation)
+    50→- Use intent-based triggers with `OR` for multiple conditions
+    51→- Max 1024 characters (Anthropic hard limit)
+    52→
+    53→### 2. Markdown Body
+    54→
+    55→```markdown
+    56→# SkillName
+    57→
+    58→[Brief description]
+    59→
+    60→## Workflow Routing
+    61→
+    62→**When executing a workflow, do BOTH of these:**
+    63→
+    64→1. **Call the notification script** (for observability tracking):
+    65→   ```bash
+    66→   ~/.claude/Tools/SkillWorkflowNotification WORKFLOWNAME SKILLNAME
+    67→   ```
+    68→
+    69→2. **Output the text notification** (for user visibility):
+    70→   ```
+    71→   Running the **WorkflowName** workflow from the **SKILLNAME** skill...
+    72→   ```
+    73→
+    74→This ensures workflows appear in the observability dashboard AND the user sees the announcement.
+    75→
+    76→| Workflow | Trigger | File |
+    77→|----------|---------|------|
+    78→| **WorkflowOne** | "trigger phrase" | `workflows/WorkflowOne.md` |
+    79→| **WorkflowTwo** | "another trigger" | `workflows/WorkflowTwo.md` |
+    80→
+    81→## Examples
+    82→
+    83→**Example 1: [Common use case]**
+    84→```
+    85→User: "[Typical user request]"
+    86→→ Invokes WorkflowOne workflow
+    87→→ [What skill does]
+    88→→ [What user gets back]
+    89→```
+    90→
+    91→## [Additional Sections]
+    92→```
+    93→
+    94→---
+    95→
+    96→## Examples Section (REQUIRED)
+    97→
+    98→**Every skill MUST have an `## Examples` section** showing 2-3 concrete usage patterns.
+    99→
+   100→**Why Examples Matter:**
+   101→- Anthropic research shows examples improve tool selection accuracy from 72% to 90%
+   102→- Descriptions tell Claude WHEN to activate; examples show HOW the skill works
+   103→
+   104→**Example Format:**
+   105→```markdown
+   106→## Examples
+   107→
+   108→**Example 1: [Use case name]**
+   109→```
+   110→User: "[Actual user request]"
+   111→→ Invokes WorkflowName workflow
+   112→→ [What the skill does]
+   113→→ [What user receives back]
+   114→```
+   115→```
+   116→
+   117→---
+   118→
+   119→## Intent Matching, Not String Matching
+   120→
+   121→We use **intent matching**, not exact phrase matching.
+   122→
+   123→**Example description:**
+   124→```yaml
+   125→description: Complete blog workflow. USE WHEN user mentions doing anything with their blog, website, site, including things like update, proofread, write, edit, publish, preview, blog posts, or website pages.
+   126→```
+   127→
+   128→**Key Principles:**
+   129→- Use intent language: "user mentions", "user wants to", "including things like"
+   130→- Don't list exact phrases in quotes
+   131→- Cover the domain conceptually
+   132→- Use `OR` to combine multiple trigger conditions
+   133→
+   134→---
+   135→
+   136→## Directory Structure
+   137→
+   138→Every skill follows this structure:
+   139→
+   140→```
+   141→SkillName/                    # TitleCase directory name
+   142→├── SKILL.md                  # Main skill file (always uppercase)
+   143→├── ReferenceDoc.md           # Optional: Reference docs (TitleCase)
+   144→├── tools/                    # CLI tools (ALWAYS present, even if empty)
+   145→│   ├── ToolName.ts           # TypeScript CLI tool (TitleCase)
+   146→│   └── ToolName.help.md      # Tool documentation (TitleCase)
+   147→└── workflows/
+   148→    ├── Create.md             # Work execution workflow (TitleCase)
+   149→    └── Update.md             # Work execution workflow (TitleCase)
+   150→```
+   151→
+   152→---
+   153→
+   154→## Workflows vs Reference Documentation
+   155→
+   156→**CRITICAL DISTINCTION:**
+   157→
+   158→### Workflows (`workflows/` directory)
+   159→- Operational procedures (create, update, delete, deploy)
+   160→- Step-by-step execution instructions
+   161→- Actions that change state or produce output
+   162→- Things you "run" or "execute"
+   163→
+   164→### Reference Documentation (skill root)
+   165→- Guides and how-to documentation
+   166→- Specifications and schemas
+   167→- Information you "read" or "reference"
+   168→
+   169→---
+   170→
+   171→## Complete Checklist
+   172→
+   173→Before a skill is complete:
+   174→
+   175→### Naming (TitleCase)
+   176→- [ ] Skill directory uses TitleCase
+   177→- [ ] All workflow files use TitleCase
+   178→- [ ] All reference docs use TitleCase
+   179→- [ ] YAML `name:` uses TitleCase
+   180→
+   181→### YAML Frontmatter
+   182→- [ ] Single-line description with embedded `USE WHEN` clause
+   183→- [ ] No separate `triggers:` or `workflows:` arrays
+   184→- [ ] Description under 1024 characters
+   185→
+   186→### Markdown Body
+   187→- [ ] `## Workflow Routing` section with table format
+   188→- [ ] `## Examples` section with 2-3 concrete patterns
+   189→- [ ] All workflows have routing entries
+   190→
+   191→### Structure
+   192→- [ ] `tools/` directory exists (even if empty)
+   193→- [ ] No `backups/` directory inside skill
+   194→- [ ] Workflows contain ONLY execution procedures
+   195→- [ ] Reference docs live at skill root
+   196→
+   197→---
+   198→
+   199→## Summary
+   200→
+   201→| Component | Purpose | Naming |
+   202→|-----------|---------|--------|
+   203→| **Skill directory** | Contains all skill files | TitleCase (e.g., `Blogging`) |
+   204→| **SKILL.md** | Main skill file | Always uppercase |
+   205→| **Workflow files** | Execution procedures | TitleCase (e.g., `Create.md`) |
+   206→| **Reference docs** | Information to read | TitleCase (e.g., `ApiReference.md`) |
+   207→| **Tool files** | CLI automation | TitleCase (e.g., `ManageServer.ts`) |
+   208→
+   209→This system ensures:
+   210→1. Skills invoke properly based on intent (USE WHEN in description)
+   211→2. Specific functionality executes accurately (Workflow Routing in body)
+   212→3. All skills have consistent, predictable structure
+   213→4. **All naming follows TitleCase convention**
+   214→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

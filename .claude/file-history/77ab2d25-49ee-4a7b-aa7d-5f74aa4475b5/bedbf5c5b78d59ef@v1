@@ -1,0 +1,190 @@
+export type Role = 'staff' | 'moderator' | '';
+
+export interface UserMappingEntry {
+    userId: string;
+    preferredName: string;
+    aliases: string[];
+    role: Role;
+}
+
+export interface UserMapping {
+    version: string;
+    users: UserMappingEntry[];
+}
+
+export interface UserOption {
+    userId: string;
+    label: string;
+    role: Role;
+}
+
+export interface TelegramMessage {
+    id?: number | string;
+    type?: string;
+    date?: string;
+    date_unixtime?: string;
+    actor?: string;
+    actor_id?: string;
+    from?: string;
+    from_id?: string;
+    text?: string | unknown[];
+    [key: string]: unknown;
+}
+
+export interface TelegramChat {
+    name: string;
+    type?: string;
+    id: string | number;
+    messages: TelegramMessage[];
+    [key: string]: unknown;
+}
+
+export interface TelegramExport {
+    list: TelegramChat[];
+}
+
+export interface DateRange {
+    start?: Date;
+    end?: Date;
+}
+
+export interface EnrichedMessage extends Record<string, unknown> {
+    chatId: string;
+    chatName: string;
+}
+
+export interface ChatOutput {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    messages: EnrichedMessage[];
+}
+
+export interface WorkerProgress {
+    phase: 'scan' | 'filter';
+    loadedBytes: number;
+    totalBytes: number;
+    message?: string;
+}
+
+export interface UserInfo {
+    userId: string;
+    displayName: string;
+    messageCount?: number; // Optional - not available in fast scan.
+}
+
+export interface GroupInfo {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    messageCount?: number;
+}
+
+export interface WorkerScanResult {
+    type: 'scanResult';
+    users: UserInfo[];
+    totalMessages: number;
+    filteredMessages: number;
+}
+
+export interface WorkerFilterResult {
+    type: 'filterResult';
+    outputs: ChatOutput[];
+    mapping: UserMapping;
+    totalMessages: number;
+}
+
+export interface WorkerScanGroupResult {
+    type: 'scanGroupResult';
+    groups: GroupInfo[];
+    totalMessages: number;
+    filteredMessages: number;
+    truncationContext?: string;
+}
+
+export interface WorkerReady {
+    type: 'workerReady';
+}
+
+export type WorkerEvent = WorkerProgress | WorkerScanResult | WorkerFilterResult | WorkerScanGroupResult | WorkerReady;
+
+// Topic Mode types
+
+export interface IndexedChat {
+    chatId: string;
+    chatName: string;
+    chatType?: string;
+    messageCount: number;
+    dateRange: { start: string | null; end: string | null };
+    participants: string[]; // unique from_id values
+    messages: EnrichedMessage[]; // full messages for search
+}
+
+export interface TopicIndex {
+    chats: IndexedChat[];
+    totalMessages: number;
+    loadedAt: string;
+}
+
+export interface TopicWorkerProgress {
+    type: 'topicProgress';
+    phase: 'extracting' | 'indexing' | 'ready';
+    current: number;
+    total: number;
+    message?: string;
+}
+
+export interface TopicWorkerIndexResult {
+    type: 'topicIndexResult';
+    index: TopicIndex;
+}
+
+export interface TopicWorkerReady {
+    type: 'topicWorkerReady';
+}
+
+export type TopicWorkerEvent = TopicWorkerProgress | TopicWorkerIndexResult | TopicWorkerReady | SearchResultWithContext;
+
+// Search types
+
+export interface SearchMatch {
+    chatId: string;
+    chatName: string;
+    messageIndex: number;
+    message: EnrichedMessage;
+    matchedTerms: string[];
+    score: number; // relevance score based on term frequency
+}
+
+export interface SearchRequest {
+    type: 'search';
+    query: string;
+    useSemanticExpansion: boolean;
+    searchMode: 'and' | 'or';
+}
+
+export interface SearchResult {
+    type: 'searchResult';
+    query: string;
+    expandedTerms: string[];
+    matches: SearchMatch[];
+    totalMatches: number;
+}
+
+// Context window types
+
+export interface ContextWindow {
+    match: SearchMatch;
+    contextMessages: EnrichedMessage[];
+    contextType: 'author' | 'time';
+    authorId?: string; // if author-based context
+}
+
+export interface SearchResultWithContext {
+    type: 'searchResultWithContext';
+    query: string;
+    expandedTerms: string[];
+    results: ContextWindow[];
+    totalMatches: number;
+}
+

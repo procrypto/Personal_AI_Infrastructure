@@ -1,0 +1,140 @@
+---
+phase: 03-ci-cd-pipeline
+plan: 02
+subsystem: infra
+tags: [github-actions, cloud-run, wif, artifact-registry, ci-cd, semantic-versioning]
+
+# Dependency graph
+requires:
+  - phase: 03-ci-cd-pipeline-01
+    provides: Beta deployment workflow pattern (WIF auth, AR push, Cloud Run deploy)
+provides:
+  - GitHub Actions workflow for production deployments
+  - Version tag trigger pattern (v* semantic versioning)
+  - Multi-tag image strategy (SHA, version, latest)
+affects: [04-gcp-integration]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [semantic-version-tagging, version-extraction-from-tag]
+
+key-files:
+  created: [.github/workflows/deploy-prod.yml]
+  modified: []
+
+key-decisions:
+  - "Use v* tag pattern for semantic versioning triggers"
+  - "Extract version with github.ref_name for image tagging"
+  - "Triple-tag images: SHA, version, latest for flexibility"
+
+patterns-established:
+  - "Version extraction: github.ref_name captures tag (v1.0.0)"
+  - "Production deploys use version tag as primary image reference"
+
+issues-created: []
+
+# Metrics
+duration: 1min
+completed: 2026-01-13
+
+# Debugging
+debugging:
+  sessions: 0
+  time-spent: 0min
+  patterns: []
+---
+
+# Phase 3 Plan 2: Production Deployment Workflow Summary
+
+**GitHub Actions workflow with v* tag trigger, WIF auth, and triple-tag image strategy for production Cloud Run deployments**
+
+## Performance
+
+- **Duration:** 1 min
+- **Started:** 2026-01-13T18:54:10Z
+- **Completed:** 2026-01-13T18:55:10Z
+- **Tasks:** 2
+- **Files modified:** 1
+
+## Accomplishments
+
+- Created GitHub Actions workflow for automated production deployments
+- Configured v* tag trigger for semantic versioning releases
+- Implemented version extraction from tag for image tagging
+- Verified consistency with beta workflow pattern
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Create production deployment workflow** - `17cee33` (feat)
+2. **Task 2: Verify both workflows are consistent** - No commit (validation only)
+
+**Plan metadata:** (this commit)
+
+## Files Created/Modified
+
+- `.github/workflows/deploy-prod.yml` - Production deployment workflow with v* tag trigger
+
+## Decisions Made
+
+- **v* tag pattern:** Uses semantic versioning (v1.0.0, v2.1.3) for releases
+- **Version extraction:** Uses `github.ref_name` to capture tag for image tagging
+- **Triple-tag strategy:** Images tagged with SHA (traceability), version (rollback), latest (convenience)
+- **Version-based deploy:** Cloud Run deploys using version tag as image reference (not SHA like beta)
+
+## Configuration Required
+
+Before first deployment, user must configure **both** beta and production:
+
+### Beta (bonkbotbeta)
+1. Create WIF pool and provider
+2. Create `github-actions@bonkbotbeta.iam.gserviceaccount.com` service account
+3. Create Artifact Registry `trenchbench-api` repository
+4. Create ClickHouse secrets in Secret Manager
+
+### Production (data-backend-prod)
+1. Create WIF pool and provider (separate from beta)
+2. Create `github-actions@data-backend-prod.iam.gserviceaccount.com` service account
+3. Create Artifact Registry `trenchbench-api` repository
+4. Create ClickHouse secrets in Secret Manager (production values)
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Debugging Sessions
+
+None - all verifications passed on first attempt.
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions
+
+**Notes:** Production workflow follows beta pattern exactly with appropriate environment differences.
+
+## Phase 3 Complete
+
+Both CI/CD workflows created:
+- `deploy.yml` — main branch → beta (bonkbotbeta)
+- `deploy-prod.yml` — v* tags → production (data-backend-prod)
+
+## Next Phase Readiness
+
+- CI/CD pipelines complete and consistent
+- Ready for Phase 4: GCP Integration (WIF setup, Secret Manager, deployment verification)
+
+---
+*Phase: 03-ci-cd-pipeline*
+*Completed: 2026-01-13*

@@ -1,0 +1,206 @@
+---
+phase: 02-frontend-connection
+plan: 01
+type: execute
+---
+
+<objective>
+Connect autopilot widget to backend WebSocket and display live data.
+
+Purpose: Complete the frontend-backend integration so the widget displays real data from the autopilot backend.
+Output: Working widget displaying live positions, signals, stats, and token lists from backend.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary-frontmatter.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/01-backend-protocol/01-01-SUMMARY.md
+
+# Key source files (already scaffolded):
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+@apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+
+**From Phase 1:**
+- LOIS compatibility markers established on all backend/frontend types
+- Signal type mapping documented: magic_buy -> ENTRY_SIGNAL, etc.
+- Frontend uses "Autopilot" prefix for namespace clarity
+
+**Tech stack available:**
+- Vite proxy already configured for `/autopilot-ws` in vite.config.ts
+- BaseWebsocket pattern established
+- Zustand store slice with all setters implemented
+- useAutopilotSubscription hook with NATS market_data auto-subscription
+- useAutopilotPositions hook calculating P&L from NATS data
+
+**Current state:**
+All scaffolding exists but there are type mismatches preventing clean TypeScript build:
+1. Widget imports `WatchedToken` but types export `AutopilotWatchedToken`
+2. Widget uses `priceUsd`/`change1h` fields not present in AutopilotWatchedToken
+
+**LOIS Gate for Phase 2:**
+Must add `// LOIS INTEGRATION POINT` markers to connectAutopilotWebsocket.ts
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Fix WatchedToken type mismatch and add missing fields</name>
+  <files>apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts</files>
+  <action>
+    1. Add missing optional fields to AutopilotWatchedToken interface:
+       - priceUsd?: number
+       - change1h?: number
+       These are used by the widget but populated from NATS market data (not backend).
+
+    2. Add type alias at end of file: `export type WatchedToken = AutopilotWatchedToken;`
+       This maintains backward compatibility with widget imports without renaming.
+
+    3. Keep existing LOIS documentation comments intact.
+  </action>
+  <verify>
+    cd apps/web-terminal && npx tsc --noEmit 2>&1 | grep -E "(WatchedToken|types\.ts)" | head -10
+    Should show no errors related to WatchedToken or missing properties.
+  </verify>
+  <done>
+    - AutopilotWatchedToken has priceUsd and change1h optional fields
+    - WatchedToken type alias exported
+    - No TypeScript errors in types.ts or files importing WatchedToken
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add LOIS integration point markers to connectAutopilotWebsocket</name>
+  <files>apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts</files>
+  <action>
+    Add LOIS INTEGRATION POINT comments to document where live trading would hook in:
+
+    1. At top of file after imports, add header block:
+       ```
+       /**
+        * LOIS INTEGRATION POINTS
+        * =======================
+        * This file contains the WebSocket message handlers that would route to LOIS
+        * for live trading. Currently paper-only.
+        *
+        * Integration points marked with: // LOIS INTEGRATION POINT: [description]
+        */
+       ```
+
+    2. In the position_update case:
+       `// LOIS INTEGRATION POINT: Position entries would include txSignature, fillStatus for live trades`
+
+    3. In the signal case:
+       `// LOIS INTEGRATION POINT: Signals would trigger TriggerEvent dispatch to LOIS execution engine`
+
+    4. In the market_status case:
+       `// LOIS INTEGRATION POINT: DUMP state would trigger emergency exit via LOIS`
+
+    5. In the config case:
+       `// LOIS INTEGRATION POINT: mode="live" would enable LOIS execution pipeline`
+  </action>
+  <verify>
+    grep -c "LOIS INTEGRATION POINT" apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+    Should return 4+ (one for each marked case).
+  </verify>
+  <done>
+    - File has LOIS integration header block
+    - 4+ integration points marked in switch cases
+    - Comments explain what would change for live trading
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Verify full TypeScript build and widget functionality</name>
+  <files>apps/web-terminal/</files>
+  <action>
+    1. Run full TypeScript check from apps/web-terminal:
+       `npx tsc --noEmit`
+
+    2. If any errors related to autopilot types, fix them.
+
+    3. Verify all autopilot-related files compile:
+       - types.ts
+       - autopilot-store.ts
+       - connectAutopilotWebsocket.ts
+       - useAutopilotSubscription.ts
+       - useAutopilotData.ts
+       - useAutopilotPositions.ts
+       - AutopilotWebsocket.ts
+       - autopilot-widget.tsx
+  </action>
+  <verify>
+    cd apps/web-terminal && npx tsc --noEmit 2>&1 | grep -i autopilot
+    Should return empty (no autopilot-related errors).
+  </verify>
+  <done>
+    - `npx tsc --noEmit` passes with no autopilot errors
+    - All autopilot files compile cleanly
+    - Widget imports resolve correctly
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `cd apps/web-terminal && npx tsc --noEmit` passes
+- [ ] WatchedToken type alias exists and matches AutopilotWatchedToken
+- [ ] LOIS integration points documented in connectAutopilotWebsocket.ts
+- [ ] No regressions in existing functionality
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors in autopilot-related files
+- Phase 2 LOIS Gate satisfied: Integration points documented with markers
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-frontend-connection/02-01-SUMMARY.md` with frontmatter:
+
+```yaml
+---
+phase: 02-frontend-connection
+plan: 01
+subsystem: frontend
+tags: [websocket, types, lois, integration]
+
+requires: [01-backend-protocol]
+provides:
+  - Clean TypeScript compilation for all autopilot files
+  - LOIS integration point documentation
+  - Type consistency between store and widget
+affects: [03-controls-and-pnl]
+
+tech-stack:
+  added: []
+  patterns:
+    - Type alias pattern for backward compatibility (WatchedToken = AutopilotWatchedToken)
+    - LOIS INTEGRATION POINT comment markers
+
+key-files:
+  created: []
+  modified:
+    - apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+    - apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+
+key-decisions: []
+
+patterns-established:
+  - "LOIS INTEGRATION POINT markers for live trading hooks"
+
+issues-created: []
+
+duration: TBD
+completed: TBD
+---
+```
+</output>

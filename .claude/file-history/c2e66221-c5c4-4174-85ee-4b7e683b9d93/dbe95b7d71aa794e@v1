@@ -1,0 +1,89 @@
+/**
+ * Screener Token Types
+ *
+ * Unified types for the autopilot screener columns (Watchlist, Trending, Whales).
+ * These types map different data sources to a consistent interface for the UI.
+ *
+ * Data sources:
+ * - Watchlist: WebSocket watchlist store (WatchlistTokenData) - full market_data
+ * - Trending: WebSocket discovery_trending_list store (DiscoveryTrendingListTokenData) - full market_data
+ * - Whales: REST API /discovery/whale_moves (WhaleMoves) - limited data
+ */
+
+import type { SignalStrength } from "./useTokenSignalStrength";
+
+/**
+ * Trading statistics for a specific time window.
+ * Used for price change calculations (current price vs earliest_price).
+ */
+export type TradingStats = {
+  earliest_price_sol: string;
+  earliest_price_usd: string;
+  buys: number;
+  sells: number;
+  buy_volume_sol: string;
+  buy_volume_usd: string;
+  sell_volume_sol: string;
+  sell_volume_usd: string;
+  buyers: number;
+  sellers: number;
+  traders: number;
+};
+
+/**
+ * Screener market data - subset of TokenMarketData relevant for screener display.
+ * All fields optional to accommodate different data sources.
+ */
+export type ScreenerMarketData = {
+  // Core price data
+  price_sol?: string | number;
+  price_usd?: string | number;
+  market_cap_usd?: string | number;
+
+  // Symbol (can come from market_data or token itself)
+  symbol?: string;
+  name?: string;
+  image?: string;
+
+  // Volume data (24h)
+  volume_24h_usd?: string;
+  liquidity_usd?: string;
+
+  // Trading stats for price change calculations
+  trading_stats_5m?: TradingStats;
+  trading_stats_1h?: TradingStats;
+  trading_stats_6h?: TradingStats;
+  trading_stats_24h?: TradingStats;
+};
+
+/**
+ * Unified screener token type for all three columns.
+ * Maps different data sources to a consistent interface.
+ */
+export type ScreenerTokenData = {
+  // Required - all sources provide these
+  mint: string;
+  symbol: string;
+  source: "watchlist" | "trending" | "whales";
+
+  // Optional metadata
+  name?: string;
+  image?: string;
+
+  // Market data - populated from WebSocket stores or mapped from API
+  market_data?: ScreenerMarketData;
+
+  // Autopilot integration
+  hasPosition?: boolean;
+  signalStrength?: SignalStrength;
+};
+
+/**
+ * Return type for useAutopilotDiscoveryTokens hook.
+ * All three columns return the same ScreenerTokenData type.
+ */
+export type ScreenerTokenList = {
+  watchlist: ScreenerTokenData[];
+  trending: ScreenerTokenData[];
+  whales: ScreenerTokenData[];
+};

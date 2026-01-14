@@ -1,0 +1,124 @@
+# bonkbot - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2025-01-10
+- **Last updated**: 2025-01-10
+- **Discovery depth**: Standard
+- **Documentation quality**: Good
+
+---
+
+## System Identity
+
+**What it is**: TypeScript/Node.js monorepo - the "Web API" for BONKbot platform.
+
+**What it does**:
+- Powers both Telegram bot and Web Terminal frontend
+- Handles user authentication (wallet signatures, email, JWT)
+- Executes swaps via Jupiter/Raydium with Jito MEV protection
+- Manages limit orders, auto-strategies (DCA)
+- Runs referral program with tiered payouts
+
+**Key insight**: This is NOT a separate "web-api" repo - bonkbot IS the API that Web Terminal frontend consumes.
+
+---
+
+## Architecture Highlights
+
+### Monorepo Structure
+```
+packages/     → Shared libraries (db, nats, commons, signer)
+servers/      → Deployable services
+  └── bonkbot → Main service (Express + Inversify DI)
+```
+
+### Core Patterns
+- **Inversify DI**: All services wired in `inversify.config.ts` (2000+ lines)
+- **Domain-Driven**: `domain/swap/`, `domain/user/`, `domain/referral/`
+- **TSOA**: OpenAPI generation from TypeScript decorators
+- **Kysely**: Type-safe SQL with auto-generated types
+
+### Data Layer
+- **PostgreSQL**: User data, orders, transactions (155+ migrations)
+- **Redis**: Sessions, rate limiting, caching
+- **ClickHouse**: Analytics, swap history
+- **NATS**: Async messaging (swap events, notifications)
+
+---
+
+## Key Capabilities
+
+### For Product/Growth
+| Capability | What It Enables |
+|------------|-----------------|
+| Swap execution | Core trading feature |
+| Limit orders | Advanced trading |
+| Auto-strategies | DCA, rebalancing |
+| Referral system | Growth loops, DAO payouts |
+| Portfolio tracking | User engagement |
+| Multi-interface | Telegram + Web reach |
+
+### Data Available
+- User trading history
+- Swap success/failure rates
+- Referral attribution
+- Portfolio positions
+- Fee collection metrics
+
+---
+
+## Integration Points
+
+### Web Terminal Frontend
+- REST API on port 8800
+- JWT authentication
+- Endpoints: `/auth`, `/user`, `/swap`, `/orders`, `/referral`
+
+### web-terminal (Rust)
+- Provides market data that frontend also consumes
+- bonkbot handles user operations; web-terminal handles data
+
+### Signer Service
+- Separate service for transaction signing
+- Communicates via NATS
+- Passkey support
+
+---
+
+## Working Here
+
+### Quick Start
+```bash
+docker-compose up -d          # Postgres, Redis
+pnpm install
+pnpm --filter @bonkbot/db kysely migrate:latest
+pnpm --filter @bonkbot/bonkbot dev
+```
+
+### Common Locations
+| Task | Path |
+|------|------|
+| Add endpoint | `servers/bonkbot/src/api/controllers/` |
+| Business logic | `servers/bonkbot/src/domain/{domain}/` |
+| External API | `servers/bonkbot/src/infrastructure/` |
+| DB migration | `packages/db/migrations/` |
+| DI bindings | `servers/bonkbot/src/inversify.config.ts` |
+
+---
+
+## Deployment
+
+- **GCP-based**: MIGs, Cloud SQL, Memorystore
+- **Environments**: beta, prod (multiple bot instances)
+- **Pipeline**: dev → PR → release tag → GH Actions → GCP
+
+---
+
+## Session Notes
+
+*Accumulated learnings:*
+
+- bonkbot = "web-api" (same thing, confusing naming)
+- The DI container is massive - understand it before making changes
+- TSOA generates OpenAPI spec automatically from controllers
+- Cron jobs handle background processing (fees, referrals, orders)

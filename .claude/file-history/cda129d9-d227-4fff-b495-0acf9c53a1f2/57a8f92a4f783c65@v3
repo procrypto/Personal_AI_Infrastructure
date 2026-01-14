@@ -1,0 +1,52 @@
+# TrenchBench API
+
+ClickHouse-backed REST API for Community Tracker and TrenchBench.
+
+## Quick Start
+
+```bash
+bun install
+cp env.example .env  # Add ClickHouse credentials
+bun dev              # http://localhost:8080
+```
+
+## Configuration
+
+Same credentials work for both local development and remote deployments:
+
+```env
+CLICKHOUSE_KEY_ID=...
+CLICKHOUSE_KEY_SECRET=...
+CLICKHOUSE_SERVICE_ID=...
+```
+
+For remote deployments, credentials are injected via GCP Secret Manager.
+
+## Deployment
+
+**Local:** `bun dev` → localhost:8080
+
+**Remote:** GitHub Actions deploys to Cloud Run
+- Push to `main` → bonkbotbeta (staging)
+- Push `v*` tag → data-backend-prod (production)
+
+Both use `APP_ENV=remote`. The GCP project (and its secrets) is the only difference.
+
+### Docker
+
+```bash
+docker build -t trenchbench-api .
+docker run -p 8080:8080 --env-file .env trenchbench-api
+```
+
+### GCP Cloud Run
+
+CI/CD via GitHub Actions with Workload Identity Federation (keyless auth).
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for GCP setup checklist.
+
+## Documentation
+
+- [ENDPOINTS.md](ENDPOINTS.md) - API endpoints and usage
+- [DEPLOYMENT.md](DEPLOYMENT.md) - GCP deployment checklist
+- [CHANGELOG.md](CHANGELOG.md) - Version history

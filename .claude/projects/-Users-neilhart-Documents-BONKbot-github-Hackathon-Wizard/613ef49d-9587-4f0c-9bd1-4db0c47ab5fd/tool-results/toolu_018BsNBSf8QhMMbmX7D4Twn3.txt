@@ -1,0 +1,96 @@
+     1→/**
+     2→ * Configuration Types
+     3→ *
+     4→ * User configuration for the analysis autopilot.
+     5→ */
+     6→
+     7→import type { RuleSet } from '../rules/types.js';
+     8→
+     9→export interface WatchlistToken {
+    10→  mint: string;
+    11→  symbol?: string;
+    12→  name?: string;
+    13→  addedAt: number;
+    14→}
+    15→
+    16→// Token source tracking
+    17→export type TokenSource = 'watchlist' | 'trending' | 'whales';
+    18→
+    19→export interface SourcedToken {
+    20→  mint: string;
+    21→  symbol?: string;
+    22→  source: TokenSource;
+    23→}
+    24→
+    25→// Auto-source configuration
+    26→export interface AutoSourceConfig {
+    27→  enabled: boolean;
+    28→  trending: boolean;  // Enable discovery/trending source
+    29→  whales: boolean;    // Enable discovery/whale_moves source
+    30→  refreshIntervalMs: number;  // How often to refresh auto-lists (default 15m)
+    31→  trendingLimit: number;      // Max tokens to pull from trending
+    32→  whalesLimit: number;        // Max tokens to pull from whale_moves
+    33→  // TODO: Add spam filtering criteria when expanding to broader token sources
+    34→  // TODO: Add per-source position limits (e.g., max 2 from trending, max 1 from whales)
+    35→}
+    36→
+    37→export interface TriggerConfig {
+    38→  enabled: boolean;
+    39→  mode: 'paper' | 'live'; // Paper trading or live LOIS
+    40→  defaultPositionSizeSol: number;
+    41→  maxPositionSizeSol: number;
+    42→  cooldownMs: number; // Minimum time between triggers for same token
+    43→  onOppositeSignal: 'close' | 'flip' | 'ignore'; // What to do when opposite signal fires
+    44→}
+    45→
+    46→export interface UserConfig {
+    47→  version: number;
+    48→  createdAt: number;
+    49→  updatedAt: number;
+    50→
+    51→  // Tokens to monitor (manual)
+    52→  watchlist: WatchlistToken[];
+    53→
+    54→  // Active rule sets
+    55→  // TODO: Add per-source rule sets (e.g., different strategies for trending vs whales)
+    56→  ruleSets: RuleSet[];
+    57→
+    58→  // Auto-source configuration
+    59→  autoSources: AutoSourceConfig;
+    60→
+    61→  // Trigger configuration
+    62→  trigger: TriggerConfig;
+    63→
+    64→  // Analysis interval (for OHLCV polling)
+    65→  pollIntervalMs: number;
+    66→}
+    67→
+    68→export const DEFAULT_CONFIG: UserConfig = {
+    69→  version: 1,
+    70→  createdAt: Date.now(),
+    71→  updatedAt: Date.now(),
+    72→  watchlist: [],
+    73→  ruleSets: [],
+    74→  autoSources: {
+    75→    enabled: true,
+    76→    trending: true,
+    77→    whales: true,
+    78→    refreshIntervalMs: 15 * 60 * 1000, // 15 minutes
+    79→    trendingLimit: 20,
+    80→    whalesLimit: 20,
+    81→  },
+    82→  trigger: {
+    83→    enabled: true,
+    84→    mode: 'paper',
+    85→    defaultPositionSizeSol: 0.1,
+    86→    maxPositionSizeSol: 1,
+    87→    cooldownMs: 60000, // 1 minute
+    88→    onOppositeSignal: 'close', // close position on opposite signal
+    89→  },
+    90→  pollIntervalMs: 30000, // 30 seconds
+    91→};
+    92→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

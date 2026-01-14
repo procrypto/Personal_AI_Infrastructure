@@ -1,0 +1,63 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   108→  trending: WatchedToken[];
+   109→  whales: WatchedToken[];
+   110→}
+   111→
+   112→class AutopilotWebSocketServer {
+   113→  private wss: WebSocketServer | null = null;
+   114→  private clients: Set<WebSocket> = new Set();
+   115→  private port: number = 8765;
+   116→  private commandHandler: CommandHandler | null = null;
+   117→
+   118→  start(port: number = 8765): void {
+   119→    if (this.wss) {
+   120→      console.log('[WS] Server already running');
+   121→      return;
+   122→    }
+   123→
+   124→    this.port = port;
+   125→    this.wss = new WebSocketServer({ port });
+   126→
+   127→    this.wss.on('connection', (ws) => {
+   128→      this.clients.add(ws);
+   129→      console.log(`[WS] Client connected (${this.clients.size} total)`);
+   130→
+   131→      // Handle incoming messages (commands from frontend)
+   132→      ws.on('message', async (data) => {
+   133→        try {
+   134→          const message = JSON.parse(data.toString()) as AutopilotCommand;
+   135→          if (message.command && this.commandHandler) {
+   136→            console.log(`[WS] Command received: ${message.command}`);
+   137→            await this.commandHandler(message);
+   138→          }
+   139→        } catch (err) {
+   140→          console.error('[WS] Failed to parse command:', err);
+   141→        }
+   142→      });
+   143→
+   144→      ws.on('close', () => {
+   145→        this.clients.delete(ws);
+   146→        console.log(`[WS] Client disconnected (${this.clients.size} total)`);
+   147→      });
+   148→
+   149→      ws.on('error', (err) => {
+   150→        console.error('[WS] Client error:', err.message);
+   151→        this.clients.delete(ws);
+   152→      });
+   153→    });
+   154→
+   155→    this.wss.on('error', (err) => {
+   156→      console.error('[WS] Server error:', err.message);
+   157→    });
+   158→
+   159→    console.log(`[WS] Server started on port ${port}`);
+   160→  }
+   161→
+   162→  // Register a handler for incoming commands
+   163→  onCommand(handler: CommandHandler): void {
+   164→    this.commandHandler = handler;
+   165→  }
+   166→
+   167→  stop(): void {
+   168→    if (!this.wss) return;
+   169→

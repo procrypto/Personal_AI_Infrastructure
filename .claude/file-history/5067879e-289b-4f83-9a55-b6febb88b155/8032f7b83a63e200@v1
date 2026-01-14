@@ -1,0 +1,275 @@
+# Context for PUM3
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+PUM3 (Program Update Machine, 3rd edition) is a high-performance Solana state cache and swap orchestration system. It ingests blockchain account updates via Geyser, maintains real-time DEX pool state for 17+ protocols, publishes price updates to downstream consumers, and orchestrates swap execution including limit orders.
+
+This is a Rust Cargo workspace with 26 crates, deployed across 3 regions (EU/US/AP) with specialized binaries for different roles (API, Publisher, Writer, LOIS).
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Language | Rust | High-performance processing |
+| Blockchain | Solana SDK 2.2.1 | Chain interactions |
+| Streaming | Yellowstone Geyser | Account updates |
+| Messaging | async-nats | Event pub/sub |
+| HTTP | Axum | API server |
+| Cache | Redis | Pool state cache |
+| Database | PostgreSQL | Limit order persistence |
+| Analytics | ClickHouse | Metrics tracking |
+| Math | rust_decimal | Precise pricing |
+
+### Workspace Structure
+
+```
+pum3/
+├── nami/              # Core binary (API/Publisher/Writer modes)
+├── lois/              # Limit Order Intent System (Dispatcher/Evaluator)
+├── engine/            # State management & event handlers
+├── dexes/             # DEX implementations (17 protocols)
+├── dexes-macros/      # Procedural macros for DEX support
+├── common/            # Shared types (DexType, PriceData, etc.)
+├── swap/              # Swap construction & routing
+├── executor/          # Swap execution binary
+├── evaluators/        # Price/DCA limit order evaluators
+├── api/               # HTTP endpoint handlers
+├── nats/              # NATS client abstractions
+├── solana_rpc/        # RPC wrapper
+├── jito/              # MEV bundle client
+├── jupiter/           # Jupiter routing integration
+├── signer/            # Transaction signing
+├── gcloud/            # GCP integrations
+├── healthcheck/       # Service health
+├── tracker/           # Analytics
+├── archiver/          # Data archiving
+└── utilities/         # CLI tools
+```
+
+### Run Modes
+
+| Mode | Binary | Purpose | Deployment |
+|------|--------|---------|------------|
+| `api` | nami | HTTP API + full state | EU (primary) |
+| `publish` | nami | Price publishing only | US, AP |
+| `writer` | nami | Redis cache writer | EU |
+| `dispatcher` | lois | Limit order matching | EU |
+| `evaluator` | lois | Order execution | EU |
+
+## Capabilities
+
+### Supported DEXes (17)
+
+```
+Boop, Heaven, MeteoraDbc, MeteoraCpamm, MeteoraDlmm, MeteoraDynamic,
+Moonshot, Orca, OrcaLaunchpad, Pumpfun, PumpSwap, RaydiumAmm,
+RaydiumClmm, RaydiumCpmm, RaydiumLaunchpad, TokenMill, Vertigo, Virtuals
+```
+
+### Core Functions
+
+| Function | Description |
+|----------|-------------|
+| State caching | Maintains latest pool state from Geyser |
+| Price publishing | Real-time prices via `pum3.pricing` NATS |
+| Swap routing | Multi-hop path finding through liquidity |
+| Swap construction | Builds optimized transactions |
+| Limit orders | LOIS dispatcher/evaluator pattern |
+
+### API Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/price` | Current price for token pair |
+| `/batch-prices` | Batch price queries |
+| `/quote` | Swap quote with amount_out |
+| `/batch-quotes` | Batch quote requests |
+| `/build-transaction` | Construct swap transaction |
+| `/pools-and-bin-arrays` | Pool state (Orca) |
+
+### NATS Topics
+
+**Input (from Geyser):**
+```
+input_pum3_deduped.account.*   # Account updates by type
+input_pum3_deduped.block       # Block confirmations
+```
+
+**Output (published):**
+| Topic | Content | Consumer |
+|-------|---------|----------|
+| `pum3.pricing` | Pool prices | web-terminal, materializers |
+| `pum3.pool_refresh` | Pool state updates | Internal |
+| `lois.intent` | Limit order intents | LOIS system |
+| `lois.evaluation_request` | Price-triggered evals | Evaluator |
+| `pum3.execution-request.*` | Swap execution | Blockchain |
+
+### Price Data Structure
+
+```rust
+WebTerminalPriceData {
+    liquidity_a: u64,           // Token A reserves
+    liquidity_b: u64,           // Token B reserves
+    price_a_in_b: Decimal,      // Base unit price
+    ui_price_a_in_b: Decimal,   // Human-readable
+    token_a: Pubkey,            // Source mint
+    token_b: Pubkey,            // Dest mint
+    pool: Pubkey,               // Pool address
+    dex_type: DexType,          // Which DEX
+    slot: u64,                  // Solana slot
+    timestamp: u128,            // UNIX nanos
+    bonding_curve_progress: Option<Decimal>,
+}
+```
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- **DEX implementations**: Each DEX in `dexes/src/` with standard trait impl
+- **Storage layer**: Multi-index HashMap for pool lookups (`dexes/storage/`)
+- **Event handlers**: Engine crate handles Geyser → state updates
+- **Routing**: Graph-based path finding through liquidity pools
+
+### Common Tasks
+
+#### Local Development
+
+```bash
+# Build all crates
+cargo build
+
+# Run API mode
+RUN_MODE=api cargo run --bin nami
+
+# Run specific DEX tests
+cargo test -p dexes
+
+# Check formatting
+cargo fmt --check
+cargo clippy
+```
+
+#### Finding Code
+
+| Task | Location |
+|------|----------|
+| Add DEX support | `dexes/src/` + `common/src/dexes.rs` |
+| Modify price output | `common/src/web_terminal_price_data.rs` |
+| Add API endpoint | `api/src/` |
+| Modify routing | `swap/src/` |
+| NATS topics | `nats/src/` + `engine/src/*_handler.rs` |
+| Limit order logic | `lois/src/` + `evaluators/` |
+| Storage structure | `dexes/storage/storage_layer.rs` |
+
+#### Adding a New DEX
+
+1. Add variant to `DexType` enum in `common/src/dexes.rs`
+2. Implement pool parsing in `dexes/src/{dex_name}/`
+3. Add account subscriptions in engine
+4. Add routing support in `swap/`
+5. Test with `utilities/dex-tester/`
+
+### Things to Avoid
+
+- Don't block async tasks with heavy computation
+- Don't hold locks across await points
+- Don't skip the storage layer for pool lookups
+- Avoid direct RPC calls in hot paths (use cached state)
+
+## Related Documentation
+
+- [README.md](README.md) - Architecture overview
+- [Notion docs](https://www.notion.so/PUM3-1b52420e776c8054bd98cd764caed36a) - Detailed concepts
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get | Interface |
+|--------|-------------|-----------|
+| Geyser (Helius/Triton) | Account updates | Yellowstone gRPC |
+| Solana RPC | Transaction submission | JSON-RPC |
+| Jupiter | Routing fallback | REST API |
+
+### Downstream Consumers
+
+| System | What They Get | Interface |
+|--------|---------------|-----------|
+| web-terminal | Price updates | NATS `pum3.pricing` |
+| bonkbot | Swap construction | REST API |
+| Materializers | Pool state | NATS topics |
+
+### Data Flow
+
+```
+Geyser Providers (Helius/Laserstream/Triton)
+         │
+         │ Yellowstone gRPC
+         ▼
+    INPUT_NATS_URL
+         │
+         │ input_pum3_deduped.*
+         ▼
+┌─────────────────────────────────────────┐
+│              PUM3 Engine                │
+│                                         │
+│  Account Update → Pool State Update     │
+│        │                                │
+│        ▼                                │
+│  Storage Layer (pools_by_address,       │
+│                 pools_by_token_pair,    │
+│                 account_to_pools)       │
+│        │                                │
+│        ▼                                │
+│  Price Calculation → NATS Publish       │
+└─────────────────────────────────────────┘
+         │
+         │ pum3.pricing
+         ▼
+    NATS_URL (Hub)
+         │
+         ├──▶ web-terminal (prices → frontend)
+         ├──▶ Materializers (aggregation)
+         └──▶ LOIS Dispatcher (limit order matching)
+```
+
+### Regional Deployment
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                         EU (Primary)                     │
+│  ┌─────────┐  ┌─────────┐  ┌────────────┐  ┌─────────┐ │
+│  │   API   │  │ Writer  │  │ Dispatcher │  │Evaluator│ │
+│  └─────────┘  └─────────┘  └────────────┘  └─────────┘ │
+│       │            │              │              │       │
+│       └────────────┴──────────────┴──────────────┘       │
+│                          │                               │
+│                     Redis + Postgres                     │
+└─────────────────────────────────────────────────────────┘
+
+┌──────────────────┐          ┌──────────────────┐
+│    US (Publisher)│          │   AP (Publisher) │
+│  ┌─────────────┐ │          │  ┌─────────────┐ │
+│  │  Publisher  │ │          │  │  Publisher  │ │
+│  └─────────────┘ │          │  └─────────────┘ │
+└──────────────────┘          └──────────────────┘
+```
+
+## Configuration
+
+### Key Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `RUN_MODE` | api/publish/writer/dispatcher/evaluator |
+| `RUNTIME_REGION` | eu/us/ap |
+| `INPUT_NATS_URL` | Geyser updates source |
+| `NATS_URL` | Hub for publishing |
+| `REDIS_URL` | Pool cache |
+| `RPC_CLIENT_URL` | Solana RPC |
+| `SUPPORTED_DEXES` | Comma-separated DEX list |

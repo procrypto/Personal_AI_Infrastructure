@@ -1,0 +1,109 @@
+---
+phase: 04-nats-data-feeds
+plan: 01
+subsystem: data-feeds
+tags: [nats, websocket, trending, whales, real-time]
+
+# Dependency graph
+requires:
+  - phase: 03-interface-cleanup-cutover
+    provides: DataFeedMessage pattern, handleDataFeed switch
+provides:
+  - trending_feed, whale_feed, watchlist_feed data feed types
+  - AutoSourceManager feed integration
+  - Real-time NATS data reception capability
+  - Feed freshness tracking (isFeedFresh, getFeedStats)
+affects: [frontend-integration, api-deprecation]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [data-feed-discriminated-union, feed-to-autosource-bridge]
+
+key-files:
+  created: []
+  modified: [src/websocket-server.ts, src/trading/auto-sources.ts, src/cli.ts, src/types/index.ts]
+
+key-decisions:
+  - "Keep API polling as fallback until frontend integration validated"
+
+patterns-established:
+  - "Feed-to-AutoSource bridge: Data feeds update AutoSourceManager directly via set*FromFeed methods"
+
+issues-created: []
+
+# Metrics
+duration: 8min
+completed: 2026-01-09
+---
+
+# Phase 4 Plan 1: NATS Data Feeds Summary
+
+**Added trending_feed and whale_feed data feed types with AutoSourceManager integration for real-time NATS data reception**
+
+## Performance
+
+- **Duration:** 8 min
+- **Started:** 2026-01-09T11:00:00Z
+- **Completed:** 2026-01-09T11:08:00Z
+- **Tasks:** 3
+- **Files modified:** 4
+
+## Accomplishments
+
+- Added TrendingFeedItem, WhaleMoveFeedItem, WatchlistFeedItem interfaces
+- Extended DataFeedMessage union with trending_feed, whale_feed, watchlist_feed types
+- Created setTrendingFromFeed() and setWhalesFromFeed() methods in AutoSourceManager
+- Wired data feeds to AutoSourceManager in cli.ts onDataFeed handler
+- Added feed freshness tracking (feedLastUpdated Map, isFeedFresh(), getFeedStats())
+- Exported new types for frontend TypeScript compatibility
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Add trending_feed and whale_feed to DataFeedMessage** - `de9fd92` (feat)
+2. **Task 2: Connect data feeds to AutoSourceManager** - `c0ca2b1` (feat)
+3. **Task 3: Add logging and export types** - `fcee247` (feat)
+
+## Files Created/Modified
+
+- `src/websocket-server.ts` - Added TrendingFeedItem, WhaleMoveFeedItem interfaces, extended DataFeedMessage union, added handlers and Maps
+- `src/trading/auto-sources.ts` - Added setTrendingFromFeed(), setWhalesFromFeed() methods
+- `src/cli.ts` - Wired trending_feed and whale_feed to AutoSourceManager in onDataFeed
+- `src/types/index.ts` - Exported TrendingFeedItem, WhaleMoveFeedItem types
+
+## Decisions Made
+
+- Keep API polling as fallback until frontend integration is validated end-to-end
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (3 task commits)
+- [x] No unverified confident assertions (FM7)
+
+**Notes:** All three tasks completed with atomic commits. TypeScript compiles cleanly, 65 tests pass. Implementation follows established DataFeedMessage pattern from Phase 3.
+
+## Next Phase Readiness
+
+- Backend can now receive trending_feed and whale_feed messages via WebSocket
+- Frontend can send NATS discovery data through existing data feed mechanism
+- API polling remains active as fallback until integration validated
+- Ready for frontend integration testing
+
+---
+*Phase: 04-nats-data-feeds*
+*Completed: 2026-01-09*

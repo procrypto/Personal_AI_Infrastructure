@@ -1,0 +1,112 @@
+     1→import { IS_DEVELOP } from "@/config";
+     2→import { getTradingChartStore } from "@/store/memoryStore/slices/trading-chart-store/trading-chart-store";
+     3→import { enableMapSet } from "immer";
+     4→import { create } from "zustand";
+     5→import { devtools, subscribeWithSelector } from "zustand/middleware";
+     6→import { immer } from "zustand/middleware/immer";
+     7→import { getActiveMarketDataMintsStore } from "./slices/active-market-data-mints-store/active-market-data-mints-store";
+     8→import { getAutoStratStore } from "./slices/auto-strat-store/auto-strat-store";
+     9→import { getDocumentVisibilityStore } from "./slices/document-visibility-store/document-visibility-store";
+    10→import { getPresetStore } from "./slices/preset-store/preset-store";
+    11→import { getSolanaPriceStore } from "./slices/solana-price-store/solana-price-store";
+    12→import { getTimerStore } from "./slices/timer-store/timer-store";
+    13→import { getTradingSettingsStore } from "./slices/trading-settings-store/trading-settings-store";
+    14→import { getTradingPageStore } from "@/store/memoryStore/slices/trading-page-store/trading-page-store";
+    15→import { getTransactionsStore } from "./slices/transactions-store/transactions-store";
+    16→import { getWalletTrackingStore } from "./slices/wallet-tracking-store/wallet-tracking-store";
+    17→import { getTransfersStore } from "./slices/transfers-store/transfers-store.tsx";
+    18→import { getWithdrawalsStore } from "./slices/withdrawals-store/withdrawals-store.tsx";
+    19→import { getWatchlistStore } from "./slices/watchlist-store/watchlist-store";
+    20→
+    21→import { createWebsocketMessagesStore } from "./slices/websocket-messages-store/websocket-messages-store";
+    22→import { getXRayStore } from "./slices/x-ray-store/x-ray-store";
+    23→import { getDiscoveryStore } from "./slices/discovery-store/discovery-store";
+    24→import { getModalStore } from "@/ui/base/modal-store";
+    25→import { getUnifiedMarksStore } from "./slices/unified-marks-store/unified-marks-store";
+    26→import type { GlobalStore } from "./types";
+    27→import { getNotificationsStore } from "@/store/memoryStore/slices/notifications-store/notifications-store.ts";
+    28→import { getConnectionManagerStore } from "@/store/memoryStore/slices/connection-manager-store/connection-manager-store";
+    29→import { getVersionStore } from "./slices/version-store/version-store";
+    30→import { getPortfolioOptimisticStore } from "./slices/portfolio-optimistic-store/portfolio-optimistic-store";
+    31→import { getChartPreviewOpenStore } from "@/store/memoryStore/slices/chart-preview-store/chart-preview-store";
+    32→import { getWarzoneUIStore } from "./slices/warzone-store/warzone-store";
+    33→export { useShallow } from "zustand/react/shallow";
+    34→
+    35→enableMapSet();
+    36→
+    37→export const useGlobalStore = create<GlobalStore>()(
+    38→  subscribeWithSelector(
+    39→    devtools(
+    40→      immer((set, get) => ({
+    41→        websocketMessages: createWebsocketMessagesStore(set, get),
+    42→        preset: getPresetStore(set, get),
+    43→        tradeSettings: getTradingSettingsStore(set, get),
+    44→        timer: getTimerStore(set, get),
+    45→        solanaPrice: getSolanaPriceStore(set, get),
+    46→        transactions: getTransactionsStore(set, get),
+    47→        transfers: getTransfersStore(set, get),
+    48→        withdrawals: getWithdrawalsStore(set, get),
+    49→        autoStrat: getAutoStratStore(set, get),
+    50→        tradeChart: getTradingChartStore(set, get),
+    51→        chartPreview: getChartPreviewOpenStore(set, get),
+    52→        tradingPage: getTradingPageStore(set, get),
+    53→        walletTracking: getWalletTrackingStore(set, get),
+    54→        watchlist: getWatchlistStore(set, get),
+    55→        xRay: getXRayStore(set, get),
+    56→        activeMarketDataMints: getActiveMarketDataMintsStore(set, get),
+    57→        discovery: getDiscoveryStore(set, get),
+    58→        documentVisibility: getDocumentVisibilityStore(set, get),
+    59→        notifications: getNotificationsStore(set, get),
+    60→        modal: getModalStore(set, get),
+    61→        connectionManager: getConnectionManagerStore(set, get),
+    62→        unifiedMarks: getUnifiedMarksStore(set, get),
+    63→        version: getVersionStore(set, get),
+    64→        portfolioOptimistic: getPortfolioOptimisticStore(set, get),
+    65→        warzoneUI: getWarzoneUIStore(set, get),
+    66→      })),
+    67→      {
+    68→        // Devtools docs
+    69→        // https://github.com/reduxjs/redux-devtools-extension/blob/master/docs/Troubleshooting.md#excessive-use-of-memory-and-cpu
+    70→        // https://github.com/reduxjs/redux-devtools-extension/blob/master/docs/API/Arguments.md#actionsanitizer--statesanitizer
+    71→        // eslint-disable-next-line lingui/no-unlocalized-strings
+    72→        name: "WT - Memory",
+    73→        enabled: IS_DEVELOP,
+    74→        serialize: {
+    75→          options: true,
+    76→        },
+    77→        stateSanitizer: (state: GlobalStore) => {
+    78→          // do not pass whole
+    79→          return {
+    80→            tradeSettings: state.tradeSettings,
+    81→
+    82→            preset: state.preset,
+    83→            timer: state.timer,
+    84→            solanaPrice: state.solanaPrice,
+    85→            transactions: state.transactions,
+    86→            transfers: state.transfers,
+    87→            withdrawals: state.withdrawals,
+    88→            autoStrat: state.autoStrat,
+    89→            chartPreview: state.chartPreview,
+    90→            walletTracking: state.walletTracking,
+    91→            xRay: state.xRay,
+    92→            activeMarketDataMints: state.activeMarketDataMints,
+    93→            discovery: state.discovery,
+    94→            documentVisibility: state.documentVisibility,
+    95→            notifications: state.notifications,
+    96→            modal: state.modal,
+    97→            connectionManager: state.connectionManager,
+    98→            unifiedMarks: state.unifiedMarks,
+    99→            tradingPage: state.tradingPage,
+   100→            watchlist: state.watchlist,
+   101→          };
+   102→        },
+   103→        actionsBlacklist: ["addItem", "updateCurrentTimestamp"],
+   104→      }
+   105→    )
+   106→  )
+   107→);
+   108→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

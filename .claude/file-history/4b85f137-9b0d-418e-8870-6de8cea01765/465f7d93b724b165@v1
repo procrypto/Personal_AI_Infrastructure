@@ -1,0 +1,190 @@
+/**
+ * useAutopilotTokensWithPrices
+ *
+ * Provides price and change data for screener tokens.
+ *
+ * Data flow:
+ * - Trending/Watchlist: Use embedded market_data from WebSocket stores (full data)
+ * - Whales: Use embedded market_cap, fall back to NATS for price/change (limited data)
+ *
+ * This hook maintains backward compatibility with the existing widget interface.
+ */
+
+import { useMemo } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { useAutopilotDiscoveryTokens } from "./useAutopilotDiscoveryTokens";
+import type { ScreenerTokenData } from "./types";
+
+/**
+ * Token with enriched price data for widget display.
+ * Extends ScreenerTokenData with computed price fields.
+ */
+export interface AutopilotTokenWithPrices {
+  mint: string;
+  symbol: string;
+  source: "watchlist" | "trending" | "whales";
+  priceUsd: number | undefined;
+  change1h: number | undefined;
+  marketCapUsd: number | undefined;
+  hasPosition?: boolean;
+}
+
+/**
+ * Token lists with enriched price data.
+ */
+export interface AutopilotTokenListWithPrices {
+  watchlist: AutopilotTokenWithPrices[];
+  trending: AutopilotTokenWithPrices[];
+  whales: AutopilotTokenWithPrices[];
+}
+
+/**
+ * Parse a string or number value to a number, returning undefined if invalid.
+ */
+const parseNumber = (
+  value: string | number | undefined
+): number | undefined => {
+  if (value === undefined) return undefined;
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  return isNaN(num) ? undefined : num;
+};
+
+/**
+ * Calculate price change percentage from current price and earliest price.
+ */
+const calculatePriceChange = (
+  currentPrice: number | undefined,
+  earliestPrice: string | undefined
+): number | undefined => {
+  if (currentPrice === undefined || !earliestPrice) return undefined;
+  const earliest = parseFloat(earliestPrice);
+  if (isNaN(earliest) || earliest === 0) return undefined;
+  return ((currentPrice - earliest) / earliest) * 100;
+};
+
+/**
+ * Hook to get autopilot token lists with price data.
+ *
+ * For trending/watchlist: Uses embedded WebSocket market_data (has full trading_stats)
+ * For whales: Uses embedded market_cap, falls back to NATS for price data
+ */
+export const useAutopilotTokensWithPrices =
+  (): AutopilotTokenListWithPrices => {
+    // Get token lists with embedded market_data from WebSocket stores
+    const tokenList = useAutopilotDiscoveryTokens();
+
+    // NATS market data - fallback for whales that don't have WebSocket data
+    const natsMarketDataMap = useGlobalStore(
+      useShallow(state => state.websocketMessages.market_data.data)
+    );
+
+    // SOL price for USD conversion (fallback)
+    const solPriceUsdStr = useGlobalStore(state => state.solanaPrice.usd);
+    const solPriceUsd = solPriceUsdStr ? parseFloat(solPriceUsdStr) : undefined;
+
+    // Enrich token with price data
+    // Prefers embedded market_data from WebSocket, falls back to NATS
+    const enrichToken = useMemo(() => {
+      return (token: ScreenerTokenData): AutopilotTokenWithPrices => {
+        const md = token.market_data;
+
+        // Try to get price data from embedded market_data first
+        if (md) {
+          // Parse prices from embedded market_data
+          const priceUsd = parseNumber(md.price_usd);
+          const priceSol = parseNumber(md.price_sol);
+          const marketCapUsd = parseNumber(md.market_cap_usd);
+
+          // Calculate 1h change from trading_stats if available
+          let change1h: number | undefined = undefined;
+          if (md.trading_stats_1h && priceSol !== undefined) {
+            change1h = calculatePriceChange(
+              priceSol,
+              md.trading_stats_1h.earliest_price_sol
+            );
+          }
+
+          // If we have embedded price data, use it
+          if (priceUsd !== undefined || marketCapUsd !== undefined) {
+            return {
+              mint: token.mint,
+              symbol: token.symbol,
+              source: token.source,
+              priceUsd,
+              change1h,
+              marketCapUsd,
+              hasPosition: token.hasPosition,
+            };
+          }
+        }
+
+        // Fallback to NATS market data (for whales or missing WebSocket data)
+        const natsData = natsMarketDataMap[token.mint];
+        // DEBUG: Log whale token lookup
+        if (token.source === "whales") {
+          console.log(`[DEBUG] Whale ${token.symbol}: natsData=${natsData ? 'found' : 'missing'}, size=${natsData?.size ?? 0}`);
+        }
+        if (!natsData || natsData.size === 0) {
+          // Use whatever we have from embedded data (e.g., whale market_cap)
+          return {
+            mint: token.mint,
+            symbol: token.symbol,
+            source: token.source,
+            priceUsd: undefined,
+            change1h: undefined,
+            marketCapUsd: md ? parseNumber(md.market_cap_usd) : undefined,
+            hasPosition: token.hasPosition,
+          };
+        }
+
+        // Extract from NATS
+        const latestNatsData = Array.from(natsData.values())[0];
+        if (!latestNatsData?.price_sol) {
+          return {
+            mint: token.mint,
+            symbol: token.symbol,
+            source: token.source,
+            priceUsd: undefined,
+            change1h: undefined,
+            marketCapUsd: md ? parseNumber(md.market_cap_usd) : undefined,
+            hasPosition: token.hasPosition,
+          };
+        }
+
+        const priceSol = parseNumber(latestNatsData.price_sol);
+        const priceUsd =
+          priceSol !== undefined && solPriceUsd
+            ? priceSol * solPriceUsd
+            : undefined;
+
+        // Calculate change from NATS trading_stats
+        const change1h = calculatePriceChange(
+          priceSol,
+          latestNatsData.trading_stats_1h?.earliest_price_sol
+        );
+
+        const marketCapUsd =
+          parseNumber(latestNatsData.market_cap_usd) ??
+          (md ? parseNumber(md.market_cap_usd) : undefined);
+
+        return {
+          mint: token.mint,
+          symbol: token.symbol || latestNatsData.symbol || "",
+          source: token.source,
+          priceUsd,
+          change1h,
+          marketCapUsd,
+          hasPosition: token.hasPosition,
+        };
+      };
+    }, [natsMarketDataMap, solPriceUsd]);
+
+    // Enrich all token lists
+    return useMemo(() => {
+      return {
+        watchlist: tokenList.watchlist.map(enrichToken),
+        trending: tokenList.trending.map(enrichToken),
+        whales: tokenList.whales.map(enrichToken),
+      };
+    }, [tokenList, enrichToken]);
+  };

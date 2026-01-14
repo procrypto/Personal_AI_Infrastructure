@@ -1,0 +1,352 @@
+import { describe, it, expect } from 'vitest';
+import {
+    PATTERNS,
+    extractUserId,
+    extractDisplayName,
+    createInitialState,
+    processChunk,
+    finalizeScan,
+    scanJsonString,
+} from './userScannerCore';
+
+describe('PATTERNS', () => {
+    describe('fromId', () => {
+        it('matches "user123456" format', () => {
+            const match = PATTERNS.fromId.exec('"from_id": "user123456"');
+            expect(match).not.toBeNull();
+            expect(extractUserId(match!)).toBe('123456');
+        });
+
+        it('matches quoted numeric format', () => {
+            const match = PATTERNS.fromId.exec('"from_id": "789012"');
+            expect(match).not.toBeNull();
+            expect(extractUserId(match!)).toBe('789012');
+        });
+
+        it('matches bare numeric format', () => {
+            const match = PATTERNS.fromId.exec('"from_id": 456789');
+            expect(match).not.toBeNull();
+            expect(extractUserId(match!)).toBe('456789');
+        });
+
+        it('handles whitespace variations', () => {
+            const match = PATTERNS.fromId.exec('"from_id"  :  "user999"');
+            expect(match).not.toBeNull();
+            expect(extractUserId(match!)).toBe('999');
+        });
+    });
+
+    describe('actorId', () => {
+        it('matches actor_id with user prefix', () => {
+            const match = PATTERNS.actorId.exec('"actor_id": "user1957078727"');
+            expect(match).not.toBeNull();
+            expect(extractUserId(match!)).toBe('1957078727');
+        });
+    });
+
+    describe('fromName', () => {
+        it('extracts simple name', () => {
+            const match = PATTERNS.fromName.exec('"from": "John Doe"');
+            expect(match).not.toBeNull();
+            expect(extractDisplayName(match!)).toBe('John Doe');
+        });
+
+        it('handles escaped characters', () => {
+            const match = PATTERNS.fromName.exec('"from": "John \\"The Man\\" Doe"');
+            expect(match).not.toBeNull();
+            expect(extractDisplayName(match!)).toBe('John "The Man" Doe');
+        });
+
+        it('handles unicode names', () => {
+            const match = PATTERNS.fromName.exec('"from": "Тест Юзер"');
+            expect(match).not.toBeNull();
+            expect(extractDisplayName(match!)).toBe('Тест Юзер');
+        });
+    });
+
+    describe('actorName', () => {
+        it('extracts actor name', () => {
+            const match = PATTERNS.actorName.exec('"actor": "Admin User"');
+            expect(match).not.toBeNull();
+            expect(extractDisplayName(match!)).toBe('Admin User');
+        });
+    });
+
+    describe('messagesStart', () => {
+        it('detects messages array start', () => {
+            expect(PATTERNS.messagesStart.test('"messages": [')).toBe(true);
+            expect(PATTERNS.messagesStart.test('"messages"  :  [')).toBe(true);
+        });
+
+        it('does not match other arrays', () => {
+            expect(PATTERNS.messagesStart.test('"entities": [')).toBe(false);
+        });
+    });
+
+    describe('typeMessage', () => {
+        it('detects message type', () => {
+            expect(PATTERNS.typeMessage.test('"type": "message"')).toBe(true);
+        });
+
+        it('does not match service type', () => {
+            expect(PATTERNS.typeMessage.test('"type": "service"')).toBe(false);
+        });
+    });
+});
+
+describe('scanJsonString', () => {
+    it('extracts users from simple export', () => {
+        const json = `{
+            "list": [{
+                "name": "Test Chat",
+                "id": 12345,
+                "messages": [
+                    {
+                        "type": "message",
+                        "from": "Alice",
+                        "from_id": "user100",
+                        "text": "Hello"
+                    },
+                    {
+                        "type": "message",
+                        "from": "Bob",
+                        "from_id": "user200",
+                        "text": "Hi there"
+                    }
+                ]
+            }]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users).toHaveLength(2);
+        expect(users.find(u => u.userId === '100')).toEqual({
+            userId: '100',
+            displayName: 'Alice',
+            messageCount: 0,
+        });
+        expect(users.find(u => u.userId === '200')).toEqual({
+            userId: '200',
+            displayName: 'Bob',
+            messageCount: 0,
+        });
+    });
+
+    it('extracts users with actor fields (service messages)', () => {
+        const json = `{
+            "list": [{
+                "name": "Test Chat",
+                "id": 12345,
+                "messages": [
+                    {
+                        "type": "message",
+                        "actor": "John",
+                        "actor_id": "user300",
+                        "action": "join_group"
+                    }
+                ]
+            }]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users).toHaveLength(1);
+        expect(users[0]).toEqual({
+            userId: '300',
+            displayName: 'John',
+            messageCount: 0,
+        });
+    });
+
+    it('deduplicates users across multiple messages', () => {
+        const json = `{
+            "list": [{
+                "name": "Test Chat",
+                "id": 12345,
+                "messages": [
+                    { "type": "message", "from": "Alice", "from_id": "user100", "text": "Hello" },
+                    { "type": "message", "from": "Alice", "from_id": "user100", "text": "Hello again" },
+                    { "type": "message", "from": "Alice", "from_id": "user100", "text": "One more" }
+                ]
+            }]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users).toHaveLength(1);
+        expect(users[0].userId).toBe('100');
+    });
+
+    it('handles multiple chats', () => {
+        const json = `{
+            "list": [
+                {
+                    "name": "Chat 1",
+                    "id": 1,
+                    "messages": [
+                        { "type": "message", "from": "User1", "from_id": "user1", "text": "Hi" }
+                    ]
+                },
+                {
+                    "name": "Chat 2",
+                    "id": 2,
+                    "messages": [
+                        { "type": "message", "from": "User2", "from_id": "user2", "text": "Hey" }
+                    ]
+                }
+            ]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users).toHaveLength(2);
+    });
+
+    it('skips non-message types', () => {
+        const json = `{
+            "list": [{
+                "name": "Test Chat",
+                "id": 12345,
+                "messages": [
+                    { "type": "service", "actor": "System", "actor_id": "user999", "action": "created" },
+                    { "type": "message", "from": "Alice", "from_id": "user100", "text": "Hello" }
+                ]
+            }]
+        }`;
+
+        const users = scanJsonString(json);
+        // Should only find Alice since service messages are skipped
+        expect(users).toHaveLength(1);
+        expect(users[0].userId).toBe('100');
+    });
+
+    it('handles escaped quotes in names', () => {
+        const json = `{
+            "list": [{
+                "name": "Test Chat",
+                "id": 12345,
+                "messages": [
+                    { "type": "message", "from": "John \\"Nick\\" Doe", "from_id": "user500", "text": "Hello" }
+                ]
+            }]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users).toHaveLength(1);
+        expect(users[0].displayName).toBe('John "Nick" Doe');
+    });
+
+    it('handles empty messages array', () => {
+        const json = `{
+            "list": [{
+                "name": "Empty Chat",
+                "id": 12345,
+                "messages": []
+            }]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users).toHaveLength(0);
+    });
+
+    it('sorts users alphabetically by display name', () => {
+        const json = `{
+            "list": [{
+                "name": "Test Chat",
+                "id": 12345,
+                "messages": [
+                    { "type": "message", "from": "Zara", "from_id": "user1", "text": "Hi" },
+                    { "type": "message", "from": "Alice", "from_id": "user2", "text": "Hey" },
+                    { "type": "message", "from": "Mike", "from_id": "user3", "text": "Hello" }
+                ]
+            }]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users.map(u => u.displayName)).toEqual(['Alice', 'Mike', 'Zara']);
+    });
+
+    it('handles real sample_export.json format', () => {
+        const json = `{
+            "list": [
+                {
+                    "name": "telegram chat moderation",
+                    "type": "private_supergroup",
+                    "id": 12345678,
+                    "messages": [
+                        {
+                            "id": 65,
+                            "type": "service",
+                            "date": "2024-11-25T18:28:00",
+                            "date_unixtime": "1732559280",
+                            "actor": "John",
+                            "actor_id": "1957078727",
+                            "action": "join_group_by_link",
+                            "inviter": "Group",
+                            "text": "",
+                            "text_entities": []
+                        },
+                        {
+                            "id": 66,
+                            "type": "message",
+                            "date": "2024-11-26T09:12:00",
+                            "date_unixtime": "1732621920",
+                            "from": "Fabi",
+                            "from_id": "6792501067",
+                            "text": "Welcome aboard!"
+                        },
+                        {
+                            "id": 67,
+                            "type": "message",
+                            "date": "2024-11-27T14:05:00",
+                            "date_unixtime": "1732716300",
+                            "from": "John",
+                            "from_id": "1957078727",
+                            "text": [
+                                { "type": "plain", "text": "Reminder: please review the docs." }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }`;
+
+        const users = scanJsonString(json);
+        expect(users).toHaveLength(2);
+        expect(users.find(u => u.displayName === 'Fabi')).toBeDefined();
+        expect(users.find(u => u.displayName === 'John')).toBeDefined();
+    });
+});
+
+describe('processChunk', () => {
+    it('handles chunked input correctly', () => {
+        const userMap = new Map();
+        let state = createInitialState();
+
+        // Send JSON in chunks
+        const chunk1 = '{ "list": [{ "name": "Chat", "id": 1, "messages": [{ "type": "message", "from": "Al';
+        const chunk2 = 'ice", "from_id": "user100", "text": "Hello" }] }] }';
+
+        state = processChunk(chunk1, state, userMap);
+        state = processChunk(chunk2, state, userMap);
+        const users = finalizeScan(state, userMap);
+
+        expect(users).toHaveLength(1);
+        expect(users[0].displayName).toBe('Alice');
+    });
+
+    it('maintains state across chunks', () => {
+        const userMap = new Map();
+        let state = createInitialState();
+
+        // First chunk starts a messages array
+        state = processChunk('{ "list": [{ "messages": [', state, userMap);
+        expect(state.inMessagesArray).toBe(true);
+
+        // Second chunk has a complete message
+        state = processChunk('{ "type": "message", "from": "Bob", "from_id": "user200", "text": "Hi" }', state, userMap);
+
+        // Third chunk closes the array
+        state = processChunk('] }] }', state, userMap);
+        expect(state.inMessagesArray).toBe(false);
+
+        const users = finalizeScan(state, userMap);
+        expect(users).toHaveLength(1);
+    });
+});

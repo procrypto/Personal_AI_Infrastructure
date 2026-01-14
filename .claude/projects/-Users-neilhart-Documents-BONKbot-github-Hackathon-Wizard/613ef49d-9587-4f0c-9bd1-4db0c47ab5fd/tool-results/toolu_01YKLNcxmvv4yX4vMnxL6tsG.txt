@@ -1,0 +1,248 @@
+     1→#!/usr/bin/env node
+     2→/**
+     3→ * CLI Interface
+     4→ *
+     5→ * Simple CLI for configuring and running the analysis autopilot.
+     6→ *
+     7→ * Commands:
+     8→ *   watch <mint>     - Add token to watchlist
+     9→ *   unwatch <mint>   - Remove token from watchlist
+    10→ *   list             - List watchlist
+    11→ *   templates        - List available templates
+    12→ *   use <template>   - Add a template to active rules
+    13→ *   rules            - List active rules
+    14→ *   config           - Show current config
+    15→ *   run              - Start analysis loop
+    16→ */
+    17→
+    18→import { configStore } from './config/index.js';
+    19→import { templates, listTemplates, getTemplate, RuleEngine } from './rules/index.js';
+    20→import { localApi } from './api/index.js';
+    21→
+    22→const HELP = `
+    23→Token Analysis Autopilot CLI
+    24→
+    25→Commands:
+    26→  watch <mint> [symbol]  Add token to watchlist
+    27→  unwatch <mint>         Remove token from watchlist
+    28→  list                   List watchlist
+    29→
+    30→  templates              List available rule templates
+    31→  use <template>         Add a template to active rules
+    32→  remove <rule-id>       Remove a rule set
+    33→  rules                  List active rules
+    34→
+    35→  config                 Show current config
+    36→  mode <paper|live>      Set trigger mode
+    37→  size <sol>             Set default position size
+    38→
+    39→  run                    Start analysis loop
+    40→  analyze <mint>         Analyze a single token
+    41→
+    42→  help                   Show this help
+    43→`;
+    44→
+    45→async function main() {
+    46→  const args = process.argv.slice(2);
+    47→  const command = args[0]?.toLowerCase();
+    48→
+    49→  await configStore.load();
+    50→
+    51→  switch (command) {
+    52→    case 'watch': {
+    53→      const mint = args[1];
+    54→      const symbol = args[2];
+    55→      if (!mint) {
+    56→        console.error('Usage: watch <mint> [symbol]');
+    57→        process.exit(1);
+    58→      }
+    59→      configStore.addToWatchlist(mint, symbol);
+    60→      await configStore.save();
+    61→      console.log(`Added ${symbol || mint} to watchlist`);
+    62→      break;
+    63→    }
+    64→
+    65→    case 'unwatch': {
+    66→      const mint = args[1];
+    67→      if (!mint) {
+    68→        console.error('Usage: unwatch <mint>');
+    69→        process.exit(1);
+    70→      }
+    71→      if (configStore.removeFromWatchlist(mint)) {
+    72→        await configStore.save();
+    73→        console.log(`Removed ${mint} from watchlist`);
+    74→      } else {
+    75→        console.log('Token not found in watchlist');
+    76→      }
+    77→      break;
+    78→    }
+    79→
+    80→    case 'list': {
+    81→      const watchlist = configStore.getWatchlist();
+    82→      if (watchlist.length === 0) {
+    83→        console.log('Watchlist is empty');
+    84→      } else {
+    85→        console.log('\nWatchlist:');
+    86→        for (const token of watchlist) {
+    87→          console.log(`  ${token.symbol || 'Unknown'} - ${token.mint}`);
+    88→        }
+    89→      }
+    90→      break;
+    91→    }
+    92→
+    93→    case 'templates': {
+    94→      console.log('\nAvailable Templates:');
+    95→      for (const id of listTemplates()) {
+    96→        const template = templates[id];
+    97→        console.log(`  ${id}`);
+    98→        console.log(`    ${template.description}`);
+    99→        console.log(`    Mode: ${template.mode} (${template.rules.length} rules)`);
+   100→      }
+   101→      break;
+   102→    }
+   103→
+   104→    case 'use': {
+   105→      const templateId = args[1];
+   106→      if (!templateId) {
+   107→        console.error('Usage: use <template>');
+   108→        console.error('Available:', listTemplates().join(', '));
+   109→        process.exit(1);
+   110→      }
+   111→      const template = getTemplate(templateId);
+   112→      if (!template) {
+   113→        console.error(`Template not found: ${templateId}`);
+   114→        console.error('Available:', listTemplates().join(', '));
+   115→        process.exit(1);
+   116→      }
+   117→      configStore.addRuleSet(template);
+   118→      await configStore.save();
+   119→      console.log(`Added template: ${template.name}`);
+   120→      break;
+   121→    }
+   122→
+   123→    case 'remove': {
+   124→      const ruleId = args[1];
+   125→      if (!ruleId) {
+   126→        console.error('Usage: remove <rule-id>');
+   127→        process.exit(1);
+   128→      }
+   129→      if (configStore.removeRuleSet(ruleId)) {
+   130→        await configStore.save();
+   131→        console.log(`Removed rule set: ${ruleId}`);
+   132→      } else {
+   133→        console.log('Rule set not found');
+   134→      }
+   135→      break;
+   136→    }
+   137→
+   138→    case 'rules': {
+   139→      const ruleSets = configStore.getRuleSets();
+   140→      if (ruleSets.length === 0) {
+   141→        console.log('No active rule sets. Use "use <template>" to add one.');
+   142→      } else {
+   143→        console.log('\nActive Rule Sets:');
+   144→        for (const ruleSet of ruleSets) {
+   145→          console.log(`\n  ${ruleSet.name} (${ruleSet.id})`);
+   146→          console.log(`    Mode: ${ruleSet.mode}`);
+   147→          console.log(`    Rules:`);
+   148→          for (const rule of ruleSet.rules) {
+   149→            const status = rule.enabled ? '✓' : '✗';
+   150→            console.log(`      ${status} ${rule.name} (${rule.ruleType})`);
+   151→          }
+   152→        }
+   153→      }
+   154→      break;
+   155→    }
+   156→
+   157→    case 'config': {
+   158→      const config = configStore.get();
+   159→      console.log('\nCurrent Configuration:');
+   160→      console.log(`  Watchlist: ${config.watchlist.length} tokens`);
+   161→      console.log(`  Rule Sets: ${config.ruleSets.length} active`);
+   162→      console.log(`  Trigger Mode: ${config.trigger.mode}`);
+   163→      console.log(`  Trigger Enabled: ${config.trigger.enabled}`);
+   164→      console.log(`  Position Size: ${config.trigger.defaultPositionSizeSol} SOL`);
+   165→      console.log(`  Poll Interval: ${config.pollIntervalMs}ms`);
+   166→      break;
+   167→    }
+   168→
+   169→    case 'mode': {
+   170→      const mode = args[1] as 'paper' | 'live';
+   171→      if (!mode || !['paper', 'live'].includes(mode)) {
+   172→        console.error('Usage: mode <paper|live>');
+   173→        process.exit(1);
+   174→      }
+   175→      configStore.setTriggerMode(mode);
+   176→      await configStore.save();
+   177→      console.log(`Set trigger mode to: ${mode}`);
+   178→      break;
+   179→    }
+   180→
+   181→    case 'size': {
+   182→      const size = parseFloat(args[1]);
+   183→      if (isNaN(size) || size <= 0) {
+   184→        console.error('Usage: size <sol_amount>');
+   185→        process.exit(1);
+   186→      }
+   187→      configStore.setPositionSize(size);
+   188→      await configStore.save();
+   189→      console.log(`Set default position size to: ${size} SOL`);
+   190→      break;
+   191→    }
+   192→
+   193→    case 'analyze': {
+   194→      const mint = args[1];
+   195→      if (!mint) {
+   196→        console.error('Usage: analyze <mint>');
+   197→        process.exit(1);
+   198→      }
+   199→
+   200→      const ruleSets = configStore.getRuleSets();
+   201→      if (ruleSets.length === 0) {
+   202→        console.error('No active rule sets. Use "use <template>" to add one.');
+   203→        process.exit(1);
+   204→      }
+   205→
+   206→      console.log(`\nAnalyzing ${mint}...`);
+   207→
+   208→      const engine = new RuleEngine({ api: localApi });
+   209→      for (const ruleSet of ruleSets) {
+   210→        engine.addRulesFromConfig(ruleSet.rules);
+   211→      }
+   212→
+   213→      const signals = await engine.analyzeToken(mint);
+   214→      const result = engine.aggregateSignals(signals);
+   215→
+   216→      console.log(`\nResult: ${result.action.toUpperCase()} (confidence: ${(result.confidence * 100).toFixed(0)}%)`);
+   217→
+   218→      if (signals.length > 0) {
+   219→        console.log('\nSignals:');
+   220→        for (const signal of signals) {
+   221→          const emoji = signal.type === 'buy' ? '🟢' : signal.type === 'sell' ? '🔴' : '⚪';
+   222→          console.log(`  ${emoji} ${signal.ruleName}: ${signal.reason}`);
+   223→        }
+   224→      } else {
+   225→        console.log('\nNo signals triggered');
+   226→      }
+   227→      break;
+   228→    }
+   229→
+   230→    case 'run': {
+   231→      console.log('Starting analysis loop... (Ctrl+C to stop)');
+   232→      // This will be implemented with the trigger system
+   233→      console.log('Run mode not yet implemented. Use "analyze <mint>" for now.');
+   234→      break;
+   235→    }
+   236→
+   237→    case 'help':
+   238→    default:
+   239→      console.log(HELP);
+   240→  }
+   241→}
+   242→
+   243→main().catch(console.error);
+   244→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

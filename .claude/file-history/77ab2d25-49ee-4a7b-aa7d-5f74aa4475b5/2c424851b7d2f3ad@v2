@@ -1,0 +1,114 @@
+// LLM-generated expansions for common search intents
+// These can be updated/expanded over time without code changes
+
+export interface SemanticSet {
+  id: string;
+  label: string;
+  description: string;
+  terms: string[]; // all terms that match this concept
+}
+
+export interface ThemeCategory {
+  id: string;
+  label: string;
+  description: string;
+  icon: string; // emoji for visual identification
+  semanticSetIds: string[]; // which semantic sets power this theme
+}
+
+export const SEMANTIC_SETS: SemanticSet[] = [
+  {
+    id: 'bug',
+    label: 'Bug/Issue',
+    description: 'Problems, errors, things not working',
+    terms: ['bug', 'broken', 'error', 'crash', 'issue', 'problem', 'not working',
+            'doesn\'t work', 'failed', 'failing', 'glitch', 'stuck', 'frozen',
+            'can\'t', 'unable to', 'won\'t', 'stopped working', 'broke']
+  },
+  {
+    id: 'feature',
+    label: 'Feature Request',
+    description: 'Wishes, suggestions, feature ideas',
+    terms: ['feature', 'wish', 'would be nice', 'should have', 'need', 'want',
+            'suggestion', 'idea', 'could you add', 'please add', 'missing',
+            'would love', 'hoping for', 'request', 'enhance', 'improvement']
+  },
+  {
+    id: 'frustration',
+    label: 'Frustration',
+    description: 'Negative sentiment, complaints',
+    terms: ['frustrating', 'annoying', 'hate', 'terrible', 'awful', 'worst',
+            'disappointed', 'upset', 'angry', 'ridiculous', 'unacceptable',
+            'useless', 'waste of time', 'give up', 'fed up', 'sick of']
+  },
+  {
+    id: 'praise',
+    label: 'Praise',
+    description: 'Positive feedback, appreciation',
+    terms: ['love', 'amazing', 'awesome', 'great', 'fantastic', 'perfect',
+            'thank you', 'thanks', 'appreciate', 'helpful', 'excellent',
+            'best', 'wonderful', 'brilliant', 'impressive', 'well done']
+  },
+  {
+    id: 'partnership',
+    label: 'Partnership/Business',
+    description: 'Business discussions, collaborations',
+    terms: ['partner', 'partnership', 'collaborate', 'collaboration', 'deal',
+            'business', 'opportunity', 'proposal', 'integration', 'api',
+            'enterprise', 'contract', 'agreement', 'work together']
+  },
+  {
+    id: 'competitor',
+    label: 'Competitor Mentions',
+    description: 'References to alternatives or competitors',
+    terms: ['competitor', 'alternative', 'instead', 'switch to', 'moved to',
+            'compared to', 'better than', 'worse than', 'vs', 'versus',
+            'other option', 'tried', 'using']
+  }
+];
+
+// Expand a search query using semantic sets
+export function expandQuery(query: string): string[] {
+  const lowerQuery = query.toLowerCase();
+  const expanded = new Set<string>([query]);
+
+  // Check if query matches any semantic set
+  for (const set of SEMANTIC_SETS) {
+    if (set.terms.some(term => lowerQuery.includes(term) || term.includes(lowerQuery))) {
+      set.terms.forEach(term => expanded.add(term));
+    }
+  }
+
+  return Array.from(expanded);
+}
+
+// Theme categories group multiple semantic sets for guided exploration
+export const THEME_CATEGORIES: ThemeCategory[] = [
+  {
+    id: 'product-feedback',
+    label: 'Product Feedback',
+    description: 'Features requested, bugs reported, frustrations, and praise',
+    icon: '💬',
+    semanticSetIds: ['feature', 'bug', 'frustration', 'praise']
+  },
+  {
+    id: 'business-intel',
+    label: 'Business Intel',
+    description: 'Partnerships mentioned and competitor discussions',
+    icon: '📊',
+    semanticSetIds: ['partnership', 'competitor']
+  }
+];
+
+// Get all terms for a theme category
+export function getThemeTerms(categoryId: string): string[] {
+  const category = THEME_CATEGORIES.find(c => c.id === categoryId);
+  if (!category) return [];
+
+  const terms: string[] = [];
+  for (const setId of category.semanticSetIds) {
+    const set = SEMANTIC_SETS.find(s => s.id === setId);
+    if (set) terms.push(...set.terms);
+  }
+  return [...new Set(terms)];
+}

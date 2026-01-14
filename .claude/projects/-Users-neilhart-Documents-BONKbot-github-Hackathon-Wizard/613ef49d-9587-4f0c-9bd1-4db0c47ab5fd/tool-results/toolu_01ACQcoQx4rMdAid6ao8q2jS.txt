@@ -1,0 +1,45 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/api/client.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+    69→    }
+    70→    return map;
+    71→  }
+    72→
+    73→  /**
+    74→   * Get OHLCV candlestick data for a token
+    75→   */
+    76→  async getOHLCV(mint: string, resolution: Resolution, options?: {
+    77→    startDate?: number;
+    78→    countback?: number;
+    79→  }): Promise<OHLCV[]> {
+    80→    let path = `/local-api/ohlcv/token/${mint}/${resolution}`;
+    81→    const params = new URLSearchParams();
+    82→
+    83→    // API requires start_date - calculate from countback if not provided
+    84→    if (options?.startDate) {
+    85→      params.set('start_date', options.startDate.toString());
+    86→    } else if (options?.countback) {
+    87→      // Calculate start_date based on resolution and countback
+    88→      const resolutionSeconds: Record<string, number> = {
+    89→        '1s': 1, '5s': 5, '15s': 15, '30s': 30,
+    90→        '1m': 60, '5m': 300, '15m': 900, '30m': 1800,
+    91→        '1h': 3600, '4h': 14400, '6h': 21600, '12h': 43200,
+    92→        '1d': 86400, '1w': 604800,
+    93→      };
+    94→      const seconds = resolutionSeconds[resolution] ?? 300; // default 5m
+    95→      const startDate = Math.floor(Date.now() / 1000) - (options.countback * seconds);
+    96→      params.set('start_date', startDate.toString());
+    97→    } else {
+    98→      // Default: last hour
+    99→      const startDate = Math.floor(Date.now() / 1000) - 3600;
+   100→      params.set('start_date', startDate.toString());
+   101→    }
+   102→
+   103→    if (options?.countback) params.set('countback', options.countback.toString());
+   104→
+   105→    if (params.toString()) path += `?${params}`;
+   106→
+   107→    return this.fetch<OHLCV[]>(path);
+   108→  }
+   109→
+   110→  /**
+   111→   * Get recent trades for a token
+   112→   */

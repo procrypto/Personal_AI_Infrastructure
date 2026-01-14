@@ -1,0 +1,95 @@
+# Phase 04: Topic Mode Usability
+
+## Goal
+Polish Topic Mode with filtering, sorting, export, and session persistence.
+
+## User Requirements
+
+### 1. Date Range Selection
+- Add date range picker above the guided themes and ad-hoc search blocks
+- Filter search results to only include messages within the selected date range
+- Use the existing DatePicker component (already used in Group/User modes)
+- Date range should apply to both theme searches and ad-hoc searches
+
+### 2. Filter Results by User/Group
+- After search results load, show filter controls
+- Filter by specific user(s) - multi-select from users in results
+- Filter by specific group(s) - multi-select from groups in results
+- Filters apply client-side to current results (no re-search needed)
+
+### 3. Sort Options
+Sort results by:
+- **Relevance** (default) - current score-based sorting
+- **Date** (newest/oldest first)
+- **Group name** (A-Z / Z-A)
+- **User name** (A-Z / Z-A)
+
+### 4. Export Search Results
+Once the user is satisfied with search results, provide download options:
+
+**ZIP Export containing:**
+- Individual JSON files per chat (only messages that matched)
+- A combined `all_results.json` file with ALL matched messages in chronological order
+
+**Export format for individual chat files:**
+```json
+{
+  "chatId": "123",
+  "chatName": "Chat Name",
+  "searchQuery": "bug, feature",
+  "searchMode": "and",
+  "dateRange": { "start": "2024-01-01", "end": "2024-12-31" },
+  "messages": [ /* matched messages */ ]
+}
+```
+
+**Export format for combined file:**
+```json
+{
+  "exportedAt": "2026-01-09T...",
+  "searchQuery": "bug, feature",
+  "searchMode": "and",
+  "dateRange": { "start": "2024-01-01", "end": "2024-12-31" },
+  "totalMatches": 150,
+  "messages": [
+    /* ALL matched messages from all chats, sorted chronologically */
+  ]
+}
+```
+
+### 5. Session Persistence
+- **Remember last loaded ZIP** - Store ZIP file reference (or re-prompt with filename hint)
+- **Remember search settings** - Persist to localStorage:
+  - Semantic expansion on/off
+  - AND/OR search mode
+  - Last date range used
+  - Last sort preference
+
+## Technical Context
+
+### Existing Infrastructure
+- `DatePicker` component already imported and styled in App.tsx
+- `JSZip` already available for ZIP creation
+- `downloadBlob` helper already exists
+- Search results stored in `searchResults: SearchResultWithContext`
+- Results include full message objects with dates
+- `localStorage` already used for mode persistence
+
+### Implementation Notes
+- Date filtering can happen in the worker (more efficient) or UI (simpler)
+- Worker already has access to message dates during search
+- Export should only include the currently displayed/filtered results
+- User/group filters are client-side post-processing of results
+- ZIP files can't be persisted in localStorage (too large), but can show "Load [filename] again?" prompt
+
+## Acceptance Criteria
+
+- [ ] Date range picker appears above search UI in Topic Mode
+- [ ] Searching with date range filters results to that range
+- [ ] Filter dropdowns for user and group appear with results
+- [ ] Sort dropdown with relevance/date/group/user options
+- [ ] "Export Results" button appears when search results exist
+- [ ] Export creates ZIP with individual chat files + combined chronological file
+- [ ] Export respects current filters (date, user, group)
+- [ ] Search settings persist across page reloads
+- [ ] Last loaded ZIP filename shown as hint for re-upload

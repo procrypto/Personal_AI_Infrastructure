@@ -1,0 +1,110 @@
+---
+phase: 06-backend-feed-consumption
+plan: 02
+type: execute
+---
+
+<objective>
+Add watchlist_feed handler and feed activity logging for debugging feed flow.
+
+Purpose: Enable frontend to control watchlist via WebSocket and provide visibility into feed activity.
+Output: watchlist_feed handler working, feed activity visible in logs.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior plan in this phase:
+@.planning/phases/06-backend-feed-consumption/06-01-SUMMARY.md
+
+# Key files:
+@src/websocket-server.ts
+@src/cli.ts
+
+**Tech stack available:** ws library, DataFeedMessage pattern
+**Established patterns:** Feed-to-storage bridge (trending_feed, whale_feed handlers)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add watchlist_feed handler to WebSocket server</name>
+  <files>src/websocket-server.ts</files>
+  <action>
+Add watchlist_feed support following the trending_feed/whale_feed pattern:
+1. Add WatchlistFeedItem interface: { mint: string; symbol: string; addedAt?: number }
+2. Add 'watchlist_feed' to DataFeedMessage union: { type: 'watchlist_feed'; tokens: WatchlistFeedItem[] }
+3. Add `watchlistTokens: Map<string, WatchlistFeedItem>` storage
+4. Update isDataFeedMessage() to include 'watchlist_feed'
+5. Handle in handleDataFeed switch: clear and repopulate watchlistTokens Map
+6. Add `getWatchlistFromFeed(): WatchlistFeedItem[]` getter
+7. Export WatchlistFeedItem type
+
+Follow exact pattern from trending_feed handler for consistency.
+  </action>
+  <verify>
+1. `npm run build` succeeds
+2. WatchlistFeedItem exported from websocket-server.ts
+  </verify>
+  <done>
+- WatchlistFeedItem interface defined and exported
+- watchlist_feed message type handled
+- watchlistTokens Map stores incoming data
+- getWatchlistFromFeed() returns current watchlist
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add feed activity logging to run loop</name>
+  <files>src/cli.ts</files>
+  <action>
+Add periodic feed activity summary logging:
+1. At start of runLoop, call wsServer.getFeedStats() to get feed activity
+2. Every 10 scans (scanCount % 10 === 0), log feed activity summary:
+   `[Feed] Activity: market=${countOrAge}, ohlcv=${countOrAge}, trending=${countOrAge}, whale=${countOrAge}`
+3. Format age as "Xs ago" or "Xm ago" for readability
+4. If all feeds are stale (>5m), log warning: `[Feed] WARNING: All feeds stale, using API polling`
+
+This provides debugging visibility without flooding logs on every scan.
+  </action>
+  <verify>
+1. `npm run build` succeeds
+2. `npm test` passes all tests
+3. Start run loop, verify feed activity logged every 10 scans
+  </verify>
+  <done>
+- Feed activity summary logged every 10 scans
+- Age formatted human-readable (Xs, Xm)
+- Warning shown when feeds are stale
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run build` succeeds without errors
+- [ ] `npm test` passes all 65 tests
+- [ ] watchlist_feed handler works correctly
+- [ ] Feed activity logging shows every 10 scans
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Phase 6 complete - ready for Phase 7 validation
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/06-backend-feed-consumption/06-02-SUMMARY.md` following the summary template.
+
+Final plan in phase - success criteria includes "Phase 6 complete".
+</output>

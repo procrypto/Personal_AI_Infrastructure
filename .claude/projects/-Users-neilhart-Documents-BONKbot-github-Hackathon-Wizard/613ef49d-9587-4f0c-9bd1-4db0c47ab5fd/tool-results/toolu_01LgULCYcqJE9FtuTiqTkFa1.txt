@@ -1,0 +1,145 @@
+     1→/**
+     2→ * Configuration Store
+     3→ *
+     4→ * Handles loading and saving user configuration.
+     5→ */
+     6→
+     7→import { readFile, writeFile, mkdir } from 'fs/promises';
+     8→import { existsSync } from 'fs';
+     9→import { join, dirname } from 'path';
+    10→import type { UserConfig, WatchlistToken, AutoSourceConfig, MarketFilterConfig } from './types.js';
+    11→import { DEFAULT_CONFIG } from './types.js';
+    12→import type { RuleSet } from '../rules/types.js';
+    13→
+    14→const CONFIG_DIR = join(process.cwd(), '.autopilot');
+    15→const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
+    16→
+    17→export class ConfigStore {
+    18→  private config: UserConfig;
+    19→
+    20→  constructor() {
+    21→    this.config = { ...DEFAULT_CONFIG };
+    22→  }
+    23→
+    24→  async load(): Promise<UserConfig> {
+    25→    try {
+    26→      if (existsSync(CONFIG_FILE)) {
+    27→        const data = await readFile(CONFIG_FILE, 'utf-8');
+    28→        this.config = { ...DEFAULT_CONFIG, ...JSON.parse(data) };
+    29→      }
+    30→    } catch (error) {
+    31→      console.warn('Failed to load config, using defaults:', error);
+    32→      this.config = { ...DEFAULT_CONFIG };
+    33→    }
+    34→    return this.config;
+    35→  }
+    36→
+    37→  async save(): Promise<void> {
+    38→    try {
+    39→      if (!existsSync(CONFIG_DIR)) {
+    40→        await mkdir(CONFIG_DIR, { recursive: true });
+    41→      }
+    42→      this.config.updatedAt = Date.now();
+    43→      await writeFile(CONFIG_FILE, JSON.stringify(this.config, null, 2));
+    44→    } catch (error) {
+    45→      console.error('Failed to save config:', error);
+    46→      throw error;
+    47→    }
+    48→  }
+    49→
+    50→  get(): UserConfig {
+    51→    return this.config;
+    52→  }
+    53→
+    54→  // Watchlist management
+    55→  addToWatchlist(mint: string, symbol?: string, name?: string): void {
+    56→    if (this.config.watchlist.some(t => t.mint === mint)) {
+    57→      return; // Already exists
+    58→    }
+    59→    this.config.watchlist.push({
+    60→      mint,
+    61→      symbol,
+    62→      name,
+    63→      addedAt: Date.now(),
+    64→    });
+    65→  }
+    66→
+    67→  removeFromWatchlist(mint: string): boolean {
+    68→    const index = this.config.watchlist.findIndex(t => t.mint === mint);
+    69→    if (index === -1) return false;
+    70→    this.config.watchlist.splice(index, 1);
+    71→    return true;
+    72→  }
+    73→
+    74→  getWatchlist(): WatchlistToken[] {
+    75→    return this.config.watchlist;
+    76→  }
+    77→
+    78→  // Rule set management
+    79→  addRuleSet(ruleSet: RuleSet): void {
+    80→    const existing = this.config.ruleSets.findIndex(r => r.id === ruleSet.id);
+    81→    if (existing !== -1) {
+    82→      this.config.ruleSets[existing] = ruleSet;
+    83→    } else {
+    84→      this.config.ruleSets.push(ruleSet);
+    85→    }
+    86→  }
+    87→
+    88→  removeRuleSet(id: string): boolean {
+    89→    const index = this.config.ruleSets.findIndex(r => r.id === id);
+    90→    if (index === -1) return false;
+    91→    this.config.ruleSets.splice(index, 1);
+    92→    return true;
+    93→  }
+    94→
+    95→  getRuleSets(): RuleSet[] {
+    96→    return this.config.ruleSets;
+    97→  }
+    98→
+    99→  // Trigger settings
+   100→  setTriggerMode(mode: 'paper' | 'live'): void {
+   101→    this.config.trigger.mode = mode;
+   102→  }
+   103→
+   104→  setTriggerEnabled(enabled: boolean): void {
+   105→    this.config.trigger.enabled = enabled;
+   106→  }
+   107→
+   108→  setPositionSize(sizeSol: number): void {
+   109→    this.config.trigger.defaultPositionSizeSol = sizeSol;
+   110→  }
+   111→
+   112→  getTriggerConfig() {
+   113→    return this.config.trigger;
+   114→  }
+   115→
+   116→  // Auto-source settings
+   117→  getAutoSourceConfig(): AutoSourceConfig {
+   118→    return this.config.autoSources;
+   119→  }
+   120→
+   121→  setAutoSourceEnabled(enabled: boolean): void {
+   122→    this.config.autoSources.enabled = enabled;
+   123→  }
+   124→
+   125→  setSourceEnabled(source: 'trending' | 'whales', enabled: boolean): void {
+   126→    this.config.autoSources[source] = enabled;
+   127→  }
+   128→
+   129→  // Market filter settings
+   130→  getMarketFilterConfig(): MarketFilterConfig {
+   131→    return this.config.marketFilter;
+   132→  }
+   133→
+   134→  setMarketFilterEnabled(enabled: boolean): void {
+   135→    this.config.marketFilter.enabled = enabled;
+   136→  }
+   137→}
+   138→
+   139→// Singleton instance
+   140→export const configStore = new ConfigStore();
+   141→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

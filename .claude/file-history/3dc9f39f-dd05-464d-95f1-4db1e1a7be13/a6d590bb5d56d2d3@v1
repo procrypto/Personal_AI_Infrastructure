@@ -1,0 +1,86 @@
+# GitHub Actions workflow for deploying to GCP Cloud Run
+# Triggers on version tag push (v*) for production deployments
+
+name: Deploy to Production
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  PROJECT_ID: data-backend-prod
+  REGION: us-central1
+  SERVICE: trenchbench-api
+  REPOSITORY: trenchbench-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Extract version from tag for image tagging
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+
+      # Authenticate to GCP using Workload Identity Federation
+      # No service account keys needed - more secure
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # TODO: Replace with your Production Workload Identity Provider
+          # Format: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID
+          workload_identity_provider: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github
+          # TODO: Replace with your production service account email
+          # This service account must have: Cloud Run Admin, Artifact Registry Writer, Service Account User
+          service_account: github-actions@data-backend-prod.iam.gserviceaccount.com
+
+      # Configure Docker to authenticate with Artifact Registry
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # Build container image
+      - name: Build container image
+        run: |
+          docker build \
+            --tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }} \
+            --tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ steps.version.outputs.VERSION }} \
+            --tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:latest \
+            .
+
+      # Push container image to Artifact Registry
+      - name: Push container image
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ steps.version.outputs.VERSION }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:latest
+
+      # Deploy to Cloud Run
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ steps.version.outputs.VERSION }}
+          # Environment variables for production
+          env_vars: |
+            APP_ENV=prod
+          # ClickHouse secrets from GCP Secret Manager
+          # TODO: Create these secrets in Secret Manager before first deploy
+          secrets: |
+            CLICKHOUSE_KEY_ID=CLICKHOUSE_KEY_ID:latest
+            CLICKHOUSE_KEY_SECRET=CLICKHOUSE_KEY_SECRET:latest
+            CLICKHOUSE_SERVICE_ID=CLICKHOUSE_SERVICE_ID:latest
+
+      # Output deployment URL and version
+      - name: Show deployment info
+        run: |
+          echo "Deployed version ${{ steps.version.outputs.VERSION }} to ${{ steps.deploy.outputs.url }}"

@@ -1,0 +1,59 @@
+/**
+ * Slack App Client
+ *
+ * Singleton pattern for Bolt App instance, authenticated via SLACK_BOT_TOKEN.
+ * Matches the singleton pattern from linear/client.ts for consistency.
+ *
+ * Usage:
+ *   const app = getSlackApp();
+ *   app.event('message', async ({ event }) => { ... });
+ *
+ * Note: Do NOT call app.start() - HTTP receiver handles via Vercel Functions.
+ */
+
+import { App, LogLevel } from '@slack/bolt';
+
+// ============================================================================
+// Singleton Implementation
+// ============================================================================
+
+let slackApp: App | null = null;
+
+/**
+ * Get the singleton Slack Bolt App instance.
+ * Creates the app on first call with environment credentials.
+ *
+ * @throws Error if SLACK_BOT_TOKEN or SLACK_SIGNING_SECRET are not configured
+ */
+export function getSlackApp(): App {
+  if (!slackApp) {
+    const token = process.env.SLACK_BOT_TOKEN;
+    const signingSecret = process.env.SLACK_SIGNING_SECRET;
+
+    if (!token) {
+      throw new Error(
+        'SLACK_BOT_TOKEN not configured. Set SLACK_BOT_TOKEN environment variable.'
+      );
+    }
+    if (!signingSecret) {
+      throw new Error(
+        'SLACK_SIGNING_SECRET not configured. Set SLACK_SIGNING_SECRET environment variable.'
+      );
+    }
+
+    slackApp = new App({
+      token,
+      signingSecret,
+      logLevel: process.env.NODE_ENV === 'production' ? LogLevel.INFO : LogLevel.DEBUG,
+    });
+  }
+  return slackApp;
+}
+
+/**
+ * Reset the singleton (for testing).
+ * Allows tests to reset state between test cases.
+ */
+export function resetSlackApp(): void {
+  slackApp = null;
+}

@@ -1,0 +1,1202 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
+import SolanaIcon from "@/assets/icons/solana.svg";
+import {
+  Bot,
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  Target,
+  ShieldAlert,
+  Clock,
+  Eye,
+  Flame,
+  Wallet,
+  Settings,
+  RefreshCw,
+  Power,
+  Layers,
+  CheckCircle2,
+  Circle,
+  X,
+  Bug,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Switch } from "@/components/switch";
+import { Tooltip } from "@/components/tooltip";
+import { useAutopilotSubscription } from "@/hooks/useSubscriptions/useAutopilotSubscription";
+import {
+  useAutopilotData,
+  useTokenSignalStrength,
+  type AutopilotPositionWithPnL,
+  type AutopilotTokenWithPrices,
+} from "@/hooks/useAutopilot";
+import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+import { usePersistentGlobalStore } from "@/store/persistentStore/usePersistentGlobalStore";
+import { useShallow } from "zustand/react/shallow";
+import type {
+  AutopilotMarketStatus,
+  AutopilotConfig,
+  AutopilotStrategies,
+  AutopilotStats,
+} from "@/store/memoryStore/slices/autopilot-store/types";
+import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+import { ScreenerTable } from "./autopilot-widget/screener-table";
+
+// Market Status Badge Component
+const MarketStatusBadge = ({ status }: { status: AutopilotMarketStatus }) => {
+  const stateConfig = {
+    NORMAL: {
+      color: "text-text-success",
+      icon: Activity,
+      label: "NORMAL",
+    },
+    CAUTION: {
+      color: "text-text-warning",
+      icon: AlertTriangle,
+      label: "CAUTION",
+    },
+    DUMP: {
+      color: "text-text-error",
+      icon: ShieldAlert,
+      label: "DUMP",
+    },
+  };
+
+  const config = stateConfig[status.state];
+  const Icon = config.icon;
+  const solPrice = status.solPriceUsd ?? 0;
+
+  return (
+    <div className="flex items-center gap-2">
+      {/* SOL Price Display */}
+      <div className="text-text-primary flex items-center gap-1 text-xs">
+        <SolanaIcon className="h-4 w-4" />
+        <span>${solPrice.toFixed(2)}</span>
+      </div>
+      {/* Change Indicator */}
+      <div className={cn("flex items-center gap-1", config.color)}>
+        <Icon className="h-3.5 w-3.5" />
+        <span className="text-xs font-semibold">
+          {Math.abs(status.solPriceChangePercent).toFixed(2)}%
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// Scan Countdown Component - shows live countdown to next scan
+const ScanCountdown = ({
+  scanTimestamp,
+  intervalMs,
+}: {
+  scanTimestamp: number | null;
+  intervalMs: number;
+}) => {
+  const [countdown, setCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (scanTimestamp === null) {
+      setCountdown(null);
+      return;
+    }
+
+    const calculateCountdown = () => {
+      const nextScanTime = scanTimestamp + intervalMs;
+      const remaining = Math.round((nextScanTime - Date.now()) / 1000);
+      return remaining;
+    };
+
+    // Initial calculation
+    setCountdown(calculateCountdown());
+
+    // Update every second
+    const intervalId = setInterval(() => {
+      setCountdown(calculateCountdown());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [scanTimestamp, intervalMs]);
+
+  if (scanTimestamp === null) {
+    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+  }
+
+  if (countdown === null) {
+    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+  }
+
+  if (countdown <= 0) {
+    return <span className="text-text-turbo text-[10px]">Scanning...</span>;
+  }
+
+  return (
+    <span className="text-text-secondary text-[10px]">Next: {countdown}s</span>
+  );
+};
+
+// Position Card Component - handles nullable P&L from NATS market data
+const PositionCard = ({ position }: { position: AutopilotPositionWithPnL }) => {
+  const isProfit = (position.pnlPercent ?? 0) >= 0;
+  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+  const hasMarketData = position.pnlPercent !== null;
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+      <div className="flex items-center gap-3">
+        <div
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+            hasMarketData
+              ? isProfit
+                ? "bg-bg-success-primary text-text-success"
+                : "bg-bg-error-primary text-text-error"
+              : "bg-bg-tertiary text-text-secondary"
+          )}
+        >
+          {hasMarketData ? (
+            isProfit ? (
+              <TrendingUp className="h-4 w-4" />
+            ) : (
+              <TrendingDown className="h-4 w-4" />
+            )
+          ) : (
+            <Activity className="h-4 w-4 animate-pulse" />
+          )}
+        </div>
+        <div>
+          <span className="text-text-primary text-sm font-medium">
+            ${position.symbol}
+          </span>
+          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+            <Clock className="h-3 w-3" />
+            {holdTime}m
+          </div>
+        </div>
+      </div>
+      <div className="text-right">
+        {hasMarketData ? (
+          <>
+            <div
+              className={cn(
+                "text-sm font-semibold",
+                isProfit ? "text-text-success" : "text-text-error"
+              )}
+            >
+              {isProfit ? "+" : ""}
+              {position.pnlPercent!.toFixed(2)}%
+            </div>
+            <div className="text-text-secondary text-[10px]">
+              {position.positionSizeSol.toFixed(2)} SOL
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="text-text-tertiary animate-pulse text-sm font-semibold">
+              Loading...
+            </div>
+            <div className="text-text-secondary text-[10px]">
+              {position.positionSizeSol.toFixed(2)} SOL
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Format market cap for display - shows readable values like "$234K" or "$1.2M"
+const formatMarketCap = (mcap: number | undefined): string => {
+  if (mcap === undefined) return "-";
+  if (mcap >= 1_000_000) return `$${(mcap / 1_000_000).toFixed(1)}M`;
+  if (mcap >= 1_000) return `$${(mcap / 1_000).toFixed(0)}K`;
+  return `$${mcap.toFixed(0)}`;
+};
+
+// Flash duration in ms - how long the bright flash lasts
+const FLASH_DURATION_MS = 100;
+
+// Map confluence count to background opacity (using brand palette)
+// Uses more of the 11 shade variations: 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950
+// Flash = 0.7 (brightest bg, text still readable), highest confluence = 0.5
+function getSignalOpacity(
+  confluenceCount: number,
+  isFlashing: boolean
+): number {
+  if (isFlashing) return 0.7; // 700 - brightest background under text
+  if (confluenceCount >= 6) return 0.5; // 500 - highest confluence
+  if (confluenceCount === 5) return 0.4; // 400
+  if (confluenceCount === 4) return 0.35; // between 300-400
+  if (confluenceCount === 3) return 0.3; // 300
+  if (confluenceCount === 2) return 0.2; // 200
+  if (confluenceCount === 1) return 0.1; // 100
+  return 0;
+}
+
+// Token Row Component with signal background indicators
+// Background color based on confluence count using brand palette
+const TokenRow = ({
+  token,
+  signalStrength,
+}: {
+  token: AutopilotTokenWithPrices;
+  signalStrength?: SignalStrength;
+}) => {
+  const change = token.change1h ?? 0;
+  const isPositive = change >= 0;
+
+  // Track flash state - when true, show brighter background
+  const [isFlashing, setIsFlashing] = useState(false);
+
+  // Time since last signal
+  const timeAgo = useTimeAgo(signalStrength?.latestTimestamp);
+
+  // Trigger flash when new signal arrives
+  useEffect(() => {
+    if (signalStrength?.isNew && signalStrength.type !== "none") {
+      setIsFlashing(true);
+      const timer = setTimeout(() => {
+        setIsFlashing(false);
+      }, FLASH_DURATION_MS);
+      return () => clearTimeout(timer);
+    }
+  }, [
+    signalStrength?.isNew,
+    signalStrength?.latestTimestamp,
+    signalStrength?.type,
+  ]);
+
+  // Calculate background style using brand colors
+  // Success (buy): --success-950 rgb(180, 229, 89)
+  // Error (sell): --error-950 (using standard error red)
+  const signalStyle = useMemo(() => {
+    if (!signalStrength || signalStrength.type === "none") {
+      return undefined;
+    }
+
+    const opacity = getSignalOpacity(
+      signalStrength.confluenceCount,
+      isFlashing
+    );
+
+    if (signalStrength.type === "buy") {
+      // Use success color from brand palette
+      return {
+        backgroundColor: `rgba(180, 229, 89, ${opacity})`,
+      };
+    } else {
+      // Use error color from brand palette
+      return {
+        backgroundColor: `rgba(239, 68, 68, ${opacity})`,
+      };
+    }
+  }, [signalStrength, isFlashing]);
+
+  // Determine if we have a signal background (affects base styling)
+  const hasSignalBg = signalStrength && signalStrength.type !== "none";
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+        // Smooth transition for background changes
+        "transition-colors duration-200",
+        // Only apply default bg if no signal and no position
+        !hasSignalBg && !token.hasPosition && "bg-bg-tertiary/30",
+        // Position styling takes precedence over signal
+        token.hasPosition &&
+          "border-border-turbo-primary bg-bg-turbo-primary border"
+      )}
+      style={!token.hasPosition ? signalStyle : undefined}
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-text-primary font-medium">${token.symbol}</span>
+        {token.hasPosition && (
+          <span className="text-text-turbo text-[8px] font-semibold">OPEN</span>
+        )}
+        {/* Signal stats: direction, count, time */}
+        {hasSignalBg && signalStrength && (
+          <span
+            className={cn(
+              "flex items-center gap-1 text-[9px]",
+              signalStrength.type === "buy"
+                ? "text-text-success"
+                : "text-text-error"
+            )}
+          >
+            {signalStrength.type === "buy" ? "▲" : "▼"}
+            <span className="font-semibold">
+              {signalStrength.confluenceCount}
+            </span>
+            <span className="text-text-tertiary">{timeAgo}</span>
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-text-secondary">
+          {formatMarketCap(token.marketCapUsd)}
+        </span>
+        <span
+          className={cn(
+            "font-medium",
+            isPositive ? "text-text-success" : "text-text-error"
+          )}
+        >
+          {isPositive ? "+" : ""}
+          {change.toFixed(1)}%
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// Token List Column Component - for three-column layout
+const TokenListColumn = ({
+  title,
+  icon: Icon,
+  tokens,
+  iconColor,
+  signalStrengthMap,
+}: {
+  title: string;
+  icon: React.ElementType;
+  tokens: AutopilotTokenWithPrices[];
+  iconColor: string;
+  signalStrengthMap: Map<string, SignalStrength>;
+}) => {
+  // Sort tokens: buy signals (green) first, sell signals (red) second, then rest
+  const sortedTokens = useMemo(() => {
+    return [...tokens].sort((a, b) => {
+      const sigA = signalStrengthMap.get(a.mint);
+      const sigB = signalStrengthMap.get(b.mint);
+
+      const typeA = sigA?.type ?? "none";
+      const typeB = sigB?.type ?? "none";
+
+      // Priority: buy (0) > sell (1) > none (2)
+      const priorityA = typeA === "buy" ? 0 : typeA === "sell" ? 1 : 2;
+      const priorityB = typeB === "buy" ? 0 : typeB === "sell" ? 1 : 2;
+
+      // Sort by signal type priority first
+      if (priorityA !== priorityB) return priorityA - priorityB;
+
+      // Within same type, sort by confluence count (higher first)
+      if (typeA !== "none" && typeB !== "none") {
+        const countA = sigA?.confluenceCount ?? 0;
+        const countB = sigB?.confluenceCount ?? 0;
+        if (countA !== countB) return countB - countA;
+      }
+
+      // For no-signal tokens, sort by hasPosition
+      if (a.hasPosition && !b.hasPosition) return -1;
+      if (!a.hasPosition && b.hasPosition) return 1;
+
+      return 0;
+    });
+  }, [tokens, signalStrengthMap]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="text-text-secondary mb-1.5 flex items-center gap-1.5 text-[10px] font-medium">
+        <Icon className={cn("h-3 w-3", iconColor)} />
+        {title} ({tokens.length})
+      </div>
+      {tokens.length === 0 ? (
+        <div className="text-text-tertiary border-border-primary/30 rounded border border-dashed p-2 text-center text-[10px]">
+          No tokens
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 space-y-1 overflow-auto">
+          {sortedTokens.map(token => (
+            <TokenRow
+              key={token.mint}
+              token={token}
+              signalStrength={signalStrengthMap.get(token.mint)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Draggable Hook for Settings Panel
+const useDraggable = () => {
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(
+    null
+  );
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const positionStartRef = useRef({ x: 0, y: 0 });
+  const elementRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const element = elementRef.current;
+      if (!element) return;
+
+      const rect = element.getBoundingClientRect();
+      const currentPos = position ?? { x: rect.left, y: rect.top };
+
+      setIsDragging(true);
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      positionStartRef.current = currentPos;
+
+      if (!position) {
+        setPosition(currentPos);
+      }
+    },
+    [position]
+  );
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - dragStartRef.current.x;
+      const deltaY = e.clientY - dragStartRef.current.y;
+      setPosition({
+        x: positionStartRef.current.x + deltaX,
+        y: positionStartRef.current.y + deltaY,
+      });
+    };
+
+    const handleMouseUp = () => setIsDragging(false);
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDragging]);
+
+  return { position, isDragging, handleMouseDown, elementRef };
+};
+
+// Settings Panel Component - draggable floating overlay
+const SettingsPanel = ({
+  isOpen,
+  onClose,
+  config,
+  strategies,
+  sendCommand,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  config: AutopilotConfig;
+  strategies: AutopilotStrategies;
+  sendCommand: (cmd: AutopilotCommand) => void;
+}) => {
+  const { position, isDragging, handleMouseDown, elementRef } = useDraggable();
+
+  if (!isOpen) return null;
+
+  const style = position
+    ? {
+        position: "fixed" as const,
+        left: position.x,
+        top: position.y,
+        zIndex: 9999,
+      }
+    : { position: "absolute" as const, right: 12, top: 48, zIndex: 50 };
+
+  const panel = (
+    <div
+      ref={elementRef}
+      className="bg-bg-secondary border-border-primary min-w-[200px] rounded-lg border shadow-xl"
+      style={style}
+    >
+      {/* Draggable Header */}
+      <div
+        className={cn(
+          "border-border-primary flex items-center justify-between border-b px-3 py-2",
+          isDragging ? "cursor-grabbing" : "cursor-grab"
+        )}
+        onMouseDown={handleMouseDown}
+      >
+        <span className="text-[10px] font-semibold tracking-wide text-white/60 uppercase select-none">
+          Settings
+        </span>
+        <button
+          onClick={onClose}
+          onMouseDown={e => e.stopPropagation()}
+          className="text-text-secondary hover:text-text-primary transition-colors"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Settings Content */}
+      <div className="space-y-2 p-3">
+        {/* Auto Sources Toggle */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Eye className="text-text-info h-3.5 w-3.5" />
+            <span className="text-[11px] text-white/70">Auto Sources</span>
+          </div>
+          <Switch
+            size="sm"
+            checked={config.autoSourcesEnabled}
+            onCheckedChange={checked =>
+              sendCommand({ command: "toggle_sources", enabled: checked })
+            }
+          />
+        </div>
+
+        {/* Sub-toggles when Auto Sources enabled */}
+        {config.autoSourcesEnabled && (
+          <>
+            <div className="flex items-center justify-between pl-4">
+              <div className="flex items-center gap-2">
+                <Flame className="text-orange h-3 w-3" />
+                <span className="text-[10px] text-white/50">Trending</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.trendingEnabled}
+                onCheckedChange={checked =>
+                  sendCommand({ command: "toggle_trending", enabled: checked })
+                }
+              />
+            </div>
+            <div className="flex items-center justify-between pl-4">
+              <div className="flex items-center gap-2">
+                <Wallet className="text-text-success h-3 w-3" />
+                <span className="text-[10px] text-white/50">Whale Moves</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.whalesEnabled}
+                onCheckedChange={checked =>
+                  sendCommand({ command: "toggle_whales", enabled: checked })
+                }
+              />
+            </div>
+          </>
+        )}
+
+        {/* Market Filter Toggle */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="text-purple h-3.5 w-3.5" />
+            <span className="text-[11px] text-white/70">Market Filter</span>
+          </div>
+          <Switch
+            size="sm"
+            checked={config.marketFilterEnabled}
+            onCheckedChange={checked =>
+              sendCommand({ command: "toggle_filter", enabled: checked })
+            }
+          />
+        </div>
+
+        {/* Refresh Sources Button */}
+        <button
+          onClick={() => sendCommand({ command: "refresh_sources" })}
+          className="flex w-full items-center justify-center gap-2 rounded bg-white/5 px-3 py-1.5 text-[11px] text-white/70 transition-colors hover:bg-white/10"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Refresh Sources
+        </button>
+
+        {/* Position Size Display */}
+        <div className="flex items-center justify-between border-t border-white/10 pt-2 text-[10px] text-white/50">
+          <span>Position Size</span>
+          <span>{config.positionSizeSol} SOL</span>
+        </div>
+
+        {/* Strategies section */}
+        <div className="border-t border-white/10 pt-2">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="h-3.5 w-3.5 text-white/60" />
+              <span className="text-[11px] font-medium text-white/70">
+                Strategies
+              </span>
+            </div>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[9px] font-semibold",
+                strategies.active.length > 0
+                  ? "bg-bg-success-primary text-text-success"
+                  : "bg-white/10 text-white/50"
+              )}
+            >
+              {strategies.active.length} ACTIVE
+            </span>
+          </div>
+          <div className="space-y-1">
+            {strategies.available.map(strategy => {
+              const isActive = new Set(strategies.active).has(strategy.id);
+              return (
+                <button
+                  key={strategy.id}
+                  onClick={() =>
+                    sendCommand({
+                      command: "toggle_strategy",
+                      strategyId: strategy.id,
+                      enabled: !isActive,
+                    })
+                  }
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors",
+                    isActive
+                      ? "bg-bg-success-primary text-text-success"
+                      : "bg-white/5 text-white/70 hover:bg-white/10"
+                  )}
+                >
+                  {isActive ? (
+                    <CheckCircle2 className="h-3 w-3 flex-shrink-0" />
+                  ) : (
+                    <Circle className="h-3 w-3 flex-shrink-0 text-white/40" />
+                  )}
+                  <span className="truncate text-[10px]">{strategy.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return position ? createPortal(panel, document.body) : panel;
+};
+
+// Stats Panel Component
+const StatsPanel = ({
+  stats,
+  unrealizedPnlSol,
+  hasOpenPositions,
+  onCloseAll,
+}: {
+  stats: AutopilotStats;
+  unrealizedPnlSol: number;
+  hasOpenPositions: boolean;
+  onCloseAll: () => void;
+}) => {
+  // Realized = lifetime total minus current unrealized
+  const realizedPnlSol = stats.totalPnlSol - unrealizedPnlSol;
+  const isRealizedProfit = realizedPnlSol >= 0;
+  const isUnrealizedProfit = unrealizedPnlSol >= 0;
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 flex items-center gap-2 rounded-lg border p-3">
+      <div className="grid flex-1 grid-cols-5 gap-2">
+        <div className="text-center">
+          <div className="text-text-primary text-lg font-bold">
+            {stats.closedTrades}
+          </div>
+          <div className="text-text-secondary text-[10px]">Trades</div>
+        </div>
+        <div className="text-center">
+          <div className="text-text-primary text-lg font-bold">
+            {(stats.winRate * 100).toFixed(0)}%
+          </div>
+          <div className="text-text-secondary text-[10px]">Win Rate</div>
+        </div>
+        <div className="text-center">
+          <div className="text-text-primary text-lg font-bold">
+            {stats.wins}W/{stats.losses}L
+          </div>
+          <div className="text-text-secondary text-[10px]">Record</div>
+        </div>
+        <div className="text-center">
+          <div
+            className={cn(
+              "text-lg font-bold",
+              isRealizedProfit ? "text-text-success" : "text-text-error"
+            )}
+          >
+            {isRealizedProfit ? "+" : ""}
+            {realizedPnlSol.toFixed(4)}
+          </div>
+          <div className="text-text-secondary text-[10px]">Realized</div>
+        </div>
+        <div className="text-center">
+          <div
+            className={cn(
+              "text-lg font-bold",
+              isUnrealizedProfit ? "text-text-success" : "text-text-error"
+            )}
+          >
+            {isUnrealizedProfit ? "+" : ""}
+            {unrealizedPnlSol.toFixed(4)}
+          </div>
+          <div className="text-text-secondary text-[10px]">Unrealized</div>
+        </div>
+      </div>
+      {/* Close All Button */}
+      <button
+        onClick={onCloseAll}
+        disabled={!hasOpenPositions}
+        className={cn(
+          "flex flex-col items-center justify-center self-center rounded px-2 py-1 text-[10px] transition-colors",
+          hasOpenPositions
+            ? "text-text-error hover:bg-bg-error-primary cursor-pointer"
+            : "text-text-tertiary cursor-not-allowed opacity-50"
+        )}
+      >
+        <Target className="h-4 w-4" />
+        <span>Close All</span>
+      </button>
+    </div>
+  );
+};
+
+// Section Header Component
+const SectionHeader = ({ children }: { children: React.ReactNode }) => (
+  <div className="text-text-tertiary mb-1.5 text-[10px] font-medium tracking-wide uppercase">
+    {children}
+  </div>
+);
+
+// Collapsible Section Component - follows ControlsPanel/StrategiesPanel pattern
+const CollapsibleSection = ({
+  title,
+  defaultExpanded = true,
+  children,
+}: {
+  title: string;
+  defaultExpanded?: boolean;
+  children: React.ReactNode;
+}) => {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  return (
+    <div
+      className={cn(
+        "flex flex-shrink-0 flex-col transition-opacity duration-200",
+        !expanded && "opacity-75"
+      )}
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={cn(
+          "flex cursor-pointer items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase transition-colors",
+          expanded
+            ? "text-text-tertiary hover:text-text-secondary mb-1.5"
+            : "text-text-tertiary/80 hover:text-text-secondary hover:border-border-primary/30 hover:bg-bg-tertiary/30 rounded border border-transparent px-1.5 py-1"
+        )}
+      >
+        <span
+          className={cn(
+            "text-[8px] transition-transform duration-200",
+            expanded ? "rotate-0" : "-rotate-90"
+          )}
+        >
+          ▼
+        </span>
+        {title}
+        {!expanded && (
+          <span className="text-text-tertiary/60 ml-auto text-[8px] font-normal normal-case">
+            click to expand
+          </span>
+        )}
+      </button>
+      <div
+        className={cn(
+          "grid transition-all duration-200",
+          expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="flex flex-col gap-2">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// DEBUG: Floating signal injection panel for testing glow effects
+// TODO: Remove before production
+const SignalDebugPanel = ({
+  isOpen,
+  onClose,
+  tokenList,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  tokenList: {
+    watchlist: AutopilotTokenWithPrices[];
+    trending: AutopilotTokenWithPrices[];
+    whales: AutopilotTokenWithPrices[];
+  };
+}) => {
+  const { position, isDragging, handleMouseDown, elementRef } = useDraggable();
+  const addSignal = useGlobalStore(state => state.autopilot.addSignal);
+
+  // Get all tokens for signal injection
+  const allTokens = useMemo(() => {
+    return [...tokenList.watchlist, ...tokenList.trending, ...tokenList.whales];
+  }, [tokenList]);
+
+  const injectSignal = useCallback(
+    (type: "buy" | "sell") => {
+      if (allTokens.length === 0) return;
+
+      // Pick a random token
+      const token = allTokens[Math.floor(Math.random() * allTokens.length)];
+
+      addSignal({
+        timestamp: Date.now(),
+        mint: token.mint,
+        symbol: token.symbol,
+        signalType: type === "buy" ? "magic_buy" : "magic_exit",
+        action: type === "buy" ? "buy" : "sell",
+        reason: `[DEBUG] Test ${type} signal`,
+      });
+    },
+    [allTokens, addSignal]
+  );
+
+  const injectMultipleSignals = useCallback(
+    (type: "buy" | "sell", count: number) => {
+      if (allTokens.length === 0) return;
+
+      // Pick a random token and add multiple signals to it
+      const token = allTokens[Math.floor(Math.random() * allTokens.length)];
+
+      for (let i = 0; i < count; i++) {
+        addSignal({
+          timestamp: Date.now() - i * 100, // Slightly stagger timestamps
+          mint: token.mint,
+          symbol: token.symbol,
+          signalType: type === "buy" ? "magic_buy" : "magic_exit",
+          action: type === "buy" ? "buy" : "sell",
+          reason: `[DEBUG] Test ${type} signal ${i + 1}/${count}`,
+        });
+      }
+    },
+    [allTokens, addSignal]
+  );
+
+  if (!isOpen) return null;
+
+  const style = position
+    ? {
+        position: "fixed" as const,
+        left: position.x,
+        top: position.y,
+        zIndex: 9999,
+      }
+    : { position: "absolute" as const, right: 12, top: 48, zIndex: 50 };
+
+  const panel = (
+    <div
+      ref={elementRef}
+      className="bg-bg-secondary border-border-primary min-w-[220px] rounded-lg border shadow-xl"
+      style={style}
+    >
+      {/* Draggable Header */}
+      <div
+        className={cn(
+          "border-border-primary flex items-center justify-between border-b px-3 py-2",
+          isDragging ? "cursor-grabbing" : "cursor-grab"
+        )}
+        onMouseDown={handleMouseDown}
+      >
+        <span className="text-text-warning text-[10px] font-semibold tracking-wide uppercase select-none">
+          Debug Signals
+        </span>
+        <button
+          onClick={onClose}
+          onMouseDown={e => e.stopPropagation()}
+          className="text-text-secondary hover:text-text-primary transition-colors"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Debug Content */}
+      <div className="space-y-3 p-3">
+        {/* Buy Signals */}
+        <div>
+          <div className="text-text-success mb-1.5 text-[9px] font-semibold uppercase">
+            Buy Signals
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {[1, 2, 3, 5, 10].map(n => (
+              <button
+                key={`buy-${n}`}
+                onClick={() =>
+                  n === 1
+                    ? injectSignal("buy")
+                    : injectMultipleSignals("buy", n)
+                }
+                className="bg-bg-success-primary text-text-success rounded px-2 py-0.5 text-[10px] hover:opacity-80"
+              >
+                +{n}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Sell Signals */}
+        <div>
+          <div className="text-text-error mb-1.5 text-[9px] font-semibold uppercase">
+            Sell Signals
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {[1, 2, 3, 5, 10].map(n => (
+              <button
+                key={`sell-${n}`}
+                onClick={() =>
+                  n === 1
+                    ? injectSignal("sell")
+                    : injectMultipleSignals("sell", n)
+                }
+                className="bg-bg-error-primary text-text-error rounded px-2 py-0.5 text-[10px] hover:opacity-80"
+              >
+                +{n}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Token count info */}
+        <div className="text-text-tertiary border-t border-white/10 pt-2 text-[9px]">
+          {allTokens.length} tokens available for injection
+        </div>
+      </div>
+    </div>
+  );
+
+  // Portal to document.body when dragged
+  return position ? createPortal(panel, document.body) : panel;
+};
+
+// Main Autopilot Widget Component
+export const AutopilotWidget = () => {
+  // Connect to autopilot backend and auto-subscribe to NATS market data
+  useAutopilotSubscription({ isEnabled: true });
+
+  // Get all autopilot data from Zustand store
+  const {
+    positions,
+    marketStatus,
+    stats,
+    scanTick,
+    tokenList,
+    config,
+    strategies,
+    isConnected,
+    sendCommand,
+    unrealizedPnlSol,
+  } = useAutopilotData();
+
+  // Get signal strength map for screener token glow indicators
+  const signalStrengthMap = useTokenSignalStrength();
+
+  // Settings panel state
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // DEBUG: Debug panel state (remove before production)
+  const [debugOpen, setDebugOpen] = useState(false);
+
+  const totalTokens =
+    tokenList.watchlist.length +
+    tokenList.trending.length +
+    tokenList.whales.length;
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-hidden">
+      {/* Header - Market Status */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot
+            className={cn(
+              "h-5 w-5",
+              isConnected ? "text-text-success" : "text-text-error"
+            )}
+          />
+          <span className="text-text-primary text-sm font-semibold">
+            Token Autopilot
+          </span>
+          {scanTick && (
+            <Tooltip
+              content={`Scan #${scanTick.scanNumber} analyzed ${totalTokens} tokens this cycle`}
+              side="bottom"
+            >
+              <span className="text-text-secondary cursor-help text-[10px]">
+                #{scanTick.scanNumber} · {totalTokens} tokens
+              </span>
+            </Tooltip>
+          )}
+          {isConnected && (
+            <>
+              <span className="text-text-tertiary text-[10px]">|</span>
+              <ScanCountdown
+                scanTimestamp={scanTick?.timestamp ?? null}
+                intervalMs={config.pollIntervalMs}
+              />
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {/* PAPER/LIVE mode badge */}
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+              config.mode === "paper"
+                ? "bg-bg-warning-primary text-text-warning"
+                : "bg-bg-success-primary text-text-success"
+            )}
+          >
+            {config.mode.toUpperCase()}
+          </span>
+
+          {/* Live Trading toggle with tooltip */}
+          <Tooltip
+            content="Live trading coming soon"
+            side="bottom"
+          >
+            <div className="flex cursor-not-allowed items-center gap-1.5 opacity-50">
+              <Power className="text-text-secondary h-3.5 w-3.5" />
+              <Switch
+                size="sm"
+                checked={false}
+                disabled
+              />
+            </div>
+          </Tooltip>
+
+          {/* DEBUG: Bug icon to open debug panel */}
+          <button
+            onClick={() => setDebugOpen(!debugOpen)}
+            className={cn(
+              "rounded p-1 transition-colors",
+              debugOpen
+                ? "text-text-warning bg-white/10"
+                : "text-text-tertiary hover:text-text-warning hover:bg-white/5"
+            )}
+          >
+            <Bug className="h-4 w-4" />
+          </button>
+
+          {/* Settings gear */}
+          <button
+            onClick={() => setSettingsOpen(!settingsOpen)}
+            disabled={!isConnected}
+            className={cn(
+              "rounded p-1 transition-colors",
+              settingsOpen
+                ? "text-text-primary bg-white/10"
+                : "text-text-secondary hover:text-text-primary hover:bg-white/5"
+            )}
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+
+          {/* Separator */}
+          <div className="bg-border-primary h-4 w-px" />
+
+          {/* Market status badge */}
+          <Tooltip
+            content="SOL price and market condition (change since widget opened)"
+            side="bottom"
+          >
+            <div className="cursor-help">
+              <MarketStatusBadge status={marketStatus} />
+            </div>
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* Connection Status - Always visible when disconnected */}
+      {!isConnected && (
+        <div className="bg-bg-warning-primary border-border-warning-primary flex items-center gap-2 rounded-lg border px-3 py-2">
+          <AlertTriangle className="text-text-warning h-4 w-4" />
+          <span className="text-text-warning text-xs">
+            Connecting to autopilot backend...
+          </span>
+        </div>
+      )}
+
+      {/* ═══ OPEN POSITIONS SECTION ═══ */}
+      {positions.length > 0 && (
+        <div className="flex flex-shrink-0 flex-col">
+          <SectionHeader>Open Positions ({positions.length})</SectionHeader>
+          <div className="max-h-40 space-y-2 overflow-auto">
+            {positions.map(pos => (
+              <PositionCard
+                key={pos.mint}
+                position={pos}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ PERFORMANCE SECTION ═══ */}
+      <CollapsibleSection
+        title="Performance"
+        defaultExpanded={true}
+      >
+        <StatsPanel
+          stats={stats}
+          unrealizedPnlSol={unrealizedPnlSol}
+          hasOpenPositions={positions.length > 0}
+          onCloseAll={() => sendCommand({ command: "close_all" })}
+        />
+      </CollapsibleSection>
+
+      {/* ═══ TOKEN WATCH SECTION ═══ (Three-column layout) */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
+        <SectionHeader>Screener</SectionHeader>
+
+        <div className="grid min-h-0 flex-1 grid-cols-3 gap-2 overflow-hidden">
+          {/* Watchlist Column */}
+          <TokenListColumn
+            title="Watchlist"
+            icon={Eye}
+            tokens={tokenList.watchlist}
+            iconColor="text-text-info"
+            signalStrengthMap={signalStrengthMap}
+          />
+
+          {/* Trending Column */}
+          <TokenListColumn
+            title="Trending"
+            icon={Flame}
+            tokens={tokenList.trending}
+            iconColor="text-orange"
+            signalStrengthMap={signalStrengthMap}
+          />
+
+          {/* Whale Moves Column */}
+          <TokenListColumn
+            title="Whales"
+            icon={Wallet}
+            tokens={tokenList.whales}
+            iconColor="text-text-success"
+            signalStrengthMap={signalStrengthMap}
+          />
+        </div>
+      </div>
+
+      {/* Settings Panel Overlay */}
+      <SettingsPanel
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        config={config}
+        strategies={strategies}
+        sendCommand={sendCommand}
+      />
+
+      {/* DEBUG: Signal Debug Panel Overlay - remove before production */}
+      <SignalDebugPanel
+        isOpen={debugOpen}
+        onClose={() => setDebugOpen(false)}
+        tokenList={tokenList}
+      />
+    </div>
+  );
+};
+
+export default AutopilotWidget;

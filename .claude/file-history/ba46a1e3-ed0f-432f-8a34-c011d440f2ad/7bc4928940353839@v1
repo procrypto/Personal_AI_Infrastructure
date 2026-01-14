@@ -1,0 +1,107 @@
+---
+phase: 07-validation-cleanup
+plan: 01
+subsystem: validation
+tags: [feeds, websocket, api-counter, cli, validation]
+
+# Dependency graph
+requires:
+  - phase: 06-backend-feed-consumption
+    provides: Feed handlers for ohlcv, trending, whale, watchlist
+provides:
+  - API call counter for tracking HTTP requests
+  - validate-feeds CLI command for programmatic health check
+  - Verified feed integration (market_data, cvd flowing)
+affects: [07-02-cleanup]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - Static API call counter pattern for tracking across instances
+
+key-files:
+  created: []
+  modified:
+    - src/api/client.ts
+    - src/cli.ts
+
+key-decisions:
+  - "60s freshness threshold for feed validation"
+  - "Exit code 0 for all feeds fresh, 1 otherwise"
+
+patterns-established:
+  - "ApiClient.getApiCallCount() for measuring zero-API achievement"
+
+issues-created: []
+
+# Metrics
+duration: 12min
+completed: 2026-01-09
+---
+
+# Phase 7 Plan 1: Feed Validation Summary
+
+**End-to-end feed validation confirmed with API call counter and validate-feeds CLI command for programmatic health checks**
+
+## Performance
+
+- **Duration:** 12 min
+- **Started:** 2026-01-09T21:25:00Z
+- **Completed:** 2026-01-09T21:37:00Z
+- **Tasks:** 3
+- **Files modified:** 2
+
+## Accomplishments
+
+- Verified end-to-end feed integration with frontend (market_data_feed, cvd_update flowing)
+- Added static API call counter to ApiClient with get/reset methods
+- Created validate-feeds CLI command showing feed freshness and API call count
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Verify feed integration** - Checkpoint (human verification)
+2. **Task 2: Add API call counter** - `a094e68` (feat)
+3. **Task 3: Add validate-feeds command** - `c9faa77` (feat)
+
+## Files Created/Modified
+
+- `src/api/client.ts` - Added static callCount, getApiCallCount(), resetApiCallCount()
+- `src/cli.ts` - Added validate-feeds command with feed status table and exit codes
+
+## Decisions Made
+
+- 60-second freshness threshold for all feeds in validation
+- Exit code semantics: 0 = all feeds fresh (zero-API achievable), 1 = stale or missing feeds
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+- Initially ran manual backend while frontend was running its own instance - feeds were going to frontend's backend, not the manual one
+- Resolution: Used frontend's backend instance for validation (Option A)
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions (FM7)
+
+**Notes:** Feed integration verified with real frontend connection showing market_data_feed and cvd_update flowing.
+
+## Next Phase Readiness
+
+- Feed validation tools in place (API counter, validate-feeds command)
+- Ready for Plan 2 (cleanup of redundant code)
+
+---
+*Phase: 07-validation-cleanup*
+*Completed: 2026-01-09*

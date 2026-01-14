@@ -1,0 +1,234 @@
+     1→/**
+     2→ * WebSocket Server for Frontend Integration
+     3→ *
+     4→ * Broadcasts live autopilot events to connected clients.
+     5→ */
+     6→
+     7→import { WebSocketServer, WebSocket } from 'ws';
+     8→import type { PaperTrade } from './trading/types.js';
+     9→
+    10→// Event types the frontend can receive
+    11→export type AutopilotEvent =
+    12→  | { type: 'position_update'; positions: PositionData[] }
+    13→  | { type: 'signal'; signal: SignalData }
+    14→  | { type: 'market_status'; status: MarketStatusData }
+    15→  | { type: 'stats_update'; stats: StatsData }
+    16→  | { type: 'scan_tick'; tick: ScanTickData }
+    17→  | { type: 'token_list'; tokens: TokenListData }
+    18→  | { type: 'config'; config: ConfigData };
+    19→
+    20→// Command types the frontend can send
+    21→export type AutopilotCommand =
+    22→  | { command: 'toggle_sources'; enabled: boolean }
+    23→  | { command: 'toggle_trending'; enabled: boolean }
+    24→  | { command: 'toggle_whales'; enabled: boolean }
+    25→  | { command: 'toggle_filter'; enabled: boolean }
+    26→  | { command: 'set_mode'; mode: 'paper' | 'live' }
+    27→  | { command: 'set_position_size'; sizeSol: number }
+    28→  | { command: 'refresh_sources' }
+    29→  | { command: 'get_config' };
+    30→
+    31→// Config state
+    32→export interface ConfigData {
+    33→  autoSourcesEnabled: boolean;
+    34→  trendingEnabled: boolean;
+    35→  whalesEnabled: boolean;
+    36→  marketFilterEnabled: boolean;
+    37→  mode: 'paper' | 'live';
+    38→  positionSizeSol: number;
+    39→  pollIntervalMs: number;
+    40→}
+    41→
+    42→export type CommandHandler = (command: AutopilotCommand) => Promise<void> | void;
+    43→
+    44→export interface PositionData {
+    45→  mint: string;
+    46→  symbol: string;
+    47→  action: 'buy' | 'sell';
+    48→  entryPriceSol: number;
+    49→  currentPriceSol: number;
+    50→  positionSizeSol: number;
+    51→  pnlPercent: number;
+    52→  pnlSol: number;
+    53→  entryTime: number;
+    54→}
+    55→
+    56→export interface SignalData {
+    57→  timestamp: number;
+    58→  mint: string;
+    59→  symbol: string;
+    60→  signalType: 'magic_buy' | 'magic_exit' | 'dump_exit' | 'rule_signal';
+    61→  action: 'buy' | 'sell' | 'close';
+    62→  reason: string;
+    63→  pnlPercent?: number;
+    64→  entryType?: string;
+    65→}
+    66→
+    67→export interface MarketStatusData {
+    68→  state: 'NORMAL' | 'CAUTION' | 'DUMP';
+    69→  solPriceChangePercent: number;
+    70→  blockEntries: boolean;
+    71→  exitAll: boolean;
+    72→}
+    73→
+    74→export interface StatsData {
+    75→  totalTrades: number;
+    76→  openTrades: number;
+    77→  closedTrades: number;
+    78→  wins: number;
+    79→  losses: number;
+    80→  winRate: number;
+    81→  totalPnlSol: number;
+    82→  totalPnlUsd: number;
+    83→  avgPnlPercent: number;
+    84→}
+    85→
+    86→export interface ScanTickData {
+    87→  timestamp: number;
+    88→  scanNumber: number;
+    89→  tokenCount: number;
+    90→  openPositions: number;
+    91→}
+    92→
+    93→export interface WatchedToken {
+    94→  mint: string;
+    95→  symbol: string;
+    96→  source: 'watchlist' | 'trending' | 'whales';
+    97→  priceSol?: number;
+    98→  priceUsd?: number;
+    99→  change1h?: number;
+   100→  change24h?: number;
+   101→  volume24h?: number;
+   102→  mcap?: number;
+   103→  hasPosition?: boolean;
+   104→}
+   105→
+   106→export interface TokenListData {
+   107→  watchlist: WatchedToken[];
+   108→  trending: WatchedToken[];
+   109→  whales: WatchedToken[];
+   110→}
+   111→
+   112→class AutopilotWebSocketServer {
+   113→  private wss: WebSocketServer | null = null;
+   114→  private clients: Set<WebSocket> = new Set();
+   115→  private port: number = 8765;
+   116→  private commandHandler: CommandHandler | null = null;
+   117→
+   118→  start(port: number = 8765): void {
+   119→    if (this.wss) {
+   120→      console.log('[WS] Server already running');
+   121→      return;
+   122→    }
+   123→
+   124→    this.port = port;
+   125→    this.wss = new WebSocketServer({ port });
+   126→
+   127→    this.wss.on('connection', (ws) => {
+   128→      this.clients.add(ws);
+   129→      console.log(`[WS] Client connected (${this.clients.size} total)`);
+   130→
+   131→      // Handle incoming messages (commands from frontend)
+   132→      ws.on('message', async (data) => {
+   133→        try {
+   134→          const message = JSON.parse(data.toString()) as AutopilotCommand;
+   135→          if (message.command && this.commandHandler) {
+   136→            console.log(`[WS] Command received: ${message.command}`);
+   137→            await this.commandHandler(message);
+   138→          }
+   139→        } catch (err) {
+   140→          console.error('[WS] Failed to parse command:', err);
+   141→        }
+   142→      });
+   143→
+   144→      ws.on('close', () => {
+   145→        this.clients.delete(ws);
+   146→        console.log(`[WS] Client disconnected (${this.clients.size} total)`);
+   147→      });
+   148→
+   149→      ws.on('error', (err) => {
+   150→        console.error('[WS] Client error:', err.message);
+   151→        this.clients.delete(ws);
+   152→      });
+   153→    });
+   154→
+   155→    this.wss.on('error', (err) => {
+   156→      console.error('[WS] Server error:', err.message);
+   157→    });
+   158→
+   159→    console.log(`[WS] Server started on port ${port}`);
+   160→  }
+   161→
+   162→  // Register a handler for incoming commands
+   163→  onCommand(handler: CommandHandler): void {
+   164→    this.commandHandler = handler;
+   165→  }
+   166→
+   167→  stop(): void {
+   168→    if (!this.wss) return;
+   169→
+   170→    for (const client of this.clients) {
+   171→      client.close();
+   172→    }
+   173→    this.clients.clear();
+   174→    this.wss.close();
+   175→    this.wss = null;
+   176→    console.log('[WS] Server stopped');
+   177→  }
+   178→
+   179→  broadcast(event: AutopilotEvent): void {
+   180→    if (this.clients.size === 0) return;
+   181→
+   182→    const message = JSON.stringify(event);
+   183→    for (const client of this.clients) {
+   184→      if (client.readyState === WebSocket.OPEN) {
+   185→        client.send(message);
+   186→      }
+   187→    }
+   188→  }
+   189→
+   190→  // Convenience methods for specific event types
+   191→  broadcastPositions(positions: PositionData[]): void {
+   192→    this.broadcast({ type: 'position_update', positions });
+   193→  }
+   194→
+   195→  broadcastSignal(signal: SignalData): void {
+   196→    this.broadcast({ type: 'signal', signal });
+   197→  }
+   198→
+   199→  broadcastMarketStatus(status: MarketStatusData): void {
+   200→    this.broadcast({ type: 'market_status', status });
+   201→  }
+   202→
+   203→  broadcastStats(stats: StatsData): void {
+   204→    this.broadcast({ type: 'stats_update', stats });
+   205→  }
+   206→
+   207→  broadcastScanTick(tick: ScanTickData): void {
+   208→    this.broadcast({ type: 'scan_tick', tick });
+   209→  }
+   210→
+   211→  broadcastTokenList(tokens: TokenListData): void {
+   212→    this.broadcast({ type: 'token_list', tokens });
+   213→  }
+   214→
+   215→  broadcastConfig(config: ConfigData): void {
+   216→    this.broadcast({ type: 'config', config });
+   217→  }
+   218→
+   219→  getClientCount(): number {
+   220→    return this.clients.size;
+   221→  }
+   222→
+   223→  isRunning(): boolean {
+   224→    return this.wss !== null;
+   225→  }
+   226→}
+   227→
+   228→// Singleton instance
+   229→export const wsServer = new AutopilotWebSocketServer();
+   230→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

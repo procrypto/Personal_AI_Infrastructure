@@ -1,0 +1,77 @@
+import type { Elysia } from "elysia";
+import { clickhouseQuery } from "../../clickhouse/client";
+import {
+    buildSearchTokenSql,
+    formatSearchTokenResponse,
+    validateSearchTokenRequest,
+} from "../../endpoints/generic/search_token";
+import type { ExtensionDefinition } from "../types";
+
+const EXTENSION_ID = "EXT_SEARCH_TOKEN_DETAILS";
+
+export const searchTokenDetailsExtension: ExtensionDefinition = {
+    metadata: {
+        extension_id: EXTENSION_ID,
+        ticket: "LOCAL-EXT-SEARCH-001",
+        rationale: "Provide extra convenience flags for token search results.",
+        owner_team: "data-eng",
+        owner_contact: "data-eng@example.com",
+        base_endpoint_id: "search_token",
+        base_method: "GET",
+        base_path: "/search/:mint",
+        ext_method: "GET",
+        ext_path: "/ext/search/:mint",
+        cost_tier: "same_result",
+        limits: { maxRows: 1, notes: "Reuses the base search token query." },
+    },
+    register: (app: Elysia) => {
+        app.get("/ext/search/:mint", async ({ params, set }) => {
+            const validated = validateSearchTokenRequest(params.mint);
+            if (!validated.ok) {
+                return validated;
+            }
+
+            const sql = buildSearchTokenSql(validated.input.mint);
+            const result = await clickhouseQuery(sql);
+
+            if (!result.success) {
+                return {
+                    ok: false,
+                    error: result.error,
+                };
+            }
+
+            // Response marker for extensions
+            set.headers["x-local-api-extension"] = EXTENSION_ID;
+
+            const baseResponse = formatSearchTokenResponse(result.data, validated.input.mint);
+
+            // Handle error case early (formatSearchTokenResponse always returns ok=true,
+            // but TypeScript needs this narrowing due to the union return type)
+            if (!baseResponse.ok) {
+                return baseResponse;
+            }
+
+            // Now TypeScript knows ok=true, so token property exists
+            const extPayload = baseResponse.token
+                ? {
+                      has_description: Boolean(baseResponse.token.description),
+                      has_image: Boolean(baseResponse.token.image),
+                      symbol_length: baseResponse.token.symbol?.length ?? 0,
+                  }
+                : {
+                      has_description: false,
+                      has_image: false,
+                      symbol_length: 0,
+                  };
+
+            return {
+                ...baseResponse,
+                ext: {
+                    [EXTENSION_ID]: extPayload,
+                },
+            };
+        });
+    },
+};
+

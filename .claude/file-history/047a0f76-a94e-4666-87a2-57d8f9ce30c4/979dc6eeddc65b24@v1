@@ -1,0 +1,135 @@
+/**
+ * Wallet Funding Endpoint
+ *
+ * Fetches funding sources for a specific wallet address.
+ *
+ * ⚠️  This fetches PRODUCTION data.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, escapeString, isSolanaPubkey } from "../../clickhouse/client";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type WalletFundingRequest = {
+    start_date?: string;
+    end_date?: string;
+};
+
+type FundingRow = {
+    address: string;
+    funding_source: string;
+    funding_amount_sol: string;
+    funding_amount_usd: string;
+    signature: string;
+    timestamp: string;
+    slot: string;
+};
+
+type WalletFundingResponse =
+    | { ok: true; funding: FundingRow[]; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerWalletFundingRoutes = (app: Elysia) => {
+    app.get("/wallet-funding/:address", async ({ params, query }) => {
+        const address = params.address;
+        const req = query as WalletFundingRequest;
+
+        const validation = validateWalletFundingRequest(address, req);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildWalletFundingSql(validation.address, validation.timeFilter);
+
+        console.log(`[wallet_funding] Querying funding for address=${address}`);
+
+        const result = await clickhouseQuery<FundingRow>(sql);
+
+        return formatWalletFundingResponse(result);
+    });
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+export const validateWalletFundingRequest = (
+    address: string,
+    req: WalletFundingRequest
+):
+    | { ok: true; address: string; timeFilter: string }
+    | { ok: false; error: string } => {
+    if (!isSolanaPubkey(address)) {
+        return {
+            ok: false,
+            error: "Invalid wallet address",
+        };
+    }
+
+    let timeFilter = "";
+    if (req.start_date) {
+        const startDate = parseInt(req.start_date, 10);
+        if (!isNaN(startDate)) {
+            timeFilter = `AND timestamp >= ${startDate}`;
+        }
+    }
+
+    if (req.end_date) {
+        const endDate = parseInt(req.end_date, 10);
+        const startDate = req.start_date ? parseInt(req.start_date, 10) : NaN;
+        if (!isNaN(startDate) && !isNaN(endDate)) {
+            timeFilter = `AND timestamp >= ${startDate} AND timestamp <= ${endDate}`;
+        }
+    }
+
+    return { ok: true, address, timeFilter };
+};
+
+export const buildWalletFundingSql = (address: string, timeFilter: string): string => {
+    return `
+        SELECT
+            any(address) as address,
+            funding_source,
+            sum(funding_amount_sol) as funding_amount_sol,
+            sum(funding_amount_usd) as funding_amount_usd,
+            argMax(signature, subquery.timestamp) as signature,
+            max(timestamp) as timestamp,
+            argMax(slot, subquery.timestamp) as slot
+        FROM (
+            SELECT address, funding_source, funding_amount_sol, funding_amount_usd, signature, timestamp, slot
+            FROM materializer_wallet_funding
+            WHERE address = '${escapeString(address)}'
+            ${timeFilter}
+            ORDER BY timestamp DESC
+        ) as subquery
+        GROUP BY funding_source
+    `;
+};
+
+export const formatWalletFundingResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<FundingRow>>>
+): WalletFundingResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    console.log(`[wallet_funding] Returned ${result.data.length} funding sources`);
+
+    return {
+        ok: true,
+        funding: result.data,
+        count: result.data.length,
+    };
+};
+
+

@@ -1,0 +1,207 @@
+/**
+ * Performance benchmark for SignalProcessor
+ *
+ * Validates sub-100ms signal generation latency requirement.
+ * Run with: npm test -- processor.benchmark
+ */
+
+import { describe, it, expect, beforeAll } from 'vitest';
+import { SignalProcessor } from './processor.js';
+import { RuleEngine } from '../rules/engine.js';
+import type { TokenMarketData, OHLCV } from '../api/types.js';
+
+// Realistic test fixtures
+function createRealisticMarketData(): TokenMarketData {
+  return {
+    mint: 'test1234567890abcdef'.toLowerCase(),
+    symbol: 'TEST',
+    name: 'Test Token',
+    price_sol: 0.00001234,
+    price_usd: 0.000247,
+    market_cap_sol: 12345.67,
+    market_cap_usd: 246913.40,
+    holders: '1234',
+    // Volume metrics
+    buy_volume_sol_5m: 45.67,
+    sell_volume_sol_5m: 23.45,
+    buy_volume_sol_1h: 234.56,
+    sell_volume_sol_1h: 123.45,
+    buy_volume_sol_6h: 1234.56,
+    sell_volume_sol_6h: 678.90,
+    buy_volume_sol_24h: 4567.89,
+    sell_volume_sol_24h: 2345.67,
+    volume_24h_sol: 6913.56,
+    // Buy/sell counts
+    buys_5m: 15,
+    buys_1h: 89,
+    buys_6h: 456,
+    buys_24h: 1234,
+    sells_5m: 8,
+    sells_1h: 45,
+    sells_6h: 234,
+    sells_24h: 678,
+    // Trader counts
+    buyers_5m: 12,
+    buyers_1h: 67,
+    buyers_6h: 234,
+    buyers_24h: 567,
+    sellers_5m: 6,
+    sellers_1h: 34,
+    sellers_6h: 123,
+    sellers_24h: 345,
+    traders_5m: 18,
+    traders_1h: 101,
+    traders_6h: 357,
+    traders_24h: 912,
+    // Price history
+    earliest_price_sol_5m: 0.00001200,
+    earliest_price_sol_1h: 0.00001100,
+    earliest_price_sol_6h: 0.00001000,
+    earliest_price_sol_24h: 0.00000900,
+    // Liquidity and supply
+    liquidity_sol: 5000,
+    liquidity_usd: 100000,
+    total_supply: 1000000000,
+    circulating_supply: 900000000,
+  };
+}
+
+function createOHLCVArray(count: number): OHLCV[] {
+  const baseTime = Date.now() - count * 60000; // 1 minute intervals
+  return Array.from({ length: count }, (_, i) => {
+    const basePrice = 0.00001 + Math.random() * 0.00001;
+    const variance = basePrice * 0.05; // 5% variance
+    return {
+      timestamp: baseTime + i * 60000,
+      open: basePrice,
+      high: basePrice + variance * Math.random(),
+      low: basePrice - variance * Math.random(),
+      close: basePrice + (Math.random() - 0.5) * variance,
+      volume: 100 + Math.random() * 900,
+    };
+  });
+}
+
+describe('SignalProcessor Performance Benchmark', () => {
+  let processor: SignalProcessor;
+  let realisticMarketData: TokenMarketData;
+  let ohlcv50: OHLCV[];
+
+  beforeAll(() => {
+    const engine = new RuleEngine();
+    processor = new SignalProcessor(engine, { enableMetrics: true });
+    realisticMarketData = createRealisticMarketData();
+    ohlcv50 = createOHLCVArray(50);
+  });
+
+  describe('Fast Path (processMarketData)', () => {
+    it('should process 100 iterations under target latency', () => {
+      const iterations = 100;
+      const timings: number[] = [];
+
+      // Warmup (2 iterations)
+      processor.processMarketData(realisticMarketData);
+      processor.processMarketData(realisticMarketData);
+      processor.resetMetrics();
+
+      // Benchmark
+      for (let i = 0; i < iterations; i++) {
+        const start = performance.now();
+        processor.processMarketData(realisticMarketData);
+        timings.push(performance.now() - start);
+      }
+
+      const metrics = processor.getMetrics();
+      const sortedTimings = [...timings].sort((a, b) => a - b);
+      const p99Index = Math.floor(iterations * 0.99);
+      const p99 = sortedTimings[p99Index];
+      const avg = timings.reduce((a, b) => a + b, 0) / iterations;
+
+      // Log results for visibility
+      console.log('\n--- Fast Path Results ---');
+      console.log(`Iterations: ${iterations}`);
+      console.log(`Average: ${avg.toFixed(3)}ms`);
+      console.log(`P99: ${p99.toFixed(3)}ms`);
+      console.log(`Internal avg: ${metrics.avgProcessingTimeMs.toFixed(3)}ms`);
+
+      // Assertions
+      expect(avg).toBeLessThan(10); // Target: avg < 10ms
+      expect(p99).toBeLessThan(100); // Target: P99 < 100ms
+    });
+  });
+
+  describe('Complex Path (processOHLCV)', () => {
+    it('should process 100 iterations with 50 candles under target latency', () => {
+      const iterations = 100;
+      const timings: number[] = [];
+      const mint = 'benchmark-test-mint';
+
+      // Warmup (2 iterations)
+      processor.processOHLCV(mint, ohlcv50, realisticMarketData);
+      processor.processOHLCV(mint, ohlcv50, realisticMarketData);
+      processor.resetMetrics();
+
+      // Benchmark
+      for (let i = 0; i < iterations; i++) {
+        const start = performance.now();
+        processor.processOHLCV(mint, ohlcv50, realisticMarketData);
+        timings.push(performance.now() - start);
+      }
+
+      const metrics = processor.getMetrics();
+      const sortedTimings = [...timings].sort((a, b) => a - b);
+      const p99Index = Math.floor(iterations * 0.99);
+      const p99 = sortedTimings[p99Index];
+      const avg = timings.reduce((a, b) => a + b, 0) / iterations;
+
+      // Log results for visibility
+      console.log('\n--- Complex Path Results ---');
+      console.log(`Iterations: ${iterations}`);
+      console.log(`OHLCV candles: 50`);
+      console.log(`Average: ${avg.toFixed(3)}ms`);
+      console.log(`P99: ${p99.toFixed(3)}ms`);
+      console.log(`Internal avg: ${metrics.avgProcessingTimeMs.toFixed(3)}ms`);
+
+      // Assertions
+      expect(avg).toBeLessThan(50); // Target: avg < 50ms
+      expect(p99).toBeLessThan(100); // Target: P99 < 100ms
+    });
+  });
+
+  describe('Combined Path Stress Test', () => {
+    it('should handle mixed workload under 100ms P99', () => {
+      const iterations = 50;
+      const timings: number[] = [];
+      const mint = 'stress-test-mint';
+
+      // Warmup
+      processor.processMarketData(realisticMarketData);
+      processor.processOHLCV(mint, ohlcv50, realisticMarketData);
+      processor.resetMetrics();
+
+      // Simulate realistic mixed workload
+      for (let i = 0; i < iterations; i++) {
+        const startFast = performance.now();
+        processor.processMarketData(realisticMarketData);
+        timings.push(performance.now() - startFast);
+
+        const startComplex = performance.now();
+        processor.processOHLCV(mint, ohlcv50, realisticMarketData);
+        timings.push(performance.now() - startComplex);
+      }
+
+      const sortedTimings = [...timings].sort((a, b) => a - b);
+      const p99Index = Math.floor(timings.length * 0.99);
+      const p99 = sortedTimings[p99Index];
+      const avg = timings.reduce((a, b) => a + b, 0) / timings.length;
+
+      console.log('\n--- Mixed Workload Results ---');
+      console.log(`Total operations: ${timings.length}`);
+      console.log(`Average: ${avg.toFixed(3)}ms`);
+      console.log(`P99: ${p99.toFixed(3)}ms`);
+
+      // Core requirement: sub-100ms
+      expect(p99).toBeLessThan(100);
+    });
+  });
+});

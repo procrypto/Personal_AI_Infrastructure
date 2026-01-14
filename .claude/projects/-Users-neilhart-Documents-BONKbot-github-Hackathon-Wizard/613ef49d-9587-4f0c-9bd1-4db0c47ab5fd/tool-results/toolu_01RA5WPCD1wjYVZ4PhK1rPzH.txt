@@ -1,0 +1,109 @@
+The file /Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   372→    </div>
+   373→  );
+   374→};
+   375→
+   376→// Main Autopilot Widget Component
+   377→export const AutopilotWidget = () => {
+   378→  const { positions, signals, marketStatus, stats, scanTick, tokenList, isConnected } = useAutopilotWebSocket();
+   379→
+   380→  const totalTokens = tokenList.watchlist.length + tokenList.trending.length + tokenList.whales.length;
+   381→
+   382→  return (
+   383→    <div className="flex h-full flex-col gap-3 overflow-hidden">
+   384→      {/* Header - Market Status */}
+   385→      <div className="flex items-center justify-between">
+   386→        <div className="flex items-center gap-2">
+   387→          <Bot className={cn("h-5 w-5", isConnected ? "text-green-400" : "text-red-400")} />
+   388→          <span className="text-text-primary text-sm font-semibold">Token Autopilot</span>
+   389→          {scanTick && (
+   390→            <span className="text-text-secondary text-[10px]">
+   391→              #{scanTick.scanNumber} | {totalTokens} tokens
+   392→            </span>
+   393→          )}
+   394→        </div>
+   395→        <MarketStatusBadge status={marketStatus} />
+   396→      </div>
+   397→
+   398→      {/* Connection Status (shown when disconnected) */}
+   399→      {!isConnected && (
+   400→        <div className="bg-yellow-500/10 border-yellow-500/30 flex items-center gap-2 rounded-lg border px-3 py-2">
+   401→          <AlertTriangle className="h-4 w-4 text-yellow-400" />
+   402→          <span className="text-xs text-yellow-400">Connecting to autopilot backend...</span>
+   403→        </div>
+   404→      )}
+   405→
+   406→      {/* Stats Panel */}
+   407→      <StatsPanel stats={stats} />
+   408→
+   409→      {/* Open Positions */}
+   410→      {positions.length > 0 && (
+   411→        <div className="flex-shrink-0">
+   412→          <div className="text-text-secondary mb-2 flex items-center gap-2 text-xs font-medium">
+   413→            <Target className="h-3.5 w-3.5" />
+   414→            Open Positions ({positions.length})
+   415→          </div>
+   416→          <div className="max-h-40 space-y-2 overflow-auto">
+   417→            {positions.map((pos) => (
+   418→              <PositionCard key={pos.mint} position={pos} />
+   419→            ))}
+   420→          </div>
+   421→        </div>
+   422→      )}
+   423→
+   424→      {/* Watched Token Lists - Main scrollable area */}
+   425→      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+   426→        {/* Watchlist */}
+   427→        <TokenListSection
+   428→          title="Watchlist"
+   429→          icon={Eye}
+   430→          tokens={tokenList.watchlist}
+   431→          iconColor="text-blue-400"
+   432→        />
+   433→
+   434→        {/* Trending */}
+   435→        <TokenListSection
+   436→          title="Trending"
+   437→          icon={Flame}
+   438→          tokens={tokenList.trending}
+   439→          iconColor="text-orange-400"
+   440→        />
+   441→
+   442→        {/* Whale Moves */}
+   443→        <TokenListSection
+   444→          title="Whale Moves"
+   445→          icon={Wallet}
+   446→          tokens={tokenList.whales}
+   447→          iconColor="text-green-400"
+   448→        />
+   449→
+   450→        {/* Empty state if no tokens */}
+   451→        {totalTokens === 0 && isConnected && (
+   452→          <div className="text-text-secondary border-border-primary/50 rounded-lg border border-dashed p-4 text-center text-xs">
+   453→            No tokens being watched. Enable auto-sources or add to watchlist.
+   454→          </div>
+   455→        )}
+   456→      </div>
+   457→
+   458→      {/* Signal Feed - Collapsible at bottom */}
+   459→      {signals.length > 0 && (
+   460→        <div className="flex-shrink-0 border-t border-border-primary/30 pt-2">
+   461→          <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+   462→            <Zap className="h-3.5 w-3.5" />
+   463→            Recent Signals
+   464→          </div>
+   465→          <div className="max-h-24 overflow-auto">
+   466→            <div className="space-y-0">
+   467→              {signals.slice(0, 5).map((signal, idx) => (
+   468→                <SignalItem key={`${signal.timestamp}-${idx}`} signal={signal} />
+   469→              ))}
+   470→            </div>
+   471→          </div>
+   472→        </div>
+   473→      )}
+   474→    </div>
+   475→  );
+   476→};
+   477→
+   478→export default AutopilotWidget;
+   479→

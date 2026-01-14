@@ -1,0 +1,46 @@
+/**
+ * Autopilot WebSocket Instance
+ *
+ * Singleton instance of the AutopilotWebsocket.
+ * URL is determined by environment:
+ * - Development: ws://localhost:8765
+ * - Production: wss://{host}/autopilot-ws (requires proxy setup)
+ */
+
+import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+import { usePersistentGlobalStore } from "@/store/persistentStore/usePersistentGlobalStore";
+import { AutopilotWebsocket } from "./AutopilotWebsocket";
+
+/**
+ * Determine autopilot WebSocket URL based on environment.
+ */
+const getAutopilotWsUrl = () => {
+  if (typeof window === "undefined") {
+    return "ws://localhost:8765";
+  }
+
+  // In production with HTTPS, use secure websocket through proxy
+  if (window.location.protocol === "https:") {
+    return `wss://${window.location.host}/autopilot-ws`;
+  }
+
+  // Development - direct connection to local autopilot
+  return "ws://localhost:8765";
+};
+
+export const autopilotWebsocket = new AutopilotWebsocket({
+  url: getAutopilotWsUrl(),
+  store: useGlobalStore,
+  persistentStore: usePersistentGlobalStore,
+});
+
+// Used for debugging
+if (typeof window !== "undefined") {
+  window.autopilotWebsocket = autopilotWebsocket;
+}
+
+declare global {
+  interface Window {
+    autopilotWebsocket: AutopilotWebsocket;
+  }
+}

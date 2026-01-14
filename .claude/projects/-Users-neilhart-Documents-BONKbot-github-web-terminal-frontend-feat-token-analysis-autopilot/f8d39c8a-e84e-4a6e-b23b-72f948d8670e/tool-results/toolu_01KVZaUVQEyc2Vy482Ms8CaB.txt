@@ -1,0 +1,84 @@
+     1→import type { BlacklistSubStore, BlacklistedToken } from "./types";
+     2→
+     3→const BLACKLIST_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+     4→
+     5→export const getBlacklistStore: BlacklistSubStore = (set, get) => ({
+     6→  blacklistedTokens: [],
+     7→  isOpenBlacklistSheet: false,
+     8→  toggleBlacklistSheet: (shouldOpen?: boolean) =>
+     9→    set(
+    10→      state => {
+    11→        state.blacklist.isOpenBlacklistSheet =
+    12→          shouldOpen ?? !state.blacklist.isOpenBlacklistSheet;
+    13→      },
+    14→      false,
+    15→      {
+    16→        type: "toggleBlacklistSheet",
+    17→        data: null,
+    18→      }
+    19→    ),
+    20→  addToBlacklist: mintAddress =>
+    21→    set(
+    22→      state => {
+    23→        // Check if token is already blacklisted
+    24→        const exists = state.blacklist.blacklistedTokens.some(
+    25→          (token: BlacklistedToken) => token.mintAddress === mintAddress
+    26→        );
+    27→        if (exists) return;
+    28→
+    29→        state.blacklist.blacklistedTokens.push({
+    30→          mintAddress,
+    31→          addedAt: Date.now(),
+    32→        });
+    33→      },
+    34→      false,
+    35→      {
+    36→        type: "addToBlacklist",
+    37→        data: mintAddress,
+    38→      }
+    39→    ),
+    40→
+    41→  removeFromBlacklist: mintAddress =>
+    42→    set(
+    43→      state => {
+    44→        state.blacklist.blacklistedTokens =
+    45→          state.blacklist.blacklistedTokens.filter(
+    46→            (token: BlacklistedToken) => token.mintAddress !== mintAddress
+    47→          );
+    48→      },
+    49→      false,
+    50→      {
+    51→        type: "removeFromBlacklist",
+    52→        data: mintAddress,
+    53→      }
+    54→    ),
+    55→
+    56→  isBlacklisted: mintAddress => {
+    57→    const state = get();
+    58→    return state.blacklist.blacklistedTokens.some(
+    59→      (token: BlacklistedToken) => token.mintAddress === mintAddress
+    60→    );
+    61→  },
+    62→
+    63→  cleanupBlacklist: () =>
+    64→    set(
+    65→      state => {
+    66→        const now = Date.now();
+    67→        state.blacklist.blacklistedTokens =
+    68→          state.blacklist.blacklistedTokens.filter(
+    69→            (token: BlacklistedToken) =>
+    70→              now - token.addedAt < BLACKLIST_EXPIRY_MS
+    71→          );
+    72→      },
+    73→      false,
+    74→      {
+    75→        type: "cleanupBlacklist",
+    76→        data: { timestamp: Date.now() },
+    77→      }
+    78→    ),
+    79→});
+    80→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

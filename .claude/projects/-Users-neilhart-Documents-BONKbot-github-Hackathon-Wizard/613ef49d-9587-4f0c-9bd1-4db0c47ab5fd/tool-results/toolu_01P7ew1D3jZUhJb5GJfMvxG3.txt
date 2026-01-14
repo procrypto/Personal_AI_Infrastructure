@@ -1,0 +1,96 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/README.md has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   290→  tslEnabled: false,      // Williams fractal trailing (TODO)
+   291→}
+   292→```
+   293→
+   294→### Run Loop Integration
+   295→
+   296→Magic exits are checked on every scan cycle:
+   297→
+   298→```
+   299→[time] #scan (count)  |  Magic: SYMBOL:+5.2%  |  New: ...  |  Open: ...
+   300→```
+   301→
+   302→- **Magic: SYMBOL:+X%** shows trades closed by magic exits with P&L
+   303→
+   304→---
+   305→
+   306→## Market Filter (SOL Dump Protection)
+   307→
+   308→Risk management system that monitors SOL price to protect against broad market dumps.
+   309→
+   310→### Why SOL?
+   311→
+   312→1. **Correlation**: Most Solana tokens are correlated with SOL price
+   313→2. **Liquidity**: SOL is the base pair - when SOL dumps, everything dumps
+   314→3. **Available**: SOL price is available through existing API
+   315→4. **Simple**: No need to track BTC, ETH, or complex correlations
+   316→
+   317→### State Machine
+   318→
+   319→```
+   320→                    ┌─────────────────────────────────────┐
+   321→                    │                                     │
+   322→                    ▼                                     │
+   323→   NORMAL ──(-3%)──► CAUTION ──(-5%)──► DUMP             │
+   324→      ▲                                   │               │
+   325→      │                                   │               │
+   326→      └─────────────(≥0%)─────────────────┘               │
+   327→```
+   328→
+   329→| State | 15m SOL Change | Action |
+   330→|-------|----------------|--------|
+   331→| NORMAL | > -3% | Trade normally |
+   332→| CAUTION | -3% to -5% | Skip new entries, keep existing |
+   333→| DUMP | < -5% | Exit all positions |
+   334→| Recovery | ≥ 0% | Resume normal operations |
+   335→
+   336→### Threshold Rationale
+   337→
+   338→Based on typical SOL volatility in 15m windows:
+   339→
+   340→| 15m Change | Frequency | Interpretation |
+   341→|------------|-----------|----------------|
+   342→| ±1-2% | Common | Normal volatility, noise |
+   343→| -3% | Occasional | Notable selling pressure |
+   344→| -5% | Uncommon | Significant dump, risk-off |
+   345→| -7%+ | Rare | Major event (news, hack) |
+   346→
+   347→### Configuration
+   348→
+   349→```typescript
+   350→{
+   351→  enabled: true,
+   352→  timeframeMinutes: 15,
+   353→  skipEntriesThreshold: -3,   // -3% = skip entries
+   354→  exitAllThreshold: -5,       // -5% = exit all
+   355→  recoveryThreshold: 0,       // 0% = resume when not bleeding
+   356→  exitDelayMs: 5000,          // 5s delay to confirm dump
+   357→}
+   358→```
+   359→
+   360→### CLI Commands
+   361→
+   362→```bash
+   363→filter              # Show market filter status
+   364→filter on           # Enable market filter
+   365→filter off          # Disable market filter
+   366→```
+   367→
+   368→### Run Loop Output
+   369→
+   370→When market filter is not in NORMAL state, it shows in output:
+   371→
+   372→```
+   373→[06:33:37] #1  |  SOL -3.5% [CAUTION]  |  No signals
+   374→[06:34:07] #2  |  SOL -5.2% [DUMP]  |  DumpExit: BONK:-2.1% TOKEN:-1.5%
+   375→[06:34:37] #3  |  SOL +0.3%  |  (45 tokens)  |  No signals
+   376→```
+   377→
+   378→---
+   379→
+   380→## Williams Fractal Trailing Stop (TODO)
+   381→
+   382→Planned feature: Trail stop loss to Williams fractal swing lows.
+   383→
+   384→### Algorithm

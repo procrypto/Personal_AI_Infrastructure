@@ -1,0 +1,243 @@
+/**
+ * Core user scanning logic extracted for testability.
+ * Simplified regex-based extraction for unit testing.
+ */
+
+export interface UserInfo {
+    userId: string;
+    displayName: string;
+    messageCount: number;
+}
+
+// Patterns for user extraction.
+export const PATTERNS = {
+    // from_id can be "user123456", "123456", or bare 123456.
+    fromId: /"from_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/g,
+    actorId: /"actor_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/g,
+    // Display names appear as "from": "Name" or "actor": "Name".
+    fromName: /"from"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g,
+    actorName: /"actor"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g,
+    // Messages array detection.
+    messagesStart: /"messages"\s*:\s*\[/,
+    // Message type detection (to filter out service messages).
+    typeMessage: /"type"\s*:\s*"message"/,
+};
+
+/**
+ * Extract user ID from a regex match.
+ */
+export function extractUserId(match: RegExpExecArray): string | null {
+    // Group 2: from "user123", Group 3: from "123", Group 4: from bare 123
+    return match[2] ?? match[3] ?? match[4] ?? null;
+}
+
+/**
+ * Extract display name from a regex match, handling escape sequences.
+ */
+export function extractDisplayName(match: RegExpExecArray): string {
+    return match[1].replace(/\\(.)/g, '$1');
+}
+
+/**
+ * Extract users from a complete JSON string using regex-based scanning.
+ * This matches the approach in the original scanProcess.
+ */
+export function scanJsonString(json: string): UserInfo[] {
+    const userMap = new Map<string, UserInfo>();
+
+    // Reset regex lastIndex for fresh search.
+    PATTERNS.fromId.lastIndex = 0;
+    PATTERNS.actorId.lastIndex = 0;
+    PATTERNS.fromName.lastIndex = 0;
+    PATTERNS.actorName.lastIndex = 0;
+
+    // Collect all user mentions with their positions.
+    const mentions: Array<{ pos: number; userId: string; isFromId: boolean }> = [];
+    const names: Array<{ pos: number; name: string; isFromName: boolean }> = [];
+
+    // Find from_id occurrences.
+    let match: RegExpExecArray | null;
+    while ((match = PATTERNS.fromId.exec(json)) !== null) {
+        const userId = extractUserId(match);
+        if (userId) {
+            mentions.push({ pos: match.index, userId, isFromId: true });
+        }
+    }
+
+    // Find actor_id occurrences.
+    while ((match = PATTERNS.actorId.exec(json)) !== null) {
+        const userId = extractUserId(match);
+        if (userId) {
+            mentions.push({ pos: match.index, userId, isFromId: false });
+        }
+    }
+
+    // Find from (display name) occurrences.
+    while ((match = PATTERNS.fromName.exec(json)) !== null) {
+        const name = extractDisplayName(match);
+        if (name.trim().length > 0) {
+            names.push({ pos: match.index, name, isFromName: true });
+        }
+    }
+
+    // Find actor (display name) occurrences.
+    while ((match = PATTERNS.actorName.exec(json)) !== null) {
+        const name = extractDisplayName(match);
+        if (name.trim().length > 0) {
+            names.push({ pos: match.index, name, isFromName: false });
+        }
+    }
+
+    // Sort by position to pair IDs with their nearby names.
+    mentions.sort((a, b) => a.pos - b.pos);
+    names.sort((a, b) => a.pos - b.pos);
+
+    // For each user ID, find the nearest matching name type.
+    for (const mention of mentions) {
+        if (!userMap.has(mention.userId)) {
+            // Find closest name of matching type (from→from_id, actor→actor_id).
+            let bestName = 'Unknown';
+            let bestDist = Infinity;
+
+            for (const n of names) {
+                // Match from with from_id, actor with actor_id.
+                if (mention.isFromId !== n.isFromName) {
+                    continue;
+                }
+                const dist = Math.abs(n.pos - mention.pos);
+                // Names should be within ~500 chars (same message object).
+                if (dist < bestDist && dist < 500) {
+                    bestDist = dist;
+                    bestName = n.name;
+                }
+            }
+
+            userMap.set(mention.userId, {
+                userId: mention.userId,
+                displayName: bestName,
+                messageCount: 0,
+            });
+        }
+    }
+
+    // Sort users alphabetically by display name.
+    return Array.from(userMap.values()).sort((a, b) =>
+        a.displayName.localeCompare(b.displayName),
+    );
+}
+
+/**
+ * Filter users to only those from actual messages (not service events).
+ * This helps filter out users who only appear in service messages.
+ */
+export function filterToMessageUsers(json: string, users: UserInfo[]): UserInfo[] {
+    // Find all positions where "type": "message" appears.
+    const messagePositions: number[] = [];
+    const typePattern = /"type"\s*:\s*"message"/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = typePattern.exec(json)) !== null) {
+        messagePositions.push(match.index);
+    }
+
+    if (messagePositions.length === 0) {
+        return [];
+    }
+
+    // For each user, check if their ID appears near a "type": "message"
+    const messageUsers = new Set<string>();
+
+    for (const user of users) {
+        // Check both from_id and actor_id patterns for this user
+        const userPatterns = [
+            new RegExp(`"from_id"\\s*:\\s*("user${user.userId}"|"${user.userId}"|${user.userId})`, 'g'),
+            new RegExp(`"actor_id"\\s*:\\s*("user${user.userId}"|"${user.userId}"|${user.userId})`, 'g'),
+        ];
+
+        for (const pattern of userPatterns) {
+            let userMatch: RegExpExecArray | null;
+            while ((userMatch = pattern.exec(json)) !== null) {
+                const userPos = userMatch.index;
+                // Check if this user mention is near a "type": "message"
+                for (const msgPos of messagePositions) {
+                    // The user ID should be within ~1000 chars of the type field (same message object)
+                    if (Math.abs(userPos - msgPos) < 1000) {
+                        messageUsers.add(user.userId);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return users.filter(u => messageUsers.has(u.userId));
+}
+
+// Re-export for backward compatibility with state machine approach
+export interface ScanState {
+    buffer: string;
+    inString: boolean;
+    escapeNext: boolean;
+    braceDepth: number;
+    bracketDepth: number;
+    inMessagesArray: boolean;
+    inMessage: boolean;
+    messageStartDepth: number;
+    currentUserId: string | null;
+    currentDisplayName: string | null;
+}
+
+export function createInitialState(): ScanState {
+    return {
+        buffer: '',
+        inString: false,
+        escapeNext: false,
+        braceDepth: 0,
+        bracketDepth: 0,
+        inMessagesArray: false,
+        inMessage: false,
+        messageStartDepth: 0,
+        currentUserId: null,
+        currentDisplayName: null,
+    };
+}
+
+export function processChunk(
+    chunk: string,
+    state: ScanState,
+    userMap: Map<string, UserInfo>,
+): ScanState {
+    state.buffer += chunk;
+
+    // For chunks, we use the same regex approach but on accumulated buffer.
+    const users = scanJsonString(state.buffer);
+    for (const user of users) {
+        if (!userMap.has(user.userId)) {
+            userMap.set(user.userId, user);
+        }
+    }
+
+    // Keep a tail for cross-chunk patterns.
+    if (state.buffer.length > 2048) {
+        state.buffer = state.buffer.slice(-2048);
+    }
+
+    return state;
+}
+
+export function finalizeScan(
+    state: ScanState,
+    userMap: Map<string, UserInfo>,
+): UserInfo[] {
+    // Process any remaining buffer.
+    const users = scanJsonString(state.buffer);
+    for (const user of users) {
+        if (!userMap.has(user.userId)) {
+            userMap.set(user.userId, user);
+        }
+    }
+
+    return Array.from(userMap.values()).sort((a, b) =>
+        a.displayName.localeCompare(b.displayName),
+    );
+}

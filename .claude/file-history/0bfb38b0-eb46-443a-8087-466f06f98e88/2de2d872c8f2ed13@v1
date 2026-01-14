@@ -1,0 +1,168 @@
+---
+phase: 01-environment-config
+plan: 02
+type: execute
+---
+
+<objective>
+Add environment-aware ClickHouse configuration with local dev flexibility.
+
+Purpose: Enable different ClickHouse instances per environment while preserving local workflow.
+Output: Config system that uses correct credentials per environment, with local data source switching.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/01-environment-config/01-CONTEXT.md
+@.planning/phases/01-environment-config/01-01-PLAN.md
+
+@.planning/codebase/STACK.md
+@.planning/codebase/ARCHITECTURE.md
+@.planning/codebase/CONVENTIONS.md
+
+@src/config.ts
+@src/clickhouse/client.ts
+@env.example
+
+**Deployment architecture (from PROJECT.md):**
+| Environment | ClickHouse Instance |
+|-------------|---------------------|
+| Local | Dev credentials (existing TBKM_* vars) |
+| Beta | Beta instance (bonkbotbeta GCP project) |
+| Production | Prod instance (data-backend-prod GCP project) |
+
+**Constraining decisions:**
+- Zero local disruption - TBKM_* vars continue working
+- Beta/prod credentials injected by GCP Secret Manager as env vars
+- Local can optionally switch data sources for testing
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add environment-aware credential loading</name>
+  <files>src/config.ts</files>
+  <action>
+Refactor ClickHouse credential loading to be environment-aware:
+
+1. Local (APP_ENV not set or "local"): Use existing TBKM_CLICKHOUSE_* vars (ZERO changes)
+2. Beta/Prod: Use generic CLICKHOUSE_* vars (KEY_ID, KEY_SECRET, SERVICE_ID)
+
+Pattern:
+```typescript
+const getClickHouseConfig = () => {
+    const env = getEnvironment();
+
+    if (env === "local") {
+        // Local: use existing TBKM_* vars (preserves current behavior)
+        return {
+            keyId: process.env.TBKM_CLICKHOUSE_KEY_ID ?? "",
+            keySecret: process.env.TBKM_CLICKHOUSE_KEY_SECRET ?? "",
+            serviceId: process.env.TBKM_CLICKHOUSE_SERVICE_ID ?? "",
+        };
+    }
+
+    // Beta/Prod: use generic vars (injected by GCP Secret Manager)
+    return {
+        keyId: process.env.CLICKHOUSE_KEY_ID ?? "",
+        keySecret: process.env.CLICKHOUSE_KEY_SECRET ?? "",
+        serviceId: process.env.CLICKHOUSE_SERVICE_ID ?? "",
+    };
+};
+```
+
+Update assertConfig() to check the correct vars based on environment.
+
+CRITICAL: Local development with TBKM_* vars must continue working exactly as before.
+  </action>
+  <verify>`bun dev` starts without changes to .env file. TypeScript compiles: `bun run typecheck`</verify>
+  <done>Local uses TBKM_* vars, beta/prod use generic CLICKHOUSE_* vars, both paths validated</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add ClickHouse connection logging</name>
+  <files>src/clickhouse/client.ts</files>
+  <action>
+Add startup logging to show which ClickHouse instance is configured:
+
+1. Import config at module level (already done)
+2. Add a one-time log when first query executes OR export an init function
+3. Log: `[ClickHouse] Connected to ${environment} instance (service: ${serviceId.slice(0,8)}...)`
+
+Use partial serviceId to avoid leaking full credentials while still being identifiable.
+
+Do NOT log credentials (keyId, keySecret).
+  </action>
+  <verify>Run `bun dev` and make a request - verify ClickHouse connection log appears</verify>
+  <done>First query logs environment and partial service ID</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Update env.example with environment documentation</name>
+  <files>env.example</files>
+  <action>
+Update env.example to document the environment configuration pattern:
+
+1. Add section explaining APP_ENV (optional for local, required for deployed)
+2. Keep TBKM_* vars as primary (local development)
+3. Add commented section showing beta/prod generic vars
+4. Add LOCAL_DATA_SOURCE option for future use (commented out)
+
+Structure:
+```
+# Environment (optional - defaults to "local")
+# APP_ENV=local
+
+# --- Local Development ---
+# These are used when APP_ENV is not set or "local"
+TBKM_CLICKHOUSE_KEY_ID=
+TBKM_CLICKHOUSE_KEY_SECRET=
+TBKM_CLICKHOUSE_SERVICE_ID=
+
+# --- Beta/Production (for reference) ---
+# These are injected by GCP Secret Manager when deployed
+# CLICKHOUSE_KEY_ID=
+# CLICKHOUSE_KEY_SECRET=
+# CLICKHOUSE_SERVICE_ID=
+```
+  </action>
+  <verify>File is valid, comments are clear, existing local workflow documented</verify>
+  <done>env.example documents both local and deployed credential patterns</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run typecheck` passes
+- [ ] `bun dev` works with existing .env file (zero changes required)
+- [ ] Local uses TBKM_* variables
+- [ ] `APP_ENV=beta` would use CLICKHOUSE_* variables
+- [ ] ClickHouse connection logging shows environment
+- [ ] env.example clearly documents both patterns
+</verification>
+
+<success_criteria>
+
+- Environment-aware credential loading implemented
+- Local development unchanged (TBKM_* vars)
+- Beta/prod ready for GCP Secret Manager injection
+- Clear documentation in env.example
+- Phase 1 complete - ready for Phase 2 (Containerization)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-environment-config/01-02-SUMMARY.md`
+
+Include:
+- Credential loading pattern (local vs deployed)
+- Environment variable names per environment
+- Next phase readiness confirmation
+</output>

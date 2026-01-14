@@ -1,0 +1,263 @@
+# QA Coordination Hub - Stakeholder Briefing
+
+<!--
+  GSD ARTIFACT: BRIEFING.md (Experimental)
+
+  PURPOSE: Stakeholder communication layer for GSD projects.
+  Synthesizes PROJECT.md + ROADMAP.md + STATE.md into meeting-friendly format.
+
+  TO UNWIND FROM GSD:
+  1. This file can be deleted without affecting project execution
+  2. No other GSD files depend on this artifact
+  3. All source data lives in PROJECT.md, ROADMAP.md, STATE.md
+  4. This is a presentation layer only - no authoritative data here
+
+  MAINTENANCE: Regenerate before meetings using /gsd:briefing (if we build that)
+  or manually update from source files.
+
+  Created: 2026-01-13
+  Pattern status: EXPERIMENTAL - evaluating for GSD core inclusion
+-->
+
+## The Problem We're Solving
+
+<!--
+  SECTION: Pain Point (for stakeholder empathy)
+  Source: PROJECT.md "Current pain point" section
+-->
+
+**Current state:** When Linear posts QA tickets to Slack, it's a free-for-all.
+
+- Testers don't know who should take what
+- Tickets sit unclaimed with no visibility
+- No way to see queue health at a glance
+- Work falls through the cracks
+
+**After this project:** Everyone knows what's in queue, who's working what, and nothing falls through the cracks.
+
+---
+
+## What You'll Get
+
+<!--
+  SECTION: Value Proposition (what stakeholders interact with)
+  Source: PROJECT.md Requirements + ROADMAP.md Phase details
+
+  Note: This section should be updated as phases complete.
+  Currently reflects full vision, not just completed work.
+-->
+
+### Pre-Release QA Flow (Phases 1-6)
+
+```
+Linear "QA:Mods" view → qa-tools detects → Replies in Slack thread → Smart assignment → You claim/pass/blocked
+```
+
+**What you'll see in Slack:**
+- Thread replies under Linear's native messages (no duplicate posts)
+- Block Kit UI with **Claim**, **Pass**, **Blocked** buttons
+- Assignment suggestions based on expertise, workload, history
+- Escalation warnings if tickets go stale (24h, 48h)
+
+**Commands you'll have:**
+| Command | What it does |
+|---------|--------------|
+| `/qa-queue` | See all open tickets and their status |
+| `/qa-claim [ticket]` | Claim a ticket for yourself |
+| `/qa-my-tickets` | See what's on your plate |
+
+### Ceremony QA Flow (Phase 7)
+
+```
+Deployment starts → Ceremony Tracker calls qa-tools → Checklist posted to channel → You complete checks → Callback to Ceremony Tracker
+```
+
+### Alert-Triggered QA (Phase 8)
+
+```
+Grafana alert fires → qa-tools receives webhook → Notifies appropriate tester → You investigate
+```
+
+---
+
+## Roadmap
+
+<!--
+  SECTION: Visual Roadmap (Mermaid)
+  Source: ROADMAP.md Phases section
+
+  Update this diagram when phases complete or roadmap changes.
+  Mermaid renders in GitHub, VS Code, and most markdown viewers.
+-->
+
+```mermaid
+gantt
+    title QA Coordination Hub Roadmap
+    dateFormat  YYYY-MM-DD
+
+    section Foundation
+    Phase 1: Data & KV & Events    :done, p1, 2026-01-07, 1d
+
+    section Linear Integration
+    Phase 2: Webhooks & Sync       :done, p2, after p1, 1d
+
+    section Slack Integration
+    Phase 3: Listener & Threads    :active, p3, after p2, 2d
+    Phase 4: Assignment Engine     :p4, after p3, 2d
+    Phase 5: Commands & Actions    :p5, after p4, 2d
+    Phase 6: Escalation & Routines :p6, after p5, 1d
+
+    section Extended Features
+    Phase 7: Ceremony QA           :p7, after p1, 3d
+    Phase 8: Alert-triggered QA    :p8, after p1, 3d
+```
+
+### Phase Summary
+
+<!--
+  SECTION: Phase details table
+  Source: ROADMAP.md Progress table + Phase Details
+-->
+
+| Phase | What It Delivers | Status |
+|-------|------------------|--------|
+| **1. Foundation** | Data model, storage, event system | Done |
+| **2. Linear Integration** | Webhook handler, tester sync | Done |
+| **3. Slack Listener & Threads** | Message capture, thread replies | **In Progress** |
+| **4. Assignment Engine** | Smart tester matching algorithm | Next |
+| **5. Commands & Actions** | Slash commands, button handlers | Planned |
+| **6. Escalation & Routines** | Stale warnings, morning summary | Planned |
+| **7. Ceremony QA** | Deployment coordination | Planned |
+| **8. Alert-triggered QA** | Grafana integration | Planned |
+
+---
+
+## Current Progress
+
+<!--
+  SECTION: Progress snapshot
+  Source: STATE.md Current Position + Performance Metrics
+-->
+
+**Overall:** 35% complete (7 of ~20 plans executed)
+
+**Currently blocked on:** Manual Slack/Vercel configuration for Phase 3 completion
+
+**Velocity:** Averaging 3 minutes per plan execution (very fast iteration)
+
+```
+Progress: ███░░░░░░░ 35%
+
+Phase 1: ██████████ Complete
+Phase 2: ██████████ Complete
+Phase 3: ██████░░░░ 67% (2/3 plans)
+Phase 4-8: ░░░░░░░░░░ Not started
+```
+
+---
+
+## Discussion Points
+
+<!--
+  SECTION: Meeting discussion prompts
+  Purpose: Gather stakeholder input, validate assumptions
+
+  These should be customized before each meeting based on:
+  - Current phase and upcoming decisions
+  - Known unknowns in the project
+  - Areas where stakeholder expertise is valuable
+-->
+
+### Validating Our Assumptions
+
+1. **Thread replies vs. new messages** - We're replying in threads under Linear's native Slack messages. Does this match how you'd want to interact, or would separate messages be better?
+
+2. **Assignment suggestions** - The system will suggest who should take a ticket based on expertise, workload, and history. Do you want:
+   - Hard assignments (system assigns, you can reassign)?
+   - Soft suggestions (system recommends, you claim)?
+   - No suggestions (first-come-first-served with visibility)?
+
+3. **Escalation timing** - Current plan is warnings at 24h and 48h for unclaimed tickets. Are these the right thresholds?
+
+### Understanding Your Workflow
+
+4. **Expertise areas** - What are the distinct expertise areas we should track? (e.g., frontend, API, payments, mobile, specific features)
+
+5. **Workload visibility** - What's a healthy number of concurrent tickets for a tester? When should the system consider someone "overloaded"?
+
+6. **Morning routine** - Would a daily summary post be useful? What time? What should it include?
+
+### Ceremony QA Specifics
+
+7. **Checklist format** - What does a deployment QA checklist look like today? Can you share an example?
+
+8. **Completion criteria** - How do you signal "QA complete" for a deployment today?
+
+### Future Ideas
+
+9. **What else would make your life easier?** Open floor for pain points we haven't addressed.
+
+---
+
+## Decisions Needed
+
+<!--
+  SECTION: Explicit decisions requiring stakeholder input
+  Purpose: Clear action items that need resolution
+
+  Update after meeting with decisions made.
+-->
+
+| Decision | Options | Impact | Decided |
+|----------|---------|--------|---------|
+| Assignment model | Hard / Soft / None | Affects Phase 4 design | Pending |
+| Escalation thresholds | 24h/48h or custom | Affects Phase 6 | Pending |
+| Expertise categories | List TBD | Affects assignment scoring | Pending |
+| Morning summary time | TBD | Affects Phase 6 | Pending |
+
+---
+
+## Next Steps
+
+<!--
+  SECTION: Action items
+  Update after meeting with agreed next steps
+-->
+
+**Before next meeting:**
+- [ ] Complete Phase 3 (Slack integration working end-to-end)
+- [ ] Demo thread reply functionality
+- [ ] Gather expertise categories from team
+
+**Decisions to make:**
+- [ ] Assignment model (hard/soft/none)
+- [ ] Escalation timing
+- [ ] Morning summary preferences
+
+---
+
+## Appendix: Technical Context
+
+<!--
+  SECTION: Technical details for reference
+  Source: PROJECT.md Constraints + Context
+
+  Keep brief - this is for context, not deep technical discussion
+-->
+
+**Stack:** TypeScript, Vercel Functions, Vercel KV, Slack Bolt SDK
+
+**Integrations:**
+- **Linear** - Webhook for "QA:Mods" view events, API for user sync
+- **Slack** - Events API for message capture, Web API for posting
+- **Ceremony Tracker** - Webhook receiver (Phase 7)
+- **Grafana** - Alerting webhook (Phase 8)
+
+**What this doesn't replace:**
+- Linear's native Slack integration (we reply in threads, not replace)
+- Your Playwright test automation (separate repo, you own it)
+- Any existing workflows (this adds visibility layer)
+
+---
+
+*Generated: 2026-01-13 | Source: .planning/PROJECT.md, ROADMAP.md, STATE.md*

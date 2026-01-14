@@ -1,0 +1,183 @@
+     1→/**
+     2→ * Rule Engine
+     3→ *
+     4→ * Orchestrates running analysis rules against token data.
+     5→ * Aggregates signals and determines final action.
+     6→ */
+     7→
+     8→import type { ApiClient } from '../api/client.js';
+     9→import type { Signal, Rule, RuleSet, AnalysisContext, AnyRuleConfig } from './types.js';
+    10→import { PriceChangeRule } from './price-change.js';
+    11→import { VolumeSpikeRule } from './volume-spike.js';
+    12→
+    13→export interface EngineConfig {
+    14→  api: ApiClient;
+    15→  defaultOhlcvResolution?: '1m' | '5m' | '15m';
+    16→  defaultOhlcvCountback?: number;
+    17→  defaultTradesLimit?: number;
+    18→}
+    19→
+    20→export class RuleEngine {
+    21→  private api: ApiClient;
+    22→  private rules: Rule[] = [];
+    23→  private ohlcvResolution: '1m' | '5m' | '15m';
+    24→  private ohlcvCountback: number;
+    25→  private tradesLimit: number;
+    26→
+    27→  constructor(config: EngineConfig) {
+    28→    this.api = config.api;
+    29→    this.ohlcvResolution = config.defaultOhlcvResolution ?? '5m';
+    30→    this.ohlcvCountback = config.defaultOhlcvCountback ?? 100;
+    31→    this.tradesLimit = config.defaultTradesLimit ?? 50;
+    32→  }
+    33→
+    34→  /**
+    35→   * Add a rule to the engine
+    36→   */
+    37→  addRule(rule: Rule): void {
+    38→    this.rules.push(rule);
+    39→  }
+    40→
+    41→  /**
+    42→   * Add rules from a config array
+    43→   */
+    44→  addRulesFromConfig(configs: AnyRuleConfig[]): void {
+    45→    for (const config of configs) {
+    46→      const rule = this.createRuleFromConfig(config);
+    47→      if (rule) this.rules.push(rule);
+    48→    }
+    49→  }
+    50→
+    51→  /**
+    52→   * Create a Rule instance from config
+    53→   */
+    54→  private createRuleFromConfig(config: AnyRuleConfig): Rule | null {
+    55→    switch (config.ruleType) {
+    56→      case 'price_change':
+    57→        return new PriceChangeRule(config);
+    58→      case 'volume_spike':
+    59→        return new VolumeSpikeRule(config);
+    60→      // Add more rule types here as they're implemented
+    61→      default:
+    62→        console.warn(`Unknown rule type: ${(config as any).ruleType}`);
+    63→        return null;
+    64→    }
+    65→  }
+    66→
+    67→  /**
+    68→   * Clear all rules
+    69→   */
+    70→  clearRules(): void {
+    71→    this.rules = [];
+    72→  }
+    73→
+    74→  /**
+    75→   * Get current rules
+    76→   */
+    77→  getRules(): Rule[] {
+    78→    return [...this.rules];
+    79→  }
+    80→
+    81→  /**
+    82→   * Analyze a single token
+    83→   */
+    84→  async analyzeToken(mint: string): Promise<Signal[]> {
+    85→    try {
+    86→      // Fetch all required data in parallel
+    87→      const [token, ohlcv, trades] = await Promise.all([
+    88→        this.api.getMarketData(mint),
+    89→        this.api.getOHLCV(mint, this.ohlcvResolution, { countback: this.ohlcvCountback }),
+    90→        this.api.getTrades(mint, this.tradesLimit),
+    91→      ]);
+    92→
+    93→      const context: AnalysisContext = { token, ohlcv, trades };
+    94→
+    95→      // Run all rules
+    96→      const signals: Signal[] = [];
+    97→      for (const rule of this.rules) {
+    98→        try {
+    99→          const signal = rule.analyze(context);
+   100→          if (signal) {
+   101→            signals.push(signal);
+   102→          }
+   103→        } catch (error) {
+   104→          console.error(`Rule ${rule.config.id} failed:`, error);
+   105→        }
+   106→      }
+   107→
+   108→      return signals;
+   109→    } catch (error) {
+   110→      console.error(`Failed to analyze token ${mint}:`, error);
+   111→      return [];
+   112→    }
+   113→  }
+   114→
+   115→  /**
+   116→   * Analyze multiple tokens
+   117→   */
+   118→  async analyzeTokens(mints: string[]): Promise<Map<string, Signal[]>> {
+   119→    const results = new Map<string, Signal[]>();
+   120→
+   121→    // Process in parallel with concurrency limit
+   122→    const concurrency = 5;
+   123→    for (let i = 0; i < mints.length; i += concurrency) {
+   124→      const batch = mints.slice(i, i + concurrency);
+   125→      const batchResults = await Promise.all(
+   126→        batch.map(mint => this.analyzeToken(mint).then(signals => ({ mint, signals })))
+   127→      );
+   128→
+   129→      for (const { mint, signals } of batchResults) {
+   130→        results.set(mint, signals);
+   131→      }
+   132→    }
+   133→
+   134→    return results;
+   135→  }
+   136→
+   137→  /**
+   138→   * Aggregate signals and determine final action
+   139→   */
+   140→  aggregateSignals(signals: Signal[], mode: 'all' | 'any' = 'any'): {
+   141→    action: 'buy' | 'sell' | 'hold';
+   142→    confidence: number;
+   143→    signals: Signal[];
+   144→  } {
+   145→    if (signals.length === 0) {
+   146→      return { action: 'hold', confidence: 0, signals: [] };
+   147→    }
+   148→
+   149→    const buySignals = signals.filter(s => s.type === 'buy');
+   150→    const sellSignals = signals.filter(s => s.type === 'sell');
+   151→
+   152→    if (mode === 'all') {
+   153→      // All signals must agree
+   154→      if (buySignals.length === signals.length) {
+   155→        const avgStrength = buySignals.reduce((sum, s) => sum + s.strength, 0) / buySignals.length;
+   156→        return { action: 'buy', confidence: avgStrength, signals: buySignals };
+   157→      }
+   158→      if (sellSignals.length === signals.length) {
+   159→        const avgStrength = sellSignals.reduce((sum, s) => sum + s.strength, 0) / sellSignals.length;
+   160→        return { action: 'sell', confidence: avgStrength, signals: sellSignals };
+   161→      }
+   162→      return { action: 'hold', confidence: 0, signals };
+   163→    }
+   164→
+   165→    // 'any' mode - majority wins
+   166→    if (buySignals.length > sellSignals.length) {
+   167→      const avgStrength = buySignals.reduce((sum, s) => sum + s.strength, 0) / buySignals.length;
+   168→      return { action: 'buy', confidence: avgStrength, signals: buySignals };
+   169→    }
+   170→    if (sellSignals.length > buySignals.length) {
+   171→      const avgStrength = sellSignals.reduce((sum, s) => sum + s.strength, 0) / sellSignals.length;
+   172→      return { action: 'sell', confidence: avgStrength, signals: sellSignals };
+   173→    }
+   174→
+   175→    // Tie - hold
+   176→    return { action: 'hold', confidence: 0, signals };
+   177→  }
+   178→}
+   179→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

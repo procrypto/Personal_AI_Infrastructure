@@ -1,0 +1,117 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/templates.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   137→    },
+   138→  ],
+   139→};
+   140→
+   141→/**
+   142→ * Retail Interest Template
+   143→ *
+   144→ * Looks for tokens gaining retail attention:
+   145→ * - High unique trader count
+   146→ * - More buyers than sellers
+   147→ */
+   148→export const retailInterestTemplate: RuleSet = {
+   149→  id: 'retail-interest',
+   150→  name: 'Retail Interest',
+   151→  description: 'Triggers on high retail participation',
+   152→  mode: 'all',
+   153→  rules: [
+   154→    {
+   155→      id: 'retail-traders',
+   156→      name: 'Active Traders',
+   157→      description: 'Many unique traders',
+   158→      enabled: true,
+   159→      type: 'both',
+   160→      ruleType: 'trader_count',
+   161→      timeframe: '5m',
+   162→      minTraders: 50,
+   163→      minBuyers: 30,
+   164→    },
+   165→    {
+   166→      id: 'retail-pressure',
+   167→      name: 'Buyer Majority',
+   168→      description: 'More buyers than sellers',
+   169→      enabled: true,
+   170→      type: 'buy',
+   171→      ruleType: 'buy_sell_ratio',
+   172→      timeframe: '5m',
+   173→      minRatio: 1.2,
+   174→    },
+   175→  ],
+   176→};
+   177→
+   178→/**
+   179→ * Rotations S/R Template
+   180→ *
+   181→ * Market structure based trading using candlestick rotations:
+   182→ * - Detects break of structure (new rotations)
+   183→ * - Identifies pullbacks to support/resistance
+   184→ * - Catches false breakouts (SFP patterns)
+   185→ *
+   186→ * Based on Rotations v1.5.2 indicator
+   187→ */
+   188→export const rotationsTemplate: RuleSet = {
+   189→  id: 'rotations',
+   190→  name: 'Rotations S/R',
+   191→  description: 'Market structure via candlestick rotations - BOS, pullbacks, SFP',
+   192→  mode: 'any',
+   193→  rules: [
+   194→    {
+   195→      id: 'rotations-default',
+   196→      name: 'Rotations S/R',
+   197→      description: 'Detects rotation changes, pullbacks, and false breakouts',
+   198→      enabled: true,
+   199→      type: 'both',
+   200→      ruleType: 'rotations',
+   201→      levelBuffer: 0.5, // 0.5% buffer for "at level" detection
+   202→      requireHtfAlignment: false, // Set to true for more conservative signals
+   203→      signalOnRotation: true, // Signal on new up/down rotations
+   204→      signalOnPullback: true, // Signal on pullback to support/resistance
+   205→      signalOnSFP: true, // Signal on false breakouts
+   206→    },
+   207→  ],
+   208→};
+   209→
+   210→/**
+   211→ * Rotations Conservative Template
+   212→ *
+   213→ * Same as rotations but only signals on new structure breaks.
+   214→ * More selective, fewer signals.
+   215→ */
+   216→export const rotationsConservativeTemplate: RuleSet = {
+   217→  id: 'rotations-conservative',
+   218→  name: 'Rotations (Conservative)',
+   219→  description: 'Only signals on structure breaks - fewer, higher quality signals',
+   220→  mode: 'any',
+   221→  rules: [
+   222→    {
+   223→      id: 'rotations-conservative',
+   224→      name: 'Rotations (BOS Only)',
+   225→      description: 'Only triggers on break of structure',
+   226→      enabled: true,
+   227→      type: 'both',
+   228→      ruleType: 'rotations',
+   229→      levelBuffer: 0.5,
+   230→      requireHtfAlignment: false,
+   231→      signalOnRotation: true,
+   232→      signalOnPullback: false,
+   233→      signalOnSFP: false,
+   234→    },
+   235→  ],
+   236→};
+   237→
+   238→/**
+   239→ * All available templates
+   240→ */
+   241→export const templates: Record<string, RuleSet> = {
+   242→  'momentum-buy': momentumBuyTemplate,
+   243→  'momentum-sell': momentumSellTemplate,
+   244→  'volume-alert': volumeAlertTemplate,
+   245→  'retail-interest': retailInterestTemplate,
+   246→  'rotations': rotationsTemplate,
+   247→  'rotations-conservative': rotationsConservativeTemplate,
+   248→};
+   249→
+   250→/**
+   251→ * Get a template by ID
+   252→ */

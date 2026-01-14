@@ -1,0 +1,239 @@
+---
+phase: 22-watchlist-style-screener-volume-trends
+plan: 03
+type: execute
+---
+
+<objective>
+Create volume trend scoring system and integrate into screener display.
+
+Purpose: Add volume trend analysis (15m/6h ratio, buy/sell momentum) as an additional signal indicator.
+Output: useVolumeTrendScore hook and VolumeTrendCell displaying trend indicators in screener.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/phases/22-watchlist-style-screener-volume-trends/22-01-SUMMARY.md
+@.planning/phases/22-watchlist-style-screener-volume-trends/22-02-SUMMARY.md
+
+# Existing signal strength pattern to follow
+
+@apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts
+
+# Volume data available in TradingStats
+
+# trading_stats_5m, trading_stats_1h, trading_stats_6h each have:
+
+# - buy_volume_sol, buy_volume_usd
+
+# - sell_volume_sol, sell_volume_usd
+
+@apps/web-terminal/src/store/memoryStore/slices/websocket-messages-store/types.ts
+
+# ScreenerTable to integrate with
+
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx
+
+# User requirements:
+
+# - 15m volume vs 6h volume ratio (uptrend/downtrend)
+
+# - Buy volume trend vs sell volume trend (momentum signals)
+
+# - Background scoring weighted to conditions, mcap, liquidity
+
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create useVolumeTrendScore hook</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useVolumeTrendScore.ts</files>
+  <action>
+    Create a hook that calculates volume trend scores for tokens:
+
+    ```typescript
+    export type VolumeTrendScore = {
+      // Overall trend direction
+      trend: 'strong_up' | 'up' | 'neutral' | 'down' | 'strong_down';
+
+      // Volume ratio: recent vs baseline
+      // (5m * 3 to approximate 15m) / (6h / 24 to get avg per 15m)
+      volumeRatio: number;  // >1 = above average, <1 = below
+
+      // Buy/sell momentum
+      buyMomentum: 'increasing' | 'stable' | 'decreasing';
+      sellMomentum: 'increasing' | 'stable' | 'decreasing';
+
+      // Derived signal
+      // If buy volume increasing while sell decreasing = bullish
+      // If sell volume increasing while buy decreasing = bearish
+      signal: 'bullish' | 'bearish' | 'neutral';
+
+      // Score 0-100 for background intensity
+      intensity: number;
+    };
+    ```
+
+    Calculation logic:
+    1. **Volume Ratio**: Compare recent volume (5m * 3 ≈ 15m) to 6h average
+       ```typescript
+       const recent5m = Number(stats_5m.buy_volume_sol) + Number(stats_5m.sell_volume_sol);
+       const recent15m = recent5m * 3; // Approximate
+       const avg6h = (Number(stats_6h.buy_volume_sol) + Number(stats_6h.sell_volume_sol)) / 24;
+       const volumeRatio = recent15m / avg6h;
+       ```
+
+    2. **Buy/Sell Momentum**: Compare 1h to 6h averages
+       ```typescript
+       const buyVol1h = Number(stats_1h.buy_volume_sol);
+       const buyVolAvg6h = Number(stats_6h.buy_volume_sol) / 6;
+       const buyMomentum = buyVol1h > buyVolAvg6h * 1.2 ? 'increasing'
+                        : buyVol1h < buyVolAvg6h * 0.8 ? 'decreasing'
+                        : 'stable';
+       ```
+
+    3. **Signal derivation**:
+       - Bullish: buyMomentum='increasing' AND sellMomentum!='increasing'
+       - Bearish: sellMomentum='increasing' AND buyMomentum!='increasing'
+       - Neutral: otherwise
+
+    4. **Intensity**: Scale 0-100 based on volumeRatio and signal strength
+
+    Hook signature:
+    ```typescript
+    export function useVolumeTrendScore(
+      tokens: ScreenerTokenData[]
+    ): Map<string, VolumeTrendScore>
+    ```
+
+    Return a Map keyed by mint address for O(1) lookup.
+
+  </action>
+  <verify>TypeScript compiles, hook returns Map with calculated scores</verify>
+  <done>useVolumeTrendScore hook created with volume ratio and momentum calculations</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create VolumeTrendCell component</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/volume-trend-cell.tsx</files>
+  <action>
+    Create a compact cell component to display volume trend:
+
+    1. Visual indicator options (pick one that fits in ~40px width):
+       - Arrow icon (↑↑, ↑, →, ↓, ↓↓) for trend direction
+       - Color: green for bullish, red for bearish, gray for neutral
+       - Optional: small ratio number (e.g., "2.3x")
+
+    2. Component structure:
+       ```tsx
+       type VolumeTrendCellProps = {
+         score: VolumeTrendScore | undefined;
+       };
+
+       export function VolumeTrendCell({ score }: VolumeTrendCellProps) {
+         if (!score) return <span className="text-text-tertiary">-</span>;
+
+         const icon = getTrendIcon(score.trend);
+         const color = score.signal === 'bullish' ? 'text-success'
+                     : score.signal === 'bearish' ? 'text-error'
+                     : 'text-text-tertiary';
+
+         return (
+           <div className={cn("flex items-center gap-0.5 text-xs", color)}>
+             {icon}
+             {score.volumeRatio > 1.5 && (
+               <span>{score.volumeRatio.toFixed(1)}x</span>
+             )}
+           </div>
+         );
+       }
+       ```
+
+    3. Keep it minimal - should fit in a narrow column without wrapping
+
+  </action>
+  <verify>Component renders trend indicators correctly</verify>
+  <done>VolumeTrendCell displays trend direction and ratio</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Integrate volume trend into ScreenerTable</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx, apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+    Add volume trend column to ScreenerTable:
+
+    1. Add new column after 1h %:
+       ```typescript
+       columnHelper.accessor(row => row.mint, {
+         id: 'volumeTrend',
+         header: () => 'Vol',
+         cell: ({ row }) => {
+           const score = volumeTrendMap.get(row.original.mint);
+           return <VolumeTrendCell score={score} />;
+         },
+         size: 50,
+       }),
+       ```
+
+    2. Update ScreenerTableProps to accept volumeTrendMap:
+       ```typescript
+       type ScreenerTableProps = {
+         tokens: ScreenerTokenData[];
+         columnType: 'watchlist' | 'trending' | 'whales';
+         signalStrengthMap: Map<string, SignalStrength>;
+         volumeTrendMap: Map<string, VolumeTrendScore>;
+         onHideToken?: (mint: string) => void;
+       };
+       ```
+
+    3. In autopilot-widget.tsx, call useVolumeTrendScore and pass to tables:
+       ```typescript
+       const allTokens = [...watchlistTokens, ...trendingTokens, ...whaleTokens];
+       const volumeTrendMap = useVolumeTrendScore(allTokens);
+       ```
+
+    4. Optionally combine volume trend with signal strength for row background:
+       - If volume trend is bullish AND signal is buy → stronger green
+       - If volume trend is bearish AND signal is sell → stronger red
+       - This creates "confluence" between rule signals and volume momentum
+
+  </action>
+  <verify>`npm run dev` - volume trend column appears with indicators</verify>
+  <done>Volume trend integrated into screener display</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run typecheck` passes
+- [ ] `npm run dev` shows volume trend column
+- [ ] Trend indicators display correctly (arrows, colors)
+- [ ] High volume ratio tokens show multiplier (e.g., "2.3x")
+- [ ] Bullish/bearish signals color correctly
+</verification>
+
+<success_criteria>
+
+- useVolumeTrendScore hook calculates volume ratios and momentum
+- VolumeTrendCell displays compact trend indicators
+- Volume trend column added to all three screener tables
+- Visual indicators match signal direction (green=bullish, red=bearish)
+- Phase 22 complete
+  </success_criteria>
+
+<output>
+After completion, create `.planning/phases/22-watchlist-style-screener-volume-trends/22-03-SUMMARY.md`
+
+Final summary should note:
+
+- Phase 22 complete with data consolidation, UI refactor, and volume scoring
+- Ready for next phase (19: Screener Alignment or other)
+  </output>

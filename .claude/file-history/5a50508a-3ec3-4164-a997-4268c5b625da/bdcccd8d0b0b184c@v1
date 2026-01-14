@@ -1,0 +1,233 @@
+---
+phase: 03-topic-mode-foundations
+plan: 03
+type: execute
+---
+
+<objective>
+Build the guided themes interface and search results display.
+
+Purpose: Provide the user-facing experience for Topic Mode - theme categories for quick exploration and a results view showing matches with context.
+Output: Complete Topic Mode UX with theme browser, ad-hoc search, and context-rich results.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./03-03-SUMMARY.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/phases/03-topic-mode-foundations/03-CONTEXT.md
+
+# Prior plan context:
+@.planning/phases/03-topic-mode-foundations/03-01-PLAN.md
+@.planning/phases/03-topic-mode-foundations/03-02-PLAN.md
+
+# Source files (after Plans 01-02):
+@src/App.tsx
+@src/topicWorker.ts
+@src/semanticSets.ts
+@src/types.ts
+
+**From CONTEXT.md - Themes to support:**
+- Product feedback (features requested, bugs reported, frustrations, praise)
+- Business intel (partnerships mentioned, competitor discussions)
+
+**Hybrid workflow:**
+- Guided themes: Click category to see matching snippets
+- Ad-hoc search: Enter keywords/questions to find relevant excerpts
+
+**Context preservation:**
+- Results show matching message + surrounding context
+- Context type labeled (author-based or time-based)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Build theme browser and search interface</name>
+  <files>src/App.tsx, src/App.css, src/semanticSets.ts</files>
+  <action>
+Create the theme selection and search UI:
+
+1. Add theme category groups to `src/semanticSets.ts`:
+```typescript
+export interface ThemeCategory {
+  id: string;
+  label: string;
+  description: string;
+  icon: string; // emoji for visual identification
+  semanticSetIds: string[]; // which semantic sets power this theme
+}
+
+export const THEME_CATEGORIES: ThemeCategory[] = [
+  {
+    id: 'product-feedback',
+    label: 'Product Feedback',
+    description: 'Features, bugs, frustrations, and praise',
+    icon: '💬',
+    semanticSetIds: ['feature', 'bug', 'frustration', 'praise']
+  },
+  {
+    id: 'business-intel',
+    label: 'Business Intel',
+    description: 'Partnerships and competitor mentions',
+    icon: '📊',
+    semanticSetIds: ['partnership', 'competitor']
+  }
+];
+
+// Get all terms for a theme category
+export function getThemeTerms(categoryId: string): string[] {
+  const category = THEME_CATEGORIES.find(c => c.id === categoryId);
+  if (!category) return [];
+
+  const terms: string[] = [];
+  for (const setId of category.semanticSetIds) {
+    const set = SEMANTIC_SETS.find(s => s.id === setId);
+    if (set) terms.push(...set.terms);
+  }
+  return [...new Set(terms)];
+}
+```
+
+2. Add Topic Mode search UI to `src/App.tsx`:
+   - After ZIP loads, show two sections:
+     a. **Guided Themes** - Grid of theme category cards (Product Feedback, Business Intel)
+     b. **Ad-hoc Search** - Text input + search button with "Use semantic expansion" checkbox
+
+   - Theme cards show:
+     - Icon + Label
+     - Description
+     - Click to search with that theme's terms
+
+   - Ad-hoc search:
+     - Input field for custom query
+     - Checkbox for semantic expansion (default: on)
+     - Search button
+
+3. Add state for search:
+   - `searchQuery: string`
+   - `searchResults: SearchResultWithContext | null`
+   - `isSearching: boolean`
+   - `useSemanticExpansion: boolean` (default: true)
+
+4. Style the theme cards as a responsive grid (2 columns on desktop, 1 on mobile).
+  </action>
+  <verify>
+- `npm run build` succeeds
+- After ZIP loads, theme cards and search input appear
+- Theme cards show icon, label, description
+- Ad-hoc search has input, checkbox, and button
+- Clicking theme card triggers search (results in Task 2)
+  </verify>
+  <done>Theme browser and search UI functional, theme categories defined</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Build search results display with context</name>
+  <files>src/App.tsx, src/App.css</files>
+  <action>
+Create the results display showing matches with context:
+
+1. Add results section to Topic Mode UI:
+   - Shows after search completes
+   - Header: "Found X matches for [query]"
+   - If semantic expansion used: "Expanded terms: bug, broken, error, ..."
+   - Results list with context windows
+
+2. Design each result card:
+```
+┌─────────────────────────────────────────────────────┐
+│ 📍 Chat: [chatName]                    [author/time]│
+├─────────────────────────────────────────────────────┤
+│ [Context message 1 - dimmed]                        │
+│ [Context message 2 - dimmed]                        │
+│ ▶ [MATCHED MESSAGE - highlighted, bold terms]      │
+│ [Context message 3 - dimmed]                        │
+│ [Context message 4 - dimmed]                        │
+├─────────────────────────────────────────────────────┤
+│ Matched: "bug", "broken"              2024-03-15    │
+└─────────────────────────────────────────────────────┘
+```
+
+3. Implement result card component (inline in App.tsx or extract if complex):
+   - Show chat name in header
+   - Context type badge: "👤 Author context" or "🕐 Time context"
+   - Context messages in chronological order, dimmed styling
+   - Matched message highlighted with matched terms in bold/color
+   - Footer shows matched terms and message date
+
+4. Add "Load more" or pagination if results > 20
+
+5. Add "Clear results" button to return to theme browser
+
+6. Style considerations:
+   - Context messages: lighter text, smaller font
+   - Matched message: normal weight, highlighted background
+   - Matched terms: bold or colored within the message text
+   - Mobile-responsive cards (full width on small screens)
+  </action>
+  <verify>
+- `npm run build` succeeds
+- Search results display with context
+- Matched terms highlighted in message text
+- Context type shown (author/time)
+- Results are scrollable, clear button works
+  </verify>
+  <done>Results UI shows matches with context, highlighting, and metadata</done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Complete Topic Mode with ZIP ingestion, semantic search, guided themes, and context-rich results</what-built>
+  <how-to-verify>
+    1. Run: `npm run dev`
+    2. Select "Topic Mode" from the mode selector
+    3. Upload a ZIP file exported from Group or User mode
+    4. Verify: ZIP loads and shows chat summary (X chats, Y messages)
+    5. Click a theme category (e.g., "Product Feedback")
+    6. Verify: Results appear with context windows
+    7. Check: Matched terms are highlighted
+    8. Check: Context type badge shows (author or time)
+    9. Clear results and try ad-hoc search with custom term
+    10. Toggle semantic expansion off and search again
+    11. Verify: Results differ based on expansion setting
+    12. Test on mobile viewport (responsive layout)
+  </how-to-verify>
+  <resume-signal>Type "approved" to complete Phase 3, or describe issues to fix</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run build` succeeds without errors
+- [ ] Theme categories clickable and trigger search
+- [ ] Ad-hoc search works with custom queries
+- [ ] Semantic expansion toggle functions
+- [ ] Results show context windows with proper styling
+- [ ] Matched terms highlighted in message text
+- [ ] Context type (author/time) labeled
+- [ ] Clear results returns to theme browser
+- [ ] UI is responsive on mobile
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- Human verification approved
+- No TypeScript errors
+- Complete Topic Mode workflow functional
+- Phase 3 requirements met per CONTEXT.md
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-topic-mode-foundations/03-03-SUMMARY.md` with:
+- Summary of Topic Mode implementation
+- List of new files created
+- Any deviations from plan
+- Phase 3 complete status
+</output>

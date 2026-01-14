@@ -1,0 +1,180 @@
+/**
+ * Autopilot Message Parsing Tests
+ *
+ * Tests for WebSocket message parsing logic extracted to eventParser.ts.
+ * Validates all event types, unknown events, malformed data, and pong message filtering.
+ */
+
+import { describe, expect, it } from "vitest";
+import {
+  parseAutopilotEvent,
+  type AutopilotEvent,
+  type BackendPositionData,
+} from "./eventParser";
+
+describe("parseAutopilotEvent", () => {
+  describe("valid event types", () => {
+    it("parses position_update event correctly", () => {
+      const data = {
+        type: "position_update",
+        positions: [
+          {
+            mint: "mint1",
+            symbol: "TOKEN1",
+            action: "buy" as const,
+            entryPriceSol: 0.001,
+            positionSizeSol: 1.0,
+            entryTime: Date.now(),
+          },
+        ],
+      };
+
+      const result = parseAutopilotEvent(data);
+
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe("position_update");
+      if (result?.type === "position_update") {
+        expect(result.positions.length).toBe(1);
+        expect(result.positions[0].symbol).toBe("TOKEN1");
+      }
+    });
+
+    it("parses signal event correctly", () => {
+      const data = {
+        type: "signal",
+        signal: {
+          timestamp: Date.now(),
+          mint: "mint1",
+          symbol: "TOKEN1",
+          signalType: "magic_buy" as const,
+          action: "buy" as const,
+          reason: "High volume spike",
+          pnlPercent: 0,
+          entryType: "trending",
+        },
+      };
+
+      const result = parseAutopilotEvent(data);
+
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe("signal");
+      if (result?.type === "signal") {
+        expect(result.signal.symbol).toBe("TOKEN1");
+        expect(result.signal.signalType).toBe("magic_buy");
+      }
+    });
+
+    it("parses stats_update event correctly", () => {
+      const data = {
+        type: "stats_update",
+        stats: {
+          totalTrades: 10,
+          openTrades: 3,
+          closedTrades: 7,
+          wins: 5,
+          losses: 2,
+          winRate: 71.43,
+          totalPnlSol: 2.5,
+          totalPnlUsd: 250.0,
+          avgPnlPercent: 12.5,
+        },
+      };
+
+      const result = parseAutopilotEvent(data);
+
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe("stats_update");
+      if (result?.type === "stats_update") {
+        expect(result.stats.totalTrades).toBe(10);
+        expect(result.stats.winRate).toBeCloseTo(71.43, 2);
+      }
+    });
+
+    it("parses config event correctly", () => {
+      const data = {
+        type: "config",
+        config: {
+          autoSourcesEnabled: true,
+          trendingEnabled: true,
+          whalesEnabled: false,
+          marketFilterEnabled: true,
+          mode: "paper" as const,
+          positionSizeSol: 0.1,
+          pollIntervalMs: 30000,
+        },
+      };
+
+      const result = parseAutopilotEvent(data);
+
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe("config");
+      if (result?.type === "config") {
+        expect(result.config.mode).toBe("paper");
+        expect(result.config.positionSizeSol).toBe(0.1);
+      }
+    });
+
+    it("parses strategies event correctly", () => {
+      const data = {
+        type: "strategies",
+        strategies: {
+          available: [
+            {
+              id: "strategy1",
+              name: "High Volume",
+              description: "Detect high volume spikes",
+              mode: "any" as const,
+              ruleCount: 3,
+              summary: "Volume > 100k",
+            },
+          ],
+          active: ["strategy1"],
+        },
+      };
+
+      const result = parseAutopilotEvent(data);
+
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe("strategies");
+      if (result?.type === "strategies") {
+        expect(result.strategies.available.length).toBe(1);
+        expect(result.strategies.active).toContain("strategy1");
+      }
+    });
+  });
+
+  describe("edge cases and errors", () => {
+    it("returns null for unknown event type", () => {
+      const data = {
+        type: "unknown_event_type",
+        someData: "value",
+      };
+
+      const result = parseAutopilotEvent(data);
+
+      expect(result).toBeNull();
+    });
+
+    it("returns null for malformed data (not an object)", () => {
+      const result1 = parseAutopilotEvent("not an object");
+      const result2 = parseAutopilotEvent(42);
+      const result3 = parseAutopilotEvent(null);
+      const result4 = parseAutopilotEvent(undefined);
+
+      expect(result1).toBeNull();
+      expect(result2).toBeNull();
+      expect(result3).toBeNull();
+      expect(result4).toBeNull();
+    });
+
+    it("returns null for pong message", () => {
+      const data = {
+        pong: true,
+      };
+
+      const result = parseAutopilotEvent(data);
+
+      expect(result).toBeNull();
+    });
+  });
+});

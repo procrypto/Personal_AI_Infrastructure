@@ -1,0 +1,250 @@
+# Context for bonkbot-mcp-server
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+**Status: Experimental** - MCP server for interacting with the Bonkbot Web API. Enables Claude (via Claude Desktop or other MCP clients) to authenticate, view portfolios, and execute trades on behalf of users.
+
+Created by Eli Krenzke, 10 commits. Potential product direction - AI-powered trading interface.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Runtime | Bun | Fast TypeScript runtime |
+| MCP | @modelcontextprotocol/sdk 1.6 | Model Context Protocol server |
+| Auth | Playwright | Browser-based Telegram+Passkey auth |
+| Validation | Zod | Input schema validation |
+| Transport | stdio | Communication with MCP clients |
+
+### Project Structure
+
+```
+bonkbot-mcp-server/
+├── src/
+│   ├── index.ts              # Entry: McpServer setup, tool registration
+│   ├── constants.ts          # API URL, cookie names, timeouts
+│   ├── types.ts              # TypeScript interfaces (357 lines)
+│   ├── schemas/
+│   │   └── index.ts          # Zod schemas for tool inputs
+│   ├── services/
+│   │   ├── api-client.ts     # HTTP client with cookie storage
+│   │   ├── session.ts        # ~/.bonkbot/session.json persistence
+│   │   └── browser-auth.ts   # Playwright browser login
+│   ├── tools/
+│   │   ├── auth.ts           # bonkbot_login, bonkbot_authenticate, bonkbot_auth_status
+│   │   ├── user.ts           # bonkbot_get_user, bonkbot_get_signer_account
+│   │   ├── wallet.ts         # bonkbot_list_wallets, bonkbot_get_master_wallet
+│   │   ├── trading.ts        # bonkbot_buy, bonkbot_sell, bonkbot_limit_order, etc.
+│   │   └── portfolio.ts      # bonkbot_portfolio, bonkbot_open_orders
+│   └── utils/
+│       └── format-response.ts  # Markdown/JSON formatting helpers
+├── test-*.mjs                # Manual test scripts
+├── CLAUDE.md                 # Build instructions
+└── package.json
+```
+
+## Available MCP Tools
+
+### Authentication (3 tools)
+
+| Tool | Description | Destructive |
+|------|-------------|-------------|
+| `bonkbot_login` | Browser auth via Telegram+Passkey | No |
+| `bonkbot_authenticate` | Manual cookie injection | No |
+| `bonkbot_auth_status` | Check current auth state | No |
+
+### User & Wallets (4 tools)
+
+| Tool | Description |
+|------|-------------|
+| `bonkbot_get_user` | Get user profile and settings |
+| `bonkbot_get_signer_account` | Get signer security info |
+| `bonkbot_list_wallets` | List all signer wallets |
+| `bonkbot_get_master_wallet` | Get primary trading wallet |
+
+### Trading (6 tools)
+
+| Tool | Description | Destructive |
+|------|-------------|-------------|
+| `bonkbot_get_quote` | Get swap quote (preview) | No |
+| `bonkbot_buy` | Execute market buy | **YES** |
+| `bonkbot_sell` | Execute market sell | **YES** |
+| `bonkbot_limit_order` | Create TP/SL limit order | **YES** |
+| `bonkbot_cancel_order` | Cancel pending order | Yes |
+| `bonkbot_order_status` | Check tx status by nonce | No |
+| `bonkbot_order_history` | Get trading history | No |
+
+### Portfolio (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `bonkbot_portfolio` | Net worth + unrealized P&L |
+| `bonkbot_open_orders` | List pending orders |
+
+## Authentication Flow
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  Authentication                          │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  Option 1: Browser Login (recommended)                   │
+│  ────────────────────────────────────                   │
+│  bonkbot_login                                          │
+│       │                                                  │
+│       ▼                                                  │
+│  Playwright launches Chromium (visible)                  │
+│       │                                                  │
+│       ▼                                                  │
+│  User completes Telegram + Passkey auth                  │
+│       │                                                  │
+│       ▼                                                  │
+│  Cookies extracted → ~/.bonkbot/session.json            │
+│                                                          │
+│  Option 2: Manual Cookie Setup                           │
+│  ────────────────────────────────                       │
+│  bonkbot_authenticate(cookies=[...])                    │
+│       │                                                  │
+│       ▼                                                  │
+│  Cookies stored in-memory                                │
+│                                                          │
+│  Startup Auth Priority:                                  │
+│  1. BONKBOT_REFRESH_TOKEN env var                       │
+│  2. ~/.bonkbot/session.json file                        │
+│  3. Manual bonkbot_authenticate call                    │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- **Only use bun** - Never npm/yarn
+- Tool naming: `bonkbot_{action}_{resource}`
+- Each tool file exports `register*Tools(server: McpServer)`
+- Response formats: markdown (default) or json
+- Annotations: mark destructive tools with `destructiveHint: true`
+
+### Common Tasks
+
+#### Development
+
+```bash
+~/.bun/bin/bun install          # Install deps
+~/.bun/bin/bun run dev          # Run with watch
+~/.bun/bin/bun run build        # Build to dist/
+~/.bun/bin/bun run typecheck    # Type check
+```
+
+#### Adding a New Tool
+
+1. Add Zod schema in `src/schemas/index.ts`
+2. Create tool in `src/tools/` with `register*Tools(server)` function
+3. Import and call register function in `src/index.ts`
+
+#### Testing
+
+```bash
+# Manual test scripts
+node test-login.mjs
+node test-quote-buy.mjs
+node test-limit-order.mjs
+```
+
+### Finding Code
+
+| Task | Location |
+|------|----------|
+| Add new tool | `src/tools/*.ts` |
+| Add API endpoint | `src/services/api-client.ts` |
+| Add type | `src/types.ts` |
+| Add schema | `src/schemas/index.ts` |
+| Modify auth | `src/services/browser-auth.ts` |
+
+### Things to Avoid
+
+- Don't derive data from other sources (only use dedicated API endpoints)
+- Don't combine unrelated data in one tool
+- Don't use npm (only bun)
+- Don't forget `destructiveHint: true` for trading tools
+
+## Design Principles (from CLAUDE.md)
+
+1. **Only expose data with dedicated API endpoints** - Don't derive (e.g., positions from history)
+2. **Use client-side filtering when API lacks params** - Filter after fetch if needed
+3. **Show context in multi-entity outputs** - Always show wallet ID per order
+4. **Keep tools focused** - One thing well per tool
+
+## Related Documentation
+
+- [README.md](README.md) - Setup and tool reference
+- [CLAUDE.md](CLAUDE.md) - Build commands and architecture
+- `../reference/docs/bonkbot-api-endpoints.md` - Full API reference (85+ endpoints)
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Use | Interface |
+|--------|-------------|-----------|
+| bonkbot | All trading/user APIs | REST `/v1` |
+| Telemetry | Auth flow | Browser + cookies |
+
+### Integration Points
+
+| System | Integration |
+|--------|-------------|
+| Claude Desktop | MCP client connection |
+| Claude Code | Could use as MCP server |
+| team-skills | Could trigger via skills |
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `BONKBOT_API_URL` | API base URL | `https://app.telemetry.io` |
+| `BONKBOT_REFRESH_TOKEN` | Auto-auth token (14-day lifetime) | - |
+
+### Claude Desktop Config
+
+```json
+{
+  "mcpServers": {
+    "bonkbot": {
+      "command": "node",
+      "args": ["/path/to/bonkbot-mcp-server/dist/index.js"],
+      "env": {
+        "BONKBOT_REFRESH_TOKEN": "your_refresh_token_here"
+      }
+    }
+  }
+}
+```
+
+### Session Persistence
+
+Auth tokens saved to `~/.bonkbot/session.json`:
+- `refreshToken` - 14-day lifetime
+- `authToken` - Short-lived access token
+- `signerToken` - Signer service token
+- `dataToken` - Data access token
+
+## Product Potential
+
+**Current state:** Experimental proof-of-concept.
+
+**Potential directions:**
+- AI trading assistant in Claude Desktop
+- Voice-controlled trading via Claude
+- Automated portfolio monitoring
+- Natural language limit orders
+- Multi-wallet management via conversation
+
+**Key value prop:** Trade Solana tokens via natural conversation without opening the app.

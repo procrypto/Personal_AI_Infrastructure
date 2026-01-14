@@ -1,0 +1,194 @@
+# User Scan Performance Profile
+
+## Analysis Date
+2026-01-09
+
+## Current Implementation: `scanProcess` (streamWorker.ts:373-527)
+
+### Architecture Overview
+The current user scan uses a regex-based byte-level approach that:
+1. Streams file chunks via `FileReader.read()`
+2. Decodes chunks to string and accumulates in buffer
+3. Runs 4 regex patterns to extract user IDs and names
+4. Pairs IDs with names by proximity (position-based matching)
+5. Maintains a `userMap` with userId → UserInfo
+
+### Identified Bottlenecks
+
+#### 1. **Regex Processing on Full Buffer** (CRITICAL)
+```typescript
+// Lines 388-393: Define patterns
+const fromIdPattern = /"from_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/g;
+const actorIdPattern = /"actor_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/g;
+const fromNamePattern = /"from"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+const actorNamePattern = /"actor"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+```
+
+**Problem:** All 4 regex patterns run on the accumulated buffer EVERY chunk. The buffer contains ALL text including:
+- Message text content (potentially very long)
+- Media references and metadata
+- Entities, reactions, replies
+
+**Impact:** For a 4.6 GB file, the regex engine processes ~4.6 GB × number of chunks worth of text.
+
+#### 2. **Buffer Accumulation Strategy** (HIGH)
+```typescript
+// Line 496
+buffer += decoder.decode(value, { stream: true });
+```
+
+**Problem:** String concatenation creates new string objects. While the buffer is trimmed to 1KB at the end of processing, during processing it can grow to chunk size (~64KB default).
+
+**Impact:** Memory allocation churn, GC pressure.
+
+#### 3. **Position-Based ID↔Name Pairing** (MEDIUM)
+```typescript
+// Lines 445-472
+for (const mention of mentions) {
+    for (const n of names) {
+        // O(mentions * names) matching
+    }
+}
+```
+
+**Problem:** Quadratic complexity in worst case. For large files with many users, this can be slow.
+
+**Impact:** Scales poorly with user count.
+
+#### 4. **No Content Skipping** (CRITICAL - Root Cause)
+Unlike `scanGroupsProcess` which uses bracket-tracking to SKIP entire `"messages": [...]` arrays, `scanProcess` processes ALL content including message bodies.
+
+**Comparison:**
+| Aspect | scanGroupsProcess | scanProcess |
+|--------|------------------|-------------|
+| Message content | SKIPS entirely | Processes ALL |
+| Extraction target | Chat metadata only | User IDs + names |
+| Parsing approach | State machine with bracket tracking | Regex on full buffer |
+
+## Performance Baseline
+
+### Sample Export (1.4 KB)
+- Expected: Sub-millisecond (trivial size)
+- Actual: Not measured (too small to profile)
+
+### Large Export (4.6 GB - theoretical)
+- **Current approach:** Must regex-scan entire file content
+- **Group-mode approach:** Skips message arrays, only processes ~1% of bytes
+- **Expected improvement:** 10-50x faster with bracket-tracking
+
+## Optimization Strategy
+
+### Recommended Approach: Hybrid State Machine
+
+Adapt `scanGroupsProcess` bracket-tracking for user extraction:
+
+1. **Track JSON depth** with bracket counting (handle strings properly)
+2. **Inside messages array:** Extract ONLY user fields, skip message bodies
+3. **Pattern:** When seeing `"from_id":` or `"from":`, extract value, then skip to next field
+
+### Key Insight
+User metadata appears at the START of each message object:
+```json
+{
+    "id": 66,
+    "type": "message",
+    "from": "Fabi",        ← Extract this
+    "from_id": "6792501067", ← Extract this
+    "text": "..."          ← SKIP everything after
+}
+```
+
+Once we have `from`/`from_id`, we can skip the rest of the message object until the next `}` at depth 0 relative to message start.
+
+## Files Analyzed
+- `src/streamWorker.ts:373-527` - Current scanProcess implementation
+- `src/streamWorker.ts:649-827` - Group-mode scanGroupsProcess (reference)
+- `sample_export.json` - Test fixture showing message structure
+
+## Implementation: Turbo User Scanner
+
+### New Approach (scanProcess - turbo)
+
+Implemented bracket-tracking state machine that:
+
+1. **Tracks JSON structure** with `braceDepth` and `bracketDepth` counters
+2. **Detects messages array** via `"messages": [` pattern
+3. **Identifies message objects** by tracking entry into `{` at array level
+4. **Extracts only user fields:**
+   - `from_id` / `actor_id` for user ID
+   - `from` / `actor` for display name
+5. **Maintains string awareness** to handle escaped quotes correctly
+6. **Commits user** when message object closes or new message starts
+
+### Key Code Changes
+
+```typescript
+// Feature flag (streamWorker.ts:93-94)
+const FAST_USER_SCAN = true;
+
+// Scanner selection (streamWorker.ts:1125-1127)
+const scanner = FAST_USER_SCAN ? scanProcess : scanProcessLegacy;
+```
+
+### Performance Comparison
+
+| Metric | Legacy (scanProcessLegacy) | Turbo (scanProcess) |
+|--------|---------------------------|---------------------|
+| Buffer processing | Full regex on entire buffer | Character-by-character with early exit |
+| Regex executions | 4 global patterns per chunk | Targeted lookups only when in message |
+| Content skipped | None (processes all text) | Message bodies (text, media, entities) |
+| Memory pressure | Higher (4 result arrays per chunk) | Lower (single-pass extraction) |
+
+### Expected Performance Improvement
+
+**Small files (<100KB):** Negligible difference - overhead is similar
+
+**Medium files (1-100MB):** ~2-5x improvement
+- Less regex work
+- Smaller buffer retention (512 bytes vs 1024 bytes)
+
+**Large files (1-5GB):** ~10-50x improvement (matching group-mode)
+- Character-by-character approach avoids O(n) regex scans
+- Early extraction means less buffer processing
+- String-aware bracket tracking prevents false matches
+
+### Memory Usage
+
+| Aspect | Legacy | Turbo |
+|--------|--------|-------|
+| Buffer retention | 1024 bytes | 512 bytes |
+| Intermediate arrays | 4 per chunk (mentions, names) | None |
+| User map | Same | Same |
+
+### Fallback Mechanism
+
+Legacy scanner available via `FAST_USER_SCAN = false` for:
+- Debugging extraction issues
+- Telegram export format changes
+- Regression investigation
+
+## Current Status
+
+**Turbo scanner disabled** due to state tracking bugs (see ISS-001).
+
+During testing, the turbo scanner only found 24 users when hundreds were expected. Root cause:
+- Bracket depth counters desync across chunk boundaries
+- Buffer truncation loses state context
+- `inMessagesArray` exit condition fails with nested arrays
+
+**Current behavior:** Using legacy regex scanner (`FAST_USER_SCAN = false`), which correctly finds all users.
+
+## Conclusion
+
+**Primary bottleneck:** Regex processing of full file content including message bodies.
+
+**Solution attempted:** Bracket-tracking state machine that extracts user fields then skips message content.
+
+**Implementation status:**
+- Turbo scanner code complete but has bugs (ISS-001)
+- Fallback to legacy scanner for correctness
+- Test suite validates core extraction logic (25 tests passing)
+
+**Next steps:**
+- Fix turbo scanner state tracking (ISS-001)
+- Re-enable once verified on large exports

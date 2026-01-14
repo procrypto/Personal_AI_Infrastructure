@@ -1,0 +1,147 @@
+---
+phase: 07-route-cleanup
+plan: 01
+type: execute
+---
+
+<objective>
+Migrate all existing routes from `/local-api/*` to clean routes with kebab-case.
+
+Purpose: Standardize API routes for production deployment.
+Output: All endpoints use clean routes without `/local-api/` prefix.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@src/server.ts
+
+**Routes to migrate (20 total):**
+
+Generic endpoints (15):
+- /local-api/trades/:mint → /trades/:mint
+- /local-api/search/:mint → /search/:mint
+- /local-api/search → /search
+- /local-api/holders_stats/:mint → /holders-stats/:mint
+- /local-api/holder_stats/:mint/:address → /holder-stats/:mint/:address
+- /local-api/traders_stats/:mint → /traders-stats/:mint
+- /local-api/ohlcv/pool/:pool/:range → /ohlcv/pool/:pool/:range
+- /local-api/ohlcv/token/:mint/:range → /ohlcv/token/:mint/:range
+- /local-api/discovery/trending → /discovery/trending
+- /local-api/discovery/whale_moves → /discovery/whale-moves
+- /local-api/wallet_tracker/* → /wallet-tracker/*
+- /local-api/wallet_funding/:address → /wallet-funding/:address
+- /local-api/multi-wallet-families/:mint → /multi-wallet-families/:mint
+- /local-api/market_data/:mint → /market-data/:mint
+- /local-api/market_data_batch → /market-data-batch
+
+Custom endpoints (2) — renamed from /labs/ to /custom/:
+- /local-api/labs/wallet_trades_snapshot → /custom/wallet-trades-snapshot
+- /local-api/labs/holders_stats_batch → /custom/holders-stats-batch
+
+Extensions (2):
+- /local-api/ext/registry → /ext/registry
+- /local-api/ext/search/:mint → /ext/search/:mint
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Migrate generic endpoint routes</name>
+  <files>
+src/endpoints/generic/trades.ts
+src/endpoints/generic/trades_backfill.ts
+src/endpoints/generic/search_token.ts
+src/endpoints/generic/search_text.ts
+src/endpoints/generic/holders_stats.ts
+src/endpoints/generic/holders_stats_batch.ts
+src/endpoints/generic/holder_stats.ts
+src/endpoints/generic/traders_stats.ts
+src/endpoints/generic/ohlcv.ts
+src/endpoints/generic/discovery_trending.ts
+src/endpoints/generic/discovery_whale_moves.ts
+src/endpoints/generic/wallet_tracker.ts
+src/endpoints/generic/wallet_funding.ts
+src/endpoints/generic/multi_wallet_families.ts
+src/endpoints/generic/token_market_data.ts
+  </files>
+  <action>
+For each file, update route strings:
+1. Remove `/local-api` prefix
+2. Convert snake_case to kebab-case in route paths
+
+Pattern: `"/local-api/foo_bar"` → `"/foo-bar"`
+
+Examples:
+- `"/local-api/trades/:mint"` → `"/trades/:mint"`
+- `"/local-api/holders_stats/:mint"` → `"/holders-stats/:mint"`
+- `"/local-api/discovery/whale_moves"` → `"/discovery/whale-moves"`
+- `"/local-api/wallet_tracker/summary_all"` → `"/wallet-tracker/summary-all"`
+- `"/local-api/labs/wallet_trades_snapshot"` → `"/labs/wallet-trades-snapshot"`
+
+Use search/replace carefully - only change route strings, not variable names or SQL.
+  </action>
+  <verify>grep -r '"/local-api/' src/endpoints/generic/ returns no matches</verify>
+  <done>All generic endpoint routes updated to clean kebab-case format</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Migrate extension routes</name>
+  <files>
+src/extensions/registry.ts
+src/extensions/catalog/search_token_details.ts
+  </files>
+  <action>
+Update extension route strings:
+- `"/local-api/ext/registry"` → `"/ext/registry"`
+- `"/local-api/ext/search/:mint"` → `"/ext/search/:mint"`
+
+Keep `/ext/` prefix for extensions to maintain separation.
+  </action>
+  <verify>grep -r '"/local-api/' src/extensions/ returns no matches</verify>
+  <done>Extension routes updated</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Update server.ts startup banner</name>
+  <files>src/server.ts</files>
+  <action>
+Update the console.log endpoint listing at the bottom of server.ts to show new routes.
+
+Change all route references from `/local-api/*` to clean routes.
+
+Example changes in the Endpoints: section:
+- `GET  /local-api/trades/:mint` → `GET  /trades/:mint`
+- `POST /local-api/labs/wallet_trades_snapshot` → `POST /labs/wallet-trades-snapshot`
+- etc.
+  </action>
+  <verify>bun dev starts and shows clean routes in startup banner</verify>
+  <done>Server startup banner shows clean route paths</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `grep -r '"/local-api/' src/` returns no matches (except planning docs)
+- [ ] `bun dev` starts without errors
+- [ ] Startup banner shows clean routes
+- [ ] `curl http://localhost:8787/trades/So11111111111111111111111111111111111111112` works
+</verification>
+
+<success_criteria>
+- All routes migrated from /local-api/* to clean paths
+- All snake_case routes converted to kebab-case
+- Server starts and responds on new routes
+- No references to /local-api/ in source code
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/07-route-cleanup/07-01-SUMMARY.md`
+</output>

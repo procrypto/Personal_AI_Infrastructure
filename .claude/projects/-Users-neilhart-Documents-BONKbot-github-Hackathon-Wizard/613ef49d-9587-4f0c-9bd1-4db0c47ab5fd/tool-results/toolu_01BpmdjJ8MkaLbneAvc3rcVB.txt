@@ -1,0 +1,335 @@
+     1→use std::str::FromStr as _;
+     2→
+     3→use ::serde::Deserialize;
+     4→use rust_decimal::Decimal;
+     5→use serde::Serialize;
+     6→use thiserror::Error;
+     7→
+     8→use crate::types::{
+     9→    limit_order_type::LimitOrderType,
+    10→    order_execution_metrics::{
+    11→        OrderExecution, OrderExecutionAmount, OrderExecutionMetrics, OrderSide,
+    12→    },
+    13→    trigger::{MarketCapTrigger, TrailingMarketCapTrigger},
+    14→};
+    15→
+    16→#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+    17→#[serde(tag = "type")]
+    18→pub enum OrderConfig {
+    19→    /// Buy when price breaks above threshold
+    20→    BuyBreakout { trigger: MarketCapTrigger },
+    21→    /// Buy when price dips below threshold  
+    22→    BuyDip { trigger: MarketCapTrigger },
+    23→    /// Sell when price falls below threshold
+    24→    StopLoss { trigger: MarketCapTrigger },
+    25→    /// Sell when price rises above threshold
+    26→    TakeProfit { trigger: MarketCapTrigger },
+    27→    /// Sell when price trails down from peak
+    28→    TrailingStopLoss { trigger: TrailingMarketCapTrigger },
+    29→    /// DCA buy
+    30→    DcaBuy { params: DcaParams },
+    31→    /// DCA sell
+    32→    DcaSell { params: DcaParams },
+    33→}
+    34→
+    35→impl OrderConfig {
+    36→    pub fn update_trailing_market_cap_trigger(
+    37→        &mut self,
+    38→        trailing_market_cap_trigger: TrailingMarketCapTrigger,
+    39→    ) -> Result<(), UpdateTrailingMarketCapTriggerError> {
+    40→        match self {
+    41→            OrderConfig::TrailingStopLoss { trigger } => {
+    42→                *trigger = trailing_market_cap_trigger;
+    43→                Ok(())
+    44→            }
+    45→            _ => Err(UpdateTrailingMarketCapTriggerError),
+    46→        }
+    47→    }
+    48→
+    49→    pub fn is_trigger_condition_met(&self, market_context: &MarketContext) -> bool {
+    50→        match self {
+    51→            // Triggered if the market cap goes above the threshold
+    52→            OrderConfig::BuyBreakout { trigger } | OrderConfig::TakeProfit { trigger } => {
+    53→                match trigger {
+    54→                    MarketCapTrigger::Usd { trigger_amount } => {
+    55→                        market_context.usd_market_cap.ge(trigger_amount)
+    56→                    }
+    57→                }
+    58→            }
+    59→            // Triggered if the market cap goes below the threshold
+    60→            OrderConfig::BuyDip { trigger } | OrderConfig::StopLoss { trigger } => match trigger {
+    61→                MarketCapTrigger::Usd { trigger_amount } => {
+    62→                    market_context.usd_market_cap.le(trigger_amount)
+    63→                }
+    64→            },
+    65→            // Triggered if the market cap goes below the threshold
+    66→            OrderConfig::TrailingStopLoss { trigger } => match trigger {
+    67→                TrailingMarketCapTrigger::Usd { trigger_amount, .. } => {
+    68→                    market_context.usd_market_cap.le(trigger_amount)
+    69→                }
+    70→            },
+    71→            // There is no trigger condition for DCA orders, so always return true.
+    72→            OrderConfig::DcaBuy { .. } | OrderConfig::DcaSell { .. } => true,
+    73→        }
+    74→    }
+    75→}
+    76→
+    77→#[derive(Debug)]
+    78→pub struct MarketContext {
+    79→    pub usd_market_cap: Decimal,
+    80→}
+    81→
+    82→#[derive(Debug, Error)]
+    83→#[error("Unable to update trailing market cap trigger. Invalid order type.")]
+    84→pub struct UpdateTrailingMarketCapTriggerError;
+    85→
+    86→#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+    87→#[serde(rename_all = "camelCase")]
+    88→pub struct DcaParams {
+    89→    num_transactions: usize,
+    90→    interval_seconds: u32,
+    91→}
+    92→
+    93→/// Intermediate struct for JSON deserialization from the DB's trigger column.
+    94→#[derive(Debug, Deserialize, Serialize)]
+    95→#[serde(rename_all = "camelCase")]
+    96→struct TriggerJson {
+    97→    #[serde(rename = "type")]
+    98→    trigger_type: String,
+    99→
+   100→    amount: String,
+   101→
+   102→    start_amount: Option<String>,
+   103→
+   104→    #[serde(default, skip_serializing_if = "Option::is_none")]
+   105→    trailing_percentage_bps: Option<u16>,
+   106→}
+   107→
+   108→impl OrderConfig {
+   109→    pub fn try_from_json_and_order_type(
+   110→        json_str: &str,
+   111→        limit_order_type: &LimitOrderType,
+   112→    ) -> Result<Self, OrderConfigConversionError> {
+   113→        let trigger_json: TriggerJson = serde_json::from_str(json_str)
+   114→            .map_err(|e| OrderConfigConversionError::JsonParseError(e.to_string()))?;
+   115→
+   116→        match (limit_order_type, trigger_json.trigger_type.as_str()) {
+   117→            (LimitOrderType::BuyBreakout, "USD_MARKET_CAP") => Ok(OrderConfig::BuyBreakout {
+   118→                trigger: MarketCapTrigger::Usd {
+   119→                    trigger_amount: parse_decimal(&trigger_json.amount)?,
+   120→                },
+   121→            }),
+   122→            (LimitOrderType::BuyDip, "USD_MARKET_CAP") => Ok(OrderConfig::BuyDip {
+   123→                trigger: MarketCapTrigger::Usd {
+   124→                    trigger_amount: parse_decimal(&trigger_json.amount)?,
+   125→                },
+   126→            }),
+   127→            (LimitOrderType::StopLoss, "USD_MARKET_CAP") => Ok(OrderConfig::StopLoss {
+   128→                trigger: MarketCapTrigger::Usd {
+   129→                    trigger_amount: parse_decimal(&trigger_json.amount)?,
+   130→                },
+   131→            }),
+   132→            (LimitOrderType::TakeProfit, "USD_MARKET_CAP") => Ok(OrderConfig::TakeProfit {
+   133→                trigger: MarketCapTrigger::Usd {
+   134→                    trigger_amount: parse_decimal(&trigger_json.amount)?,
+   135→                },
+   136→            }),
+   137→            (LimitOrderType::TrailingStopLoss, "TRAILING_STOP_USD_MARKET_CAP") => {
+   138→                let high_water_mark = trigger_json
+   139→                    .start_amount
+   140→                    .ok_or_else(|| {
+   141→                        OrderConfigConversionError::MissingField("startAmount".to_string())
+   142→                    })
+   143→                    .and_then(|s| parse_decimal(&s))?;
+   144→                Ok(OrderConfig::TrailingStopLoss {
+   145→                    trigger: TrailingMarketCapTrigger::Usd {
+   146→                        trigger_amount: parse_decimal(&trigger_json.amount)?,
+   147→                        high_water_mark,
+   148→                        trailing_percentage_bps: trigger_json.trailing_percentage_bps,
+   149→                    },
+   150→                })
+   151→            }
+   152→            _ => Err(OrderConfigConversionError::InvalidOrderCombination {
+   153→                limit_order_type: limit_order_type.clone(),
+   154→                trigger_type: trigger_json.trigger_type,
+   155→            }),
+   156→        }
+   157→    }
+   158→
+   159→    pub fn to_json(&self) -> Result<String, OrderConfigJsonSerializationError> {
+   160→        match self {
+   161→            OrderConfig::TrailingStopLoss { trigger } => match trigger {
+   162→                TrailingMarketCapTrigger::Usd {
+   163→                    trigger_amount,
+   164→                    high_water_mark,
+   165→                    trailing_percentage_bps,
+   166→                } => {
+   167→                    let trigger = TriggerJson {
+   168→                        trigger_type: "TRAILING_STOP_USD_MARKET_CAP".to_string(),
+   169→                        amount: trigger_amount.to_string(),
+   170→                        start_amount: Some(high_water_mark.to_string()),
+   171→                        trailing_percentage_bps: *trailing_percentage_bps,
+   172→                    };
+   173→                    serde_json::to_string(&trigger).map_err(|err| {
+   174→                        OrderConfigJsonSerializationError::JsonSerialization(err.to_string())
+   175→                    })
+   176→                }
+   177→            },
+   178→            _ => Err(OrderConfigJsonSerializationError::UnsupportedOrderType),
+   179→        }
+   180→    }
+   181→
+   182→    pub fn is_dca(&self) -> bool {
+   183→        matches!(
+   184→            self,
+   185→            OrderConfig::DcaBuy { .. } | OrderConfig::DcaSell { .. }
+   186→        )
+   187→    }
+   188→
+   189→    pub fn calculate_order_execution_metrics(
+   190→        &self,
+   191→        order_execution: OrderExecution,
+   192→    ) -> Option<OrderExecutionMetrics> {
+   193→        match order_execution {
+   194→            OrderExecution::ExecutedUsdMarketCap(executed_usd_market_cap) => {
+   195→                let expected_usd_market_cap = match self {
+   196→                    OrderConfig::BuyBreakout {
+   197→                        trigger: MarketCapTrigger::Usd { trigger_amount },
+   198→                    }
+   199→                    | OrderConfig::BuyDip {
+   200→                        trigger: MarketCapTrigger::Usd { trigger_amount },
+   201→                    }
+   202→                    | OrderConfig::StopLoss {
+   203→                        trigger: MarketCapTrigger::Usd { trigger_amount },
+   204→                    }
+   205→                    | OrderConfig::TakeProfit {
+   206→                        trigger: MarketCapTrigger::Usd { trigger_amount },
+   207→                    } => Some(*trigger_amount),
+   208→                    OrderConfig::TrailingStopLoss { trigger } => match trigger {
+   209→                        TrailingMarketCapTrigger::Usd { trigger_amount, .. } => {
+   210→                            Some(*trigger_amount)
+   211→                        }
+   212→                    },
+   213→                    _ => None,
+   214→                }?;
+   215→
+   216→                let order_side = match self {
+   217→                    OrderConfig::BuyBreakout { .. }
+   218→                    | OrderConfig::BuyDip { .. }
+   219→                    | OrderConfig::DcaBuy { .. } => OrderSide::Buy,
+   220→                    OrderConfig::StopLoss { .. }
+   221→                    | OrderConfig::TakeProfit { .. }
+   222→                    | OrderConfig::TrailingStopLoss { .. }
+   223→                    | OrderConfig::DcaSell { .. } => OrderSide::Sell,
+   224→                };
+   225→
+   226→                let order_execution_amount = OrderExecutionAmount::UsdMarketCap {
+   227→                    expected_usd_market_cap,
+   228→                    executed_usd_market_cap,
+   229→                };
+   230→
+   231→                OrderExecutionMetrics::from_execution_amount(order_execution_amount, order_side)
+   232→            }
+   233→        }
+   234→    }
+   235→}
+   236→
+   237→fn parse_decimal(s: &str) -> Result<Decimal, OrderConfigConversionError> {
+   238→    Decimal::from_str(s).map_err(|_| OrderConfigConversionError::DecimalParseError(s.to_string()))
+   239→}
+   240→
+   241→#[derive(Debug, Error)]
+   242→pub enum OrderConfigConversionError {
+   243→    #[error("Failed to parse JSON: {0}")]
+   244→    JsonParseError(String),
+   245→
+   246→    #[error("Failed to parse decimal amount {0}")]
+   247→    DecimalParseError(String),
+   248→
+   249→    #[error("Missing required field: {0}")]
+   250→    MissingField(String),
+   251→
+   252→    #[error("Invalid order type. limit_order_type={limit_order_type}, trigger_type={trigger_type}")]
+   253→    InvalidOrderCombination {
+   254→        limit_order_type: LimitOrderType,
+   255→        trigger_type: String,
+   256→    },
+   257→}
+   258→
+   259→#[derive(Debug, Error)]
+   260→pub enum OrderConfigJsonSerializationError {
+   261→    #[error("Unsupported order type")]
+   262→    UnsupportedOrderType,
+   263→
+   264→    #[error("Failed to serialize into JSON: {0}")]
+   265→    JsonSerialization(String),
+   266→}
+   267→
+   268→#[cfg(test)]
+   269→mod tests {
+   270→    use super::*;
+   271→
+   272→    #[test]
+   273→    fn test_usd_market_cap_trigger_conversion() {
+   274→        let json_str = r#"{"type":"USD_MARKET_CAP","amount":"13275.249747776526227"}"#;
+   275→
+   276→        let result: Result<OrderConfig, OrderConfigConversionError> =
+   277→            OrderConfig::try_from_json_and_order_type(json_str, &LimitOrderType::BuyDip);
+   278→
+   279→        assert!(result.is_ok());
+   280→
+   281→        let result = result.unwrap();
+   282→
+   283→        let expected = OrderConfig::BuyDip {
+   284→            trigger: MarketCapTrigger::Usd {
+   285→                trigger_amount: Decimal::from_str("13275.249747776526227").unwrap(),
+   286→            },
+   287→        };
+   288→
+   289→        assert_eq!(result, expected);
+   290→    }
+   291→
+   292→    #[test]
+   293→    fn test_trailing_usd_market_cap_trigger_conversion() {
+   294→        let json_str = r#"{"type":"TRAILING_STOP_USD_MARKET_CAP","amount":"70317.705914386085298","startAmount":"127850.37438979288236"}"#;
+   295→
+   296→        let result: Result<OrderConfig, OrderConfigConversionError> =
+   297→            OrderConfig::try_from_json_and_order_type(json_str, &LimitOrderType::TrailingStopLoss);
+   298→
+   299→        assert!(result.is_ok());
+   300→
+   301→        let result = result.unwrap();
+   302→
+   303→        let expected = OrderConfig::TrailingStopLoss {
+   304→            trigger: TrailingMarketCapTrigger::Usd {
+   305→                trigger_amount: Decimal::from_str("70317.705914386085298").unwrap(),
+   306→                high_water_mark: Decimal::from_str("127850.37438979288236").unwrap(),
+   307→                trailing_percentage_bps: None,
+   308→            },
+   309→        };
+   310→
+   311→        assert_eq!(result, expected);
+   312→    }
+   313→
+   314→    #[test]
+   315→    fn test_trailing_usd_market_cap_trigger_serialization() {
+   316→        let order_config = OrderConfig::TrailingStopLoss {
+   317→            trigger: TrailingMarketCapTrigger::Usd {
+   318→                trigger_amount: Decimal::from_str("1000.123").unwrap(),
+   319→                high_water_mark: Decimal::from_str("1500.54").unwrap(),
+   320→                trailing_percentage_bps: None,
+   321→            },
+   322→        };
+   323→
+   324→        let result = order_config.to_json();
+   325→
+   326→        let result = result.unwrap();
+   327→        let expected = r#"{"type":"TRAILING_STOP_USD_MARKET_CAP","amount":"1000.123","startAmount":"1500.54"}"#;
+   328→        assert_eq!(result, expected);
+   329→    }
+   330→}
+   331→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

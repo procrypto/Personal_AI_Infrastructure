@@ -1,0 +1,160 @@
+---
+phase: 02-intel-grid-features
+plan: 01
+subsystem: ui
+tags: [intel-grid, trenchBenchStore, pause-on-hover, badges, validation]
+
+# Dependency graph
+requires:
+  - phase: 01-branch-foundation
+    provides: Merged codebase with trenchBenchStore and CustomEvents coexisting
+provides:
+  - Validated pause-on-hover logic freezes order but keeps data live
+  - Validated badge calculation logic (HOT/TRENDING/RISING/NEW)
+  - Debug logging for human verification
+  - Lint cleanup (removed unused code)
+affects: [03-cross-widget-sync, 06-store-migration]
+
+# Tech tracking
+tech-stack:
+  added: [prettier-plugin-tailwindcss]
+  patterns: [debug-logging-dev-only]
+
+key-files:
+  created: []
+  modified:
+    - apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx
+
+key-decisions:
+  - "Badge holdingPercent uses SOL amounts (functional but token amounts would be more accurate per 01-01 decision)"
+
+patterns-established:
+  - "Development-only debug logging with NODE_ENV check"
+
+issues-created: []
+
+# Metrics
+duration: 19min
+completed: 2026-01-13
+
+# Debugging (if any occurred)
+debugging:
+  sessions: 1
+  time-spent: 5min
+  patterns: ["Pre-commit hook failures require dependency installation or lint fixes"]
+---
+
+# Phase 2 Plan 01: Intel Grid Validation Summary
+
+**Validated pause-on-hover and badge logic work correctly with trenchBenchStore data flow; added debug logging for verification**
+
+## Performance
+
+- **Duration:** 19 min
+- **Started:** 2026-01-13T00:43:06Z
+- **Completed:** 2026-01-13T01:02:14Z
+- **Tasks:** 3
+- **Files modified:** 1
+
+## Accomplishments
+
+- Validated pause-on-hover logic: `isPaused` state correctly freezes `pausedOrder` while `displayTokens` shows live data in frozen order
+- Validated badge calculation: `kolsHoldingStrong` counts KOLs with >50% holding, badge priority HOT > TRENDING > RISING > NEW works correctly
+- Added development-only debug logging for pause state and badge calculations
+- Cleaned up unused code (`FIVE_MINUTES` constant, `handleSelectCard` callback)
+- Installed missing `prettier-plugin-tailwindcss` dependency
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Tasks 1-2: Validation + Debug Logging** - `a6a6953d0` (feat)
+   - Added useEffect for pause state logging
+   - Added useEffect for badge calculation logging
+   - Removed unused FIVE_MINUTES constant
+   - Removed unused handleSelectCard callback
+
+**Plan metadata:** This commit (docs: complete plan)
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx` - Added debug logging, removed unused code
+
+## Decisions Made
+
+- **Badge holdingPercent calculation:** Current implementation uses SOL amounts (`currentValueSol / entryAmountSol`). The 01-01 decision specified token amounts for position exit detection. This is functional but could be enhanced in a future phase to use token amounts for more accurate conviction tracking. Logged as enhancement consideration.
+
+## Deviations from Plan
+
+### Auto-fixed Issues
+
+**1. [Rule 3 - Blocking] Installed missing prettier-plugin-tailwindcss**
+- **Found during:** Task commit attempt
+- **Issue:** Pre-commit hook failed with "Cannot find package 'prettier-plugin-tailwindcss'"
+- **Fix:** Ran `bun add -D prettier-plugin-tailwindcss`
+- **Files modified:** package.json, bun.lockb
+- **Verification:** Pre-commit hook passed
+
+**2. [Rule 3 - Blocking] Removed unused FIVE_MINUTES constant**
+- **Found during:** Task commit (lint error)
+- **Issue:** ESLint error: 'FIVE_MINUTES' is assigned but never used
+- **Fix:** Removed unused constant
+- **Files modified:** intel-grid-widget.tsx
+- **Verification:** ESLint passes
+
+**3. [Rule 3 - Blocking] Removed unused handleSelectCard callback**
+- **Found during:** Task commit (lint error)
+- **Issue:** ESLint error: 'handleSelectCard' is assigned but never used (replaced by handleSelectCardShared)
+- **Fix:** Removed legacy callback that was superseded by shared store version
+- **Files modified:** intel-grid-widget.tsx
+- **Verification:** ESLint passes
+
+---
+
+**Total deviations:** 3 auto-fixed (all blocking - lint/dependency issues)
+**Impact on plan:** No scope change. Fixes were required to commit.
+
+## Issues Encountered
+
+None - validation confirmed features work correctly.
+
+## Debugging Sessions
+
+### Debug 1: Pre-commit hook failures
+- **Trigger:** Git commit rejected by husky pre-commit hook
+- **Symptom:** prettier-plugin-tailwindcss not found, then ESLint unused variable errors
+- **Hypotheses tested:**
+  1. [HIGH] Missing dependency → CONFIRMED
+  2. [HIGH] Pre-existing lint errors in file → CONFIRMED
+- **Root Cause:** prettier plugin not installed; unused legacy code in file
+- **Fix:** Installed plugin, removed unused code
+- **Regression Test:** N/A (lint rules catch this)
+- **Time spent:** 5 min
+- **Pattern:** Always check for missing dependencies and run lint before committing large files
+
+---
+
+**Debug summary:** 1 debug session, 5 min spent debugging
+**Patterns identified:** Pre-commit failures often indicate dependency or lint issues
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent (validation, not implementation)
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (commit a6a6953d0)
+- [x] No unverified confident assertions
+
+**Notes:** Human verification confirmed features working. Debug logging visible in browser console.
+
+## Next Phase Readiness
+
+- Intel Grid pause-on-hover and badges validated
+- Ready for Phase 3 (Cross-Widget Sync) or additional Intel Grid plans if needed
+- Consider enhancing badge calculation to use token amounts in future phase
+
+---
+*Phase: 02-intel-grid-features*
+*Completed: 2026-01-13*

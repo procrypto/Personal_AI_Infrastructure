@@ -1,0 +1,91 @@
+/**
+ * Configuration Types
+ *
+ * User configuration for the analysis autopilot.
+ */
+
+import type { RuleSet } from '../rules/types.js';
+
+export interface WatchlistToken {
+  mint: string;
+  symbol?: string;
+  name?: string;
+  addedAt: number;
+}
+
+// Token source tracking
+export type TokenSource = 'watchlist' | 'trending' | 'whales';
+
+export interface SourcedToken {
+  mint: string;
+  symbol?: string;
+  source: TokenSource;
+}
+
+// Auto-source configuration
+export interface AutoSourceConfig {
+  enabled: boolean;
+  trending: boolean;  // Enable discovery/trending source
+  whales: boolean;    // Enable discovery/whale_moves source
+  refreshIntervalMs: number;  // How often to refresh auto-lists (default 15m)
+  trendingLimit: number;      // Max tokens to pull from trending
+  whalesLimit: number;        // Max tokens to pull from whale_moves
+  // TODO: Add spam filtering criteria when expanding to broader token sources
+  // TODO: Add per-source position limits (e.g., max 2 from trending, max 1 from whales)
+}
+
+export interface TriggerConfig {
+  enabled: boolean;
+  mode: 'paper' | 'live'; // Paper trading or live LOIS
+  defaultPositionSizeSol: number;
+  maxPositionSizeSol: number;
+  cooldownMs: number; // Minimum time between triggers for same token
+  onOppositeSignal: 'close' | 'flip' | 'ignore'; // What to do when opposite signal fires
+}
+
+export interface UserConfig {
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+
+  // Tokens to monitor (manual)
+  watchlist: WatchlistToken[];
+
+  // Active rule sets
+  // TODO: Add per-source rule sets (e.g., different strategies for trending vs whales)
+  ruleSets: RuleSet[];
+
+  // Auto-source configuration
+  autoSources: AutoSourceConfig;
+
+  // Trigger configuration
+  trigger: TriggerConfig;
+
+  // Analysis interval (for OHLCV polling)
+  pollIntervalMs: number;
+}
+
+export const DEFAULT_CONFIG: UserConfig = {
+  version: 1,
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  watchlist: [],
+  ruleSets: [],
+  autoSources: {
+    enabled: true,
+    trending: true,
+    whales: true,
+    refreshIntervalMs: 15 * 60 * 1000, // 15 minutes
+    trendingLimit: 20,
+    whalesLimit: 20,
+  },
+  trigger: {
+    enabled: true,
+    mode: 'paper',
+    defaultPositionSizeSol: 0.1,
+    maxPositionSizeSol: 1,
+    cooldownMs: 60000, // 1 minute
+    onOppositeSignal: 'close', // close position on opposite signal
+  },
+  pollIntervalMs: 30000, // 30 seconds
+};

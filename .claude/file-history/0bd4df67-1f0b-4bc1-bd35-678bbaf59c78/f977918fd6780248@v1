@@ -1,0 +1,155 @@
+/**
+ * AutopilotWebsocket
+ *
+ * WebSocket client for the token-analysis-autopilot backend.
+ * Connects to local autopilot service (no auth token needed).
+ *
+ * Extends BaseWebsocket for connection management and healthcheck.
+ */
+
+import { BaseWebsocket } from "@/websocket/base/BaseWebsocket";
+
+// Command types that can be sent to autopilot backend
+export type AutopilotCommand =
+  | { command: "toggle_sources"; enabled: boolean }
+  | { command: "toggle_trending"; enabled: boolean }
+  | { command: "toggle_whales"; enabled: boolean }
+  | { command: "toggle_filter"; enabled: boolean }
+  | { command: "set_mode"; mode: "paper" | "live" }
+  | { command: "set_position_size"; sizeSol: number }
+  | { command: "refresh_sources" }
+  | { command: "get_config" }
+  | { command: "get_strategies" }
+  | { command: "toggle_strategy"; strategyId: string; enabled: boolean }
+  | { command: "close_all_positions" }
+  | { command: "close_position"; mint: string };
+
+// Data feed types for v2.0 architecture (frontend -> CLI)
+// Frontend forwards NATS market data to CLI backend
+
+export type MarketDataFeed = {
+  feed: "market_data";
+  data: {
+    mint: string;
+    price_sol: number;
+    price_usd: number;
+    mcap: number;
+    volume_24h: number;
+  };
+};
+
+export type OhlcvFeed = {
+  feed: "ohlcv";
+  data: {
+    mint: string;
+    interval: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    timestamp: number;
+  };
+};
+
+export type TradeFeed = {
+  feed: "trade";
+  data: {
+    mint: string;
+    side: "buy" | "sell";
+    price: number;
+    amount: number;
+    timestamp: number;
+  };
+};
+
+export type CvdFeed = {
+  feed: "cvd";
+  data: {
+    mint: string;
+    cvd_1h: number;
+    cvd_6h: number;
+    buy_volume: number;
+    sell_volume: number;
+  };
+};
+
+export type AutopilotFeed = MarketDataFeed | OhlcvFeed | TradeFeed | CvdFeed;
+
+export class AutopilotWebsocket extends BaseWebsocket {
+  private hasMessageListener = false;
+  private removeListener: (() => void) | null = null;
+
+  /**
+   * Connect to autopilot backend.
+   * No auth token needed - this is a local service.
+   */
+  async connect() {
+    // If already connected, skip
+    if (
+      this.ws?.readyState === WebSocket.OPEN ||
+      this.ws?.readyState === WebSocket.CONNECTING
+    ) {
+      return;
+    }
+
+    // No auth token needed for local autopilot backend
+    const ws = new WebSocket(this.url);
+    this.ws = ws;
+    this.setupConnectHandlers();
+  }
+
+  /**
+   * Send a command to the autopilot backend.
+   */
+  sendCommand(command: AutopilotCommand) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(command));
+    } else {
+      console.warn("[Autopilot] Cannot send command - not connected");
+    }
+  }
+
+  /**
+   * Subscribe to data from the autopilot websocket.
+   * Returns a cleanup function to remove the listener.
+   */
+  subscribeToData(onMessage: (data: unknown) => void) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket must be connected before subscribing to data");
+    }
+
+    // Ensure only one message handler is attached at a time
+    if (this.hasMessageListener && this.removeListener) {
+      this.removeListener();
+      this.hasMessageListener = false;
+      this.removeListener = null;
+    }
+
+    const messageHandler = (event: MessageEvent) => {
+      const data = event.data;
+      if (typeof data !== "string") return;
+      if (data.length === 0 || data.charCodeAt(0) !== 123) return; // '{'
+
+      // Skip pong messages from healthcheck
+      if (data.indexOf('"pong"') !== -1) return;
+
+      try {
+        const parsed = JSON.parse(data);
+        onMessage(parsed);
+        // Any data message is also a pong
+        this.healthcheck?.resetPongs();
+      } catch (e) {
+        console.error("[Autopilot] Error parsing websocket message:", e, data);
+      }
+    };
+
+    this.ws.addEventListener("message", messageHandler);
+    this.hasMessageListener = true;
+    this.removeListener = () => {
+      this.ws?.removeEventListener("message", messageHandler);
+    };
+
+    return this.removeListener;
+  }
+}

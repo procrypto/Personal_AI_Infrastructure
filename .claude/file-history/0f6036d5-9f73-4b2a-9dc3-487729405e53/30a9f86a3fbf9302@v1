@@ -1,0 +1,142 @@
+---
+phase: 04-gcp-integration
+plan: 01
+type: execute
+---
+
+<objective>
+Create GCP infrastructure setup script and update workflow configurations for Workload Identity Federation and Secret Manager.
+
+Purpose: Document and automate all GCP resource creation needed for beta and production deployments.
+Output: Setup script with all `gcloud` commands, updated workflow files with configuration patterns.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/03-ci-cd-pipeline/03-01-SUMMARY.md
+@.planning/phases/03-ci-cd-pipeline/03-02-SUMMARY.md
+
+# Current workflow files:
+@.github/workflows/deploy.yml
+@.github/workflows/deploy-prod.yml
+
+**Tech stack available:** github-actions, google-github-actions/auth@v2, google-github-actions/deploy-cloudrun@v2
+**Established patterns:** WIF auth, Secret Manager injection, commit-sha-tagging
+**Constraining decisions:**
+- Phase 03-01: Use WIF over service account keys (more secure, no key rotation needed)
+- Phase 03-01: Reference secrets from Secret Manager in Cloud Run (not GitHub Secrets)
+- Phase 03-02: Use v* tag pattern for semantic versioning triggers
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create GCP setup script</name>
+  <files>scripts/gcp-setup.sh</files>
+  <action>
+Create executable bash script with all `gcloud` commands needed for beta and production setup:
+
+1. **Workload Identity Federation** (both projects):
+   - Create WIF pool: `gcloud iam workload-identity-pools create`
+   - Create OIDC provider: `gcloud iam workload-identity-pools providers create-oidc`
+   - Configure GitHub attribute mapping
+
+2. **Service Accounts** (both projects):
+   - Create service account: `gcloud iam service-accounts create github-actions`
+   - Grant roles: Cloud Run Admin, Artifact Registry Writer, Service Account User
+   - Bind WIF pool to service account
+
+3. **Artifact Registry** (both projects):
+   - Create repository: `gcloud artifacts repositories create trenchbench-api`
+
+4. **Secret Manager** (both projects):
+   - Create secrets: CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, CLICKHOUSE_SERVICE_ID
+   - Grant Cloud Run default service account access to secrets
+
+Script should:
+- Accept PROJECT_ID as parameter (bonkbotbeta or data-backend-prod)
+- Use variables for GitHub org/repo (BONKbot/local-api)
+- Echo each command before executing (--dry-run option)
+- Include comments explaining each step
+  </action>
+  <verify>bash -n scripts/gcp-setup.sh (syntax check passes)</verify>
+  <done>Script created with all required gcloud commands, syntax valid, commented</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create workflow configuration documentation</name>
+  <files>docs/GCP-SETUP.md</files>
+  <action>
+Create markdown documentation explaining:
+
+1. **Prerequisites**:
+   - GCP project access (Arthur must add repo to IAM list)
+   - GitHub repo settings for OIDC
+   - Required permissions to run setup
+
+2. **Setup Steps**:
+   - How to run gcp-setup.sh for beta
+   - How to run gcp-setup.sh for production
+   - How to set secret values (user must provide actual credentials)
+
+3. **Workflow Configuration**:
+   - Document the TODO placeholders in deploy.yml and deploy-prod.yml
+   - Provide exact values to replace placeholders after setup
+   - Format: `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github`
+
+4. **Verification Steps**:
+   - How to verify WIF is configured correctly
+   - How to verify secrets are accessible
+   - How to trigger a test deployment
+
+Keep documentation concise and actionable.
+  </action>
+  <verify>cat docs/GCP-SETUP.md | head -50 (documentation exists with clear structure)</verify>
+  <done>Documentation created with prerequisites, setup steps, configuration values, verification steps</done>
+</task>
+
+<task type="checkpoint:human-action" gate="blocking">
+  <action>Run GCP setup for beta environment</action>
+  <instructions>
+I've created the setup script and documentation.
+
+To proceed with actual deployment, you (or Arthur) need to:
+
+1. Review the setup script: `cat scripts/gcp-setup.sh`
+2. Run for beta: `./scripts/gcp-setup.sh bonkbotbeta`
+3. Set secret values in Secret Manager console (ClickHouse credentials)
+4. Note the WIF provider path from the output
+
+This requires GCP project admin access. If Arthur handles IAM, coordinate with him.
+  </instructions>
+  <verification>gcloud iam workload-identity-pools list --project=bonkbotbeta --location=global (shows github pool)</verification>
+  <resume-signal>Type "beta configured" with the WIF provider path, or "skip" to defer GCP setup</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] scripts/gcp-setup.sh exists and passes syntax check
+- [ ] docs/GCP-SETUP.md exists with clear instructions
+- [ ] User has path forward for GCP configuration
+</verification>
+
+<success_criteria>
+- GCP setup script created with all required commands
+- Documentation explains prerequisites and steps
+- User understands how to complete GCP configuration
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/04-gcp-integration/04-01-SUMMARY.md`
+</output>

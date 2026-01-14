@@ -1,0 +1,110 @@
+import { IS_DEVELOP } from "@/config";
+import { getTradingChartStore } from "@/store/memoryStore/slices/trading-chart-store/trading-chart-store";
+import { enableMapSet } from "immer";
+import { create } from "zustand";
+import { devtools, subscribeWithSelector } from "zustand/middleware";
+import { immer } from "zustand/middleware/immer";
+import { getActiveMarketDataMintsStore } from "./slices/active-market-data-mints-store/active-market-data-mints-store";
+import { getAutoStratStore } from "./slices/auto-strat-store/auto-strat-store";
+import { getDocumentVisibilityStore } from "./slices/document-visibility-store/document-visibility-store";
+import { getPresetStore } from "./slices/preset-store/preset-store";
+import { getSolanaPriceStore } from "./slices/solana-price-store/solana-price-store";
+import { getTimerStore } from "./slices/timer-store/timer-store";
+import { getTradingSettingsStore } from "./slices/trading-settings-store/trading-settings-store";
+import { getTradingPageStore } from "@/store/memoryStore/slices/trading-page-store/trading-page-store";
+import { getTransactionsStore } from "./slices/transactions-store/transactions-store";
+import { getWalletTrackingStore } from "./slices/wallet-tracking-store/wallet-tracking-store";
+import { getTransfersStore } from "./slices/transfers-store/transfers-store.tsx";
+import { getWithdrawalsStore } from "./slices/withdrawals-store/withdrawals-store.tsx";
+import { getWatchlistStore } from "./slices/watchlist-store/watchlist-store";
+
+import { createWebsocketMessagesStore } from "./slices/websocket-messages-store/websocket-messages-store";
+import { getXRayStore } from "./slices/x-ray-store/x-ray-store";
+import { getDiscoveryStore } from "./slices/discovery-store/discovery-store";
+import { getModalStore } from "@/ui/base/modal-store";
+import { getUnifiedMarksStore } from "./slices/unified-marks-store/unified-marks-store";
+import type { GlobalStore } from "./types";
+import { getNotificationsStore } from "@/store/memoryStore/slices/notifications-store/notifications-store.ts";
+import { getConnectionManagerStore } from "@/store/memoryStore/slices/connection-manager-store/connection-manager-store";
+import { getVersionStore } from "./slices/version-store/version-store";
+import { getPortfolioOptimisticStore } from "./slices/portfolio-optimistic-store/portfolio-optimistic-store";
+import { getChartPreviewOpenStore } from "@/store/memoryStore/slices/chart-preview-store/chart-preview-store";
+import { getWarzoneUIStore } from "./slices/warzone-store/warzone-store";
+import { getAutopilotStore } from "./slices/autopilot-store/autopilot-store";
+export { useShallow } from "zustand/react/shallow";
+
+enableMapSet();
+
+export const useGlobalStore = create<GlobalStore>()(
+  subscribeWithSelector(
+    devtools(
+      immer((set, get) => ({
+        websocketMessages: createWebsocketMessagesStore(set, get),
+        preset: getPresetStore(set, get),
+        tradeSettings: getTradingSettingsStore(set, get),
+        timer: getTimerStore(set, get),
+        solanaPrice: getSolanaPriceStore(set, get),
+        transactions: getTransactionsStore(set, get),
+        transfers: getTransfersStore(set, get),
+        withdrawals: getWithdrawalsStore(set, get),
+        autoStrat: getAutoStratStore(set, get),
+        tradeChart: getTradingChartStore(set, get),
+        chartPreview: getChartPreviewOpenStore(set, get),
+        tradingPage: getTradingPageStore(set, get),
+        walletTracking: getWalletTrackingStore(set, get),
+        watchlist: getWatchlistStore(set, get),
+        xRay: getXRayStore(set, get),
+        activeMarketDataMints: getActiveMarketDataMintsStore(set, get),
+        discovery: getDiscoveryStore(set, get),
+        documentVisibility: getDocumentVisibilityStore(set, get),
+        notifications: getNotificationsStore(set, get),
+        modal: getModalStore(set, get),
+        connectionManager: getConnectionManagerStore(set, get),
+        unifiedMarks: getUnifiedMarksStore(set, get),
+        version: getVersionStore(set, get),
+        portfolioOptimistic: getPortfolioOptimisticStore(set, get),
+        warzoneUI: getWarzoneUIStore(set, get),
+        autopilot: getAutopilotStore(set, get),
+      })),
+      {
+        // Devtools docs
+        // https://github.com/reduxjs/redux-devtools-extension/blob/master/docs/Troubleshooting.md#excessive-use-of-memory-and-cpu
+        // https://github.com/reduxjs/redux-devtools-extension/blob/master/docs/API/Arguments.md#actionsanitizer--statesanitizer
+        // eslint-disable-next-line lingui/no-unlocalized-strings
+        name: "WT - Memory",
+        enabled: IS_DEVELOP,
+        serialize: {
+          options: true,
+        },
+        stateSanitizer: (state: GlobalStore) => {
+          // do not pass whole
+          return {
+            tradeSettings: state.tradeSettings,
+
+            preset: state.preset,
+            timer: state.timer,
+            solanaPrice: state.solanaPrice,
+            transactions: state.transactions,
+            transfers: state.transfers,
+            withdrawals: state.withdrawals,
+            autoStrat: state.autoStrat,
+            chartPreview: state.chartPreview,
+            walletTracking: state.walletTracking,
+            xRay: state.xRay,
+            activeMarketDataMints: state.activeMarketDataMints,
+            discovery: state.discovery,
+            documentVisibility: state.documentVisibility,
+            notifications: state.notifications,
+            modal: state.modal,
+            connectionManager: state.connectionManager,
+            unifiedMarks: state.unifiedMarks,
+            tradingPage: state.tradingPage,
+            watchlist: state.watchlist,
+            autopilot: state.autopilot,
+          };
+        },
+        actionsBlacklist: ["addItem", "updateCurrentTimestamp"],
+      }
+    )
+  )
+);

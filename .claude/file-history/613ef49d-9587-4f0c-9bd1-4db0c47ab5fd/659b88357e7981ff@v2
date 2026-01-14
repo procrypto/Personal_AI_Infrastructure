@@ -1,0 +1,242 @@
+# Token Analysis Autopilot
+
+Configurable rule-based analysis system for Solana tokens that triggers automated paper trades via customizable strategies.
+
+## Features
+
+- **Rule Engine**: Configurable rules that analyze token metrics and emit buy/sell signals
+- **Template Strategies**: Pre-built rule combinations for common trading patterns
+- **Paper Trading**: Simulated trading with full P&L tracking
+- **Live Portfolio**: Real-time unrealized P&L with color-coded output
+- **Opposite Signal Handling**: Auto-close positions when opposite signal fires
+- **CLI Interface**: Simple commands for configuration and monitoring
+
+## Installation
+
+```bash
+npm install
+```
+
+## Quick Start
+
+```bash
+# 1. Add a token to watchlist
+npm run cli watch DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 BONK
+
+# 2. Add a trading strategy
+npm run cli use momentum-buy
+
+# 3. Start analysis loop
+npm run cli run
+```
+
+## CLI Commands
+
+### Watchlist Management
+```bash
+watch <mint> [symbol]   # Add token to watchlist
+unwatch <mint>          # Remove token from watchlist
+list                    # List all watched tokens
+```
+
+### Rule Management
+```bash
+templates               # List available strategy templates
+use <template>          # Activate a template
+remove <rule-id>        # Remove a rule set
+rules                   # List active rules
+```
+
+### Configuration
+```bash
+config                  # Show current config
+mode <paper|live>       # Set trading mode
+size <sol>              # Set default position size
+```
+
+### Trading
+```bash
+analyze <mint>          # Analyze single token (triggers trade if signal)
+run                     # Start continuous analysis loop
+```
+
+### Portfolio
+```bash
+status                  # Live portfolio overview with P&L
+trades                  # List all paper trades
+stats                   # Show trading statistics
+close <mint>            # Close open position
+reset                   # Clear all trading data
+```
+
+## Strategy Templates
+
+View available templates with compact rule notation:
+
+```bash
+npm run cli templates
+```
+
+Output:
+```
+momentum-buy:   price +1%/5m & price +2%/1h & vol 1.5x/5m & ratio 1.5:1/5m
+momentum-sell:  price -2%/5m & ratio 1.5:1/5m
+volume-alert:   vol 2x/5m | vol 3x/1h
+retail-interest: 50+30 traders/5m & ratio 1.2:1/5m
+```
+
+### Available Templates
+
+| Template | Description | Mode |
+|----------|-------------|------|
+| `momentum-buy` | Rising price + volume spike + buy pressure | ALL rules must match |
+| `momentum-sell` | Falling price + sell pressure | ALL rules must match |
+| `volume-alert` | Significant volume spikes | ANY rule can trigger |
+| `retail-interest` | High trader count + buyer majority | ALL rules must match |
+
+## Rule Types
+
+### Price Change
+Triggers on percentage price movement over timeframe.
+```
+price +1%/5m    # Up 1% in 5 minutes
+price -2%/1h    # Down 2% in 1 hour
+price +-5%/24h  # Up or down 5% in 24 hours
+```
+
+### Volume Spike
+Triggers when volume exceeds average by multiplier.
+```
+vol 2x/5m       # 2x average volume in 5 minutes
+vol 3x/1h       # 3x average volume in 1 hour
+```
+
+### Buy/Sell Ratio
+Triggers when buy volume exceeds sell volume (or vice versa).
+```
+ratio 1.5:1/5m  # 1.5x more buy volume than sell in 5m
+```
+
+### Trader Count
+Triggers on unique trader activity.
+```
+50+30 traders/5m  # 50 total traders, 30+ buyers in 5m
+```
+
+### Breakout
+Triggers when price breaks out of recent range.
+```
+breakout 5%/20c   # 5% breakout over 20 candles
+```
+
+### MA Crossover
+Triggers on moving average crossover.
+```
+ma 10x50          # 10-period crosses 50-period
+```
+
+## Run Loop Output
+
+The `run` command shows real-time status with color-coded P&L:
+
+```
+[06:33:37] #1  |  Watch: BONK: -  |  Trades: MUR (0.10 SOL) -77.9%
+[06:34:07] #2  |  Watch: BONK: BUY (85%)  |  Trades: MUR (0.10 SOL) -76.2%
+```
+
+- **Watch**: Tokens on watchlist with current signals (- = hold, BUY/SELL = signal)
+- **Trades**: Open positions with size and unrealized P&L (green = profit, red = loss)
+
+## Opposite Signal Handling
+
+Configure behavior when opposite signal fires on an open position:
+
+```typescript
+onOppositeSignal: 'close' | 'flip' | 'ignore'
+```
+
+- `close`: Close position, don't open new (default)
+- `flip`: Close position, open opposite direction
+- `ignore`: Keep existing position, ignore signal
+
+## Configuration
+
+Config stored in `.autopilot/config.json`:
+
+```typescript
+{
+  watchlist: [],           // Tokens to monitor
+  ruleSets: [],            // Active rule sets
+  trigger: {
+    enabled: true,
+    mode: 'paper',         // paper | live
+    defaultPositionSizeSol: 0.1,
+    maxPositionSizeSol: 1,
+    cooldownMs: 60000,     // 1 minute between triggers
+    onOppositeSignal: 'close'
+  },
+  pollIntervalMs: 30000    // 30 second scan interval
+}
+```
+
+## Data Storage
+
+All data stored in `.autopilot/`:
+- `config.json` - User configuration
+- `trades.json` - Paper trade history
+- `events.json` - Trigger event log
+
+## API Integration
+
+Uses local BONKbot web-terminal API (`localhost:3000`) for:
+- Token market data (price, volume, traders)
+- OHLCV candle data
+- Trade history
+
+## Status Command
+
+Get full portfolio overview:
+
+```bash
+npm run cli status
+```
+
+Output:
+```
+=== PORTFOLIO STATUS ===
+
+Open Positions:
+  BUY BONK  +12.34%  (+0.0123 SOL)
+    Entry: 0.00000123 -> Now: 0.00000138 SOL
+
+  Exposure: 0.1000 SOL
+  Unrealized: +0.0123 SOL ($1.23)
+
+Realized P&L:
+  5 trades | 3W/2L | 60% win
+  Total: +0.0456 SOL ($4.56)
+
+Config:
+  Watching: 2 tokens | Rules: 1 sets
+  Mode: paper
+```
+
+## Development
+
+```bash
+npm run dev        # Watch mode
+npm run build      # TypeScript compile
+npm run test       # Run test suite
+```
+
+## Roadmap
+
+- [ ] Magic SL: Williams fractal trailing stop
+- [ ] Magic S/R: Candlestick rotation support/resistance
+- [ ] Magic TP: Auto-sell at rotation resistance
+- [ ] Magic Buy: Entry at support levels
+- [ ] Live LOIS integration
+
+## License
+
+Private - BONKbot Hackathon 2025

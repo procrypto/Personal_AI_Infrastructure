@@ -1,0 +1,130 @@
+---
+phase: 06-real-time-activity-indicators
+plan: 01
+type: execute
+---
+
+<objective>
+Add real-time activity indicators to the autopilot widget for visual reassurance.
+
+Purpose: Give users confidence the autopilot is actively working by showing live-updating timestamps and a countdown to the next scan.
+Output: Widget displays "Xs ago" updating live, countdown timer to next scan, enhanced scan metadata.
+</objective>
+
+<execution_context>
+@~/.claude/get-shit-done/workflows/execute-phase.md
+@~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+**Prior phase context:**
+@.planning/phases/05-unit-tests/05-01-SUMMARY.md
+
+**Key files:**
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+
+**Tech stack available:** React, TypeScript, Zustand, useEffect/useState hooks
+**Established patterns:** Custom hooks in hooks/useAutopilot/, component extraction in widget
+
+**Data available for this phase:**
+- `config.pollIntervalMs` - scan interval (e.g., 15000ms)
+- `scanTick.timestamp` - when last scan started
+- `lastAnalysis.timestamp` - when last token was analyzed
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create useTimeAgo hook and apply to LastAnalysisRow</name>
+  <files>
+    apps/web-terminal/src/hooks/useAutopilot/useTimeAgo.ts,
+    apps/web-terminal/src/hooks/useAutopilot/index.ts,
+    apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+  </files>
+  <action>
+Create a custom hook `useTimeAgo(timestamp: number)` that returns a live-updating time string:
+- Returns "Xs ago" for timestamps < 60s old, "Xm ago" for < 60m, "Xh ago" for older
+- Uses setInterval to update every 1s when < 60s, every 10s when < 5m, every 30s when older
+- Clears interval on unmount to prevent memory leaks
+- Handle edge cases: null/undefined timestamp returns null
+
+Apply the hook to LastAnalysisRow component in autopilot-widget.tsx:
+- Replace the static `timeAgo` calculation (lines 593-594) with useTimeAgo hook
+- Update LastAnalysisRow to use the hook's return value
+- The "Xs ago" / "Xm ago" should now update live without page refresh
+
+Export hook from hooks/useAutopilot/index.ts for clean imports.
+  </action>
+  <verify>
+    - `npm run typecheck` passes
+    - Manual: Open widget, trigger an analysis, observe "Xs ago" incrementing live without page refresh
+    - Manual: Wait 60+ seconds, observe transition from "Xs ago" to "1m ago"
+  </verify>
+  <done>
+    - useTimeAgo hook created and exported
+    - LastAnalysisRow shows live-updating "time ago"
+    - No TypeScript errors, hook cleans up interval on unmount
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create ScanCountdown component and add to widget header</name>
+  <files>
+    apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+  </files>
+  <action>
+Create a ScanCountdown component within autopilot-widget.tsx:
+- Takes props: `scanTimestamp: number | null`, `intervalMs: number`
+- Calculates time remaining until next scan: `(scanTimestamp + intervalMs) - Date.now()`
+- Uses setInterval(1000) to countdown every second
+- Displays: "Next: Xs" when countdown > 0, "Scanning..." when countdown <= 0
+- Style with existing text-text-secondary and text-[10px] classes for consistency
+- Handle edge case: if scanTimestamp is null, show "Waiting..."
+
+Add ScanCountdown to widget header (lines 669-687):
+- Place after the existing scanTick display `#{scanTick.scanNumber} | {totalTokens} tokens`
+- Add a separator (|) and the countdown: `| Next: Xs`
+- Only show when isConnected is true
+
+Keep it simple - no progress bar, just text countdown.
+  </action>
+  <verify>
+    - `npm run typecheck` passes
+    - Manual: Open widget, observe countdown decrementing each second
+    - Manual: When countdown reaches 0, should briefly show "Scanning..." then reset
+  </verify>
+  <done>
+    - ScanCountdown component created
+    - Widget header shows live countdown to next scan
+    - Countdown resets when new scanTick arrives
+    - No TypeScript errors
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run typecheck` passes
+- [ ] `npm run lint` passes (or only pre-existing warnings)
+- [ ] Widget shows live-updating "time ago" on last analysis
+- [ ] Widget shows countdown to next scan in header
+- [ ] Both update in real-time without page refresh
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No new TypeScript errors or warnings
+- Real-time indicators provide visual reassurance of autopilot activity
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/06-real-time-activity-indicators/06-01-SUMMARY.md`
+</output>

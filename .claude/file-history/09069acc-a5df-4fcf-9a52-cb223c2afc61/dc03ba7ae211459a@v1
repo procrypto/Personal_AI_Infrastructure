@@ -1,0 +1,159 @@
+# Coding Conventions
+
+**Analysis Date:** 2025-01-07
+
+## Naming Patterns
+
+**Files:**
+- kebab-case for all source files: `health-check.ts`, `auth-check.ts`, `user-api-check.ts`
+- `run.ts` for system orchestrators (consistent across all systems)
+- `index.ts` for barrel exports
+
+**Functions:**
+- camelCase for all functions
+- Test functions: `testHealthEndpoint`, `testResponseTimeSLA`, `testErrorRate`
+- Utility functions: `measureTime`, `runTest`, `aggregateSuiteResults`
+- Config loaders: `loadWebApiConfig`, `loadTelegramConfig`, `loadPum3Config`
+- Reporters: `printTestResult`, `generateJsonReport`, `generateGithubSummary`
+
+**Variables:**
+- camelCase for variables and parameters
+- No SCREAMING_SNAKE_CASE constants (camelCase used throughout)
+
+**Types:**
+- PascalCase for interfaces: `TestResult`, `TestSuiteResult`, `WebApiConfig`
+- PascalCase for types: `TestStatus`, `SystemConfig`, `OutputFormat`
+- No `I` prefix for interfaces
+
+## Code Style
+
+**Formatting:**
+- 2 space indentation (consistent throughout)
+- Single quotes for strings
+- Semicolons required
+- No Prettier or ESLint config files (manual formatting)
+
+**Linting:**
+- TypeScript strict mode enforced via `tsconfig.json`
+- `strict: true`, `noImplicitAny: true`, `noUnusedLocals: true`
+- No ESLint configuration present
+
+## Import Organization
+
+**Order:**
+1. Node.js built-ins (`fs`, `path`)
+2. External packages (`dotenv`, `ws`)
+3. Internal modules (`./types`, `./utils`, `../core`)
+4. Type imports inline (not separate)
+
+**Grouping:**
+- No consistent blank lines between groups
+- Alphabetical sorting not enforced
+
+**Path Aliases:**
+- No path aliases configured
+- Relative imports used: `./`, `../`
+
+## Error Handling
+
+**Patterns:**
+- Throw `Error` on assertion failures
+- Catch at test boundary via `runTest()` wrapper
+- Descriptive error messages: `"Expected ${expected}, got ${actual}"`
+
+**Error Types:**
+- Assertion errors with context: `assertEqual(actual, expected, message)`
+- Config errors: `throw new Error('Required env var X not set')`
+- Network errors propagated from fetch
+
+**Async:**
+- async/await throughout (no Promise chains)
+- try/catch in test wrappers
+
+## Logging
+
+**Framework:**
+- Console logging only (no external logging library)
+- `console.log` for normal output
+- `console.error` not used (errors in test results)
+
+**Patterns:**
+- Colored console output via ANSI codes in reporter
+- Structured output via JSON format option
+- No log levels (info, debug, etc.)
+
+**Where:**
+- Reporter layer handles all output (`src/core/reporter.ts`)
+- Test functions return results, don't log directly
+
+## Comments
+
+**When to Comment:**
+- Header comments on files explaining purpose
+- Inline comments for non-obvious logic
+- TODO comments for planned work
+
+**JSDoc/TSDoc:**
+- Not used (no JSDoc annotations)
+- Type information in TypeScript signatures
+
+**TODO Comments:**
+- Format: `// TODO: description` or `// TODO - description`
+- Examples:
+  - `// TODO: Allure TestOps Integration` - `src/core/reporter.ts`
+  - `// TODO: Implement automated frontend tests` - `src/systems/frontend/run.ts`
+
+## Function Design
+
+**Size:**
+- Generally under 50 lines
+- Test functions focused on single behavior
+- Utilities extracted for reuse
+
+**Parameters:**
+- Typed parameters with interfaces
+- Config objects passed to test functions
+- Options objects for complex utilities
+
+**Return Values:**
+- Explicit return types on all functions
+- `Promise<TestResult>` for test functions
+- `Promise<TestSuiteResult>` for suite runners
+
+## Module Design
+
+**Exports:**
+- Named exports preferred
+- No default exports
+- Barrel file for core module (`src/core/index.ts`)
+
+**Barrel Files:**
+- `src/core/index.ts` re-exports public API
+- Not used in system modules
+
+**Test ID Convention:**
+- Format: `{LETTER}-{CATEGORY}-{NUMBER}`
+- Examples:
+  - `A-HEALTH-01` - API Health Endpoint
+  - `A-AUTH-02` - Token Refresh
+  - `A-TG-HEALTH-01` - Telegram Bot Health
+- Enables filtering and cross-referencing
+
+## TypeScript Specific
+
+**Type Assertions:**
+- Non-null assertions used sparingly (`config.token!`)
+- Prefer runtime checks before assertion
+
+**Generics:**
+- Used in utilities: `fetchWithTimeout<T>()`
+- Response types parameterized
+
+**Strict Mode:**
+- All strict checks enabled
+- No `any` types in production code
+
+---
+
+*Convention analysis: 2025-01-07*
+*Update when patterns change*

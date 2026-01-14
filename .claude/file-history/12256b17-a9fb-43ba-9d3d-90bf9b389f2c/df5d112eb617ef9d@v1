@@ -1,0 +1,117 @@
+---
+phase: 25-command-event-protocol
+plan: 01
+type: execute
+---
+
+<objective>
+Extract command and event handlers into pure, testable functions for v2.0 architecture.
+
+Purpose: Enable unit testing of protocol logic without mocking WebSocket connections or React hooks.
+Output: Pure handler functions with comprehensive test coverage.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase summaries (dependency graph):
+@.planning/phases/23-websocket-client-refactor/23-01-SUMMARY.md
+@.planning/phases/24-data-feed-implementation/24-01-SUMMARY.md
+
+# Key files:
+@apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts
+@apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+@apps/web-terminal/src/websocket/autopilot/messageParser.test.ts
+
+**Tech stack available:** TypeScript, Vitest, React, Zustand
+
+**Established patterns:**
+- Feed adapter pattern: Pure functions convert NATS messages to backend format (from Phase 24)
+- Typed protocol: Commands use AutopilotCommand union, feeds use AutopilotFeed union
+
+**Constraining decisions:**
+- Phase 23: Feed types separate from command types (semantic clarity)
+- Phase 24: Data forwarding scoped to relevant mints only
+
+**Current state:**
+- Commands: 12 types defined in AutopilotWebsocket.ts, all wired to UI
+- Events: 9 types handled inline in connectAutopilotWebsocket.ts
+- parseAutopilotEvent: Already exists in test file but NOT in production code
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Extract event parser to production code</name>
+  <files>apps/web-terminal/src/websocket/autopilot/eventParser.ts</files>
+  <action>
+Create eventParser.ts with:
+1. Export the AutopilotEvent union type (currently inline in connectAutopilotWebsocket.ts)
+2. Export parseAutopilotEvent function (already in messageParser.test.ts, copy to production)
+3. Export BackendPositionData interface for type safety
+
+Move the types out of connectAutopilotWebsocket.ts so they can be imported by both the connection handler and tests.
+  </action>
+  <verify>TypeScript compiles without errors: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+  <done>eventParser.ts exports AutopilotEvent, parseAutopilotEvent, BackendPositionData</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Refactor connectAutopilotWebsocket to use extracted parser</name>
+  <files>apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts</files>
+  <action>
+1. Import AutopilotEvent, parseAutopilotEvent, BackendPositionData from ./eventParser
+2. Remove inline type definitions (AutopilotEvent, BackendPositionData)
+3. Use parseAutopilotEvent in the message handler instead of manual type check
+4. Keep the switch statement for dispatching to store methods
+
+The handler logic stays the same, just uses the extracted parser for validation.
+  </action>
+  <verify>TypeScript compiles: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+  <done>connectAutopilotWebsocket imports from eventParser, no inline type definitions</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Update tests to import from production code</name>
+  <files>apps/web-terminal/src/websocket/autopilot/messageParser.test.ts</files>
+  <action>
+1. Remove the duplicate parseAutopilotEvent function definition from the test file
+2. Import parseAutopilotEvent and AutopilotEvent from ./eventParser
+3. Keep all existing test cases (they should pass unchanged)
+4. Update the BackendPositionData import to come from ./eventParser
+
+This ensures tests use the same code as production.
+  </action>
+  <verify>Tests pass: `cd apps/web-terminal && npm test -- --run messageParser`</verify>
+  <done>messageParser.test.ts imports from eventParser, all tests pass</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `cd apps/web-terminal && npx tsc --noEmit` - TypeScript compiles
+- [ ] `cd apps/web-terminal && npm test -- --run messageParser` - Parser tests pass
+- [ ] No duplicate type definitions (eventParser.ts is single source of truth)
+</verification>
+
+<success_criteria>
+
+- eventParser.ts exports AutopilotEvent union type
+- eventParser.ts exports parseAutopilotEvent pure function
+- eventParser.ts exports BackendPositionData interface
+- connectAutopilotWebsocket.ts uses imported parser
+- messageParser.test.ts imports from production code
+- All existing tests pass
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/25-command-event-protocol/25-01-SUMMARY.md`
+</output>

@@ -1,0 +1,182 @@
+---
+phase: 01-data-reception
+plan: 03
+type: execute
+---
+
+<objective>
+Create comprehensive tests for the data validation and normalization layers.
+
+Purpose: Ensure data layer reliability with automated tests covering happy paths and edge cases.
+Output: Test suite for validator and normalizer modules with full coverage of critical paths.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@src/data/validator.ts
+@src/data/normalizer.ts
+
+**Prior plan context:**
+- 01-01 added DataFeedMessage types and WebSocket handlers
+- 01-02 created validator.ts and normalizer.ts
+
+**Testing approach:**
+- Use vitest (fast, TypeScript-native, works well with this stack)
+- Co-locate tests with source files (*.test.ts)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Setup test framework and create validation tests</name>
+  <files>src/data/validator.test.ts, package.json, vitest.config.ts</files>
+  <action>
+1. Install vitest as dev dependency:
+   `npm install -D vitest`
+
+2. Create `vitest.config.ts` at project root:
+```typescript
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'node',
+  },
+});
+```
+
+3. Add test script to package.json:
+   `"test": "vitest run"`
+   `"test:watch": "vitest"`
+
+4. Create `src/data/validator.test.ts` with tests:
+
+**validateTokenMarketData tests:**
+- Valid complete data returns { valid: true, errors: [] }
+- Missing mint returns error
+- Empty mint string returns error
+- Negative price_sol returns error
+- Missing optional fields still valid
+- Invalid type for numeric field returns error
+
+**validateOHLCV tests:**
+- Valid candle returns valid
+- Missing timestamp returns error
+- high < low returns error (invalid candle)
+- Negative volume returns error
+
+**validateTrade tests:**
+- Valid trade returns valid
+- Missing mint returns error
+- Invalid direction (not 'buy'/'sell') returns error
+- Zero sol_amount returns error
+  </action>
+  <verify>
+Run tests: `npm test`
+All tests pass
+  </verify>
+  <done>
+- vitest installed and configured
+- package.json has test scripts
+- validator.test.ts covers all validation functions
+- Tests for valid data, missing fields, invalid values, type errors
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create normalization tests</name>
+  <files>src/data/normalizer.test.ts</files>
+  <action>
+Create `src/data/normalizer.test.ts` with tests:
+
+**normalizeTokenMarketData tests:**
+- Complete data passes through unchanged (except mint lowercase)
+- Mint is lowercased
+- Missing optional volume fields default to 0
+- Missing optional count fields default to 0
+
+**normalizeOHLCV tests:**
+- Unsorted array gets sorted by timestamp
+- Missing volume defaults to 0
+- Empty array returns empty array
+
+**normalizeTrade tests:**
+- Mint is lowercased
+- Missing is_dev defaults to false
+- Missing is_insider defaults to false
+- Missing is_sniper defaults to false
+- Missing is_bundler defaults to false
+- Missing platform defaults to 'unknown'
+
+**normalizeDataFeed tests:**
+- market_data_feed routes to normalizeTokenMarketData
+- ohlcv_update routes to normalizeOHLCV
+- trade_feed routes to normalizeTrade
+  </action>
+  <verify>
+Run tests: `npm test`
+All tests pass
+  </verify>
+  <done>
+- normalizer.test.ts covers all normalization functions
+- Tests for default values, transformations, routing
+- Edge cases covered (empty arrays, missing fields)
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm test` passes all tests
+- [ ] `npx tsc --noEmit` still passes
+- [ ] validator.test.ts has tests for all three validation functions
+- [ ] normalizer.test.ts has tests for all normalization functions
+- [ ] No skipped or pending tests
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- All tests pass
+- Test coverage includes happy paths and edge cases
+- Phase 1 complete
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-data-reception/01-03-SUMMARY.md` with:
+
+# Phase 1 Plan 3: Data Layer Tests Summary
+
+**[One-liner summary]**
+
+## Accomplishments
+
+- Test framework setup (vitest)
+- Validation test coverage
+- Normalization test coverage
+
+## Files Created/Modified
+
+- vitest.config.ts
+- package.json (test scripts)
+- src/data/validator.test.ts
+- src/data/normalizer.test.ts
+
+## Phase 1 Complete
+
+Phase 1 (Data Reception) is complete:
+- 01-01: WebSocket data feed handlers
+- 01-02: Validation and normalization layers
+- 01-03: Test coverage
+
+Ready for Phase 2: Dual-Path Engine
+</output>

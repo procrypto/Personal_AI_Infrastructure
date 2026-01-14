@@ -1,0 +1,107 @@
+/**
+ * Test Script - Debug mode to see what data we're getting
+ */
+
+import { localApi } from './api/client.js';
+import { RuleEngine } from './rules/engine.js';
+import { createPriceChangeRule } from './rules/price-change.js';
+import { createVolumeSpikeRule } from './rules/volume-spike.js';
+
+async function test() {
+  console.log('╔══════════════════════════════════════════════════════════════╗');
+  console.log('║  TOKEN ANALYSIS AUTOPILOT - DEBUG TEST                       ║');
+  console.log('╚══════════════════════════════════════════════════════════════╝\n');
+
+  const mint = process.argv[2] || 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'; // BONK
+
+  console.log(`Testing with token: ${mint}\n`);
+
+  // Fetch data directly to see what we're working with
+  console.log('1. Fetching market data...');
+  try {
+    const marketData = await localApi.getMarketData(mint);
+    console.log(`   Symbol: ${marketData.symbol}`);
+    console.log(`   Price (SOL): ${marketData.price_sol}`);
+    console.log(`   Price (USD): $${marketData.price_usd?.toFixed(6) ?? 'N/A'}`);
+    console.log(`   Market Cap: $${(marketData.market_cap_usd ?? 0).toLocaleString()}`);
+    console.log(`   Holders: ${marketData.holders?.toLocaleString() ?? 'N/A'}`);
+
+    // Price change data
+    console.log('\n   Price Change Data:');
+    console.log(`   - earliest_price_sol_5m: ${(marketData as any).earliest_price_sol_5m ?? 'N/A'}`);
+    console.log(`   - earliest_price_sol_1h: ${(marketData as any).earliest_price_sol_1h ?? 'N/A'}`);
+    console.log(`   - earliest_price_sol_6h: ${(marketData as any).earliest_price_sol_6h ?? 'N/A'}`);
+    console.log(`   - earliest_price_sol_24h: ${(marketData as any).earliest_price_sol_24h ?? 'N/A'}`);
+
+    // Calculate actual price changes
+    if ((marketData as any).earliest_price_sol_5m) {
+      const pct5m = ((marketData.price_sol - (marketData as any).earliest_price_sol_5m) / (marketData as any).earliest_price_sol_5m) * 100;
+      console.log(`   - 5m change: ${pct5m.toFixed(2)}%`);
+    }
+    if ((marketData as any).earliest_price_sol_1h) {
+      const pct1h = ((marketData.price_sol - (marketData as any).earliest_price_sol_1h) / (marketData as any).earliest_price_sol_1h) * 100;
+      console.log(`   - 1h change: ${pct1h.toFixed(2)}%`);
+    }
+
+    // Volume data
+    console.log('\n   Volume Data (SOL):');
+    console.log(`   - volume_5m: ${(marketData as any).volume_sol_5m ?? 'N/A'}`);
+    console.log(`   - volume_1h: ${(marketData as any).volume_sol_1h ?? 'N/A'}`);
+    console.log(`   - volume_6h: ${(marketData as any).volume_sol_6h ?? 'N/A'}`);
+    console.log(`   - volume_24h: ${(marketData as any).volume_sol_24h ?? 'N/A'}`);
+
+    // Buy/sell data
+    console.log('\n   Buy/Sell Activity:');
+    console.log(`   - buys_5m: ${(marketData as any).buys_5m ?? 'N/A'} | sells_5m: ${(marketData as any).sells_5m ?? 'N/A'}`);
+    console.log(`   - buys_1h: ${(marketData as any).buys_1h ?? 'N/A'} | sells_1h: ${(marketData as any).sells_1h ?? 'N/A'}`);
+  } catch (error) {
+    console.error('   ✗ Failed to fetch market data:', error);
+  }
+
+  // Now run analysis with lower thresholds
+  console.log('\n\n2. Running analysis with LOWER thresholds...');
+
+  const engine = new RuleEngine({ api: localApi });
+
+  // Very sensitive rules for testing
+  engine.addRule(createPriceChangeRule('price-any-5m', 'Any Price Move (5m)', {
+    timeframe: '5m',
+    threshold: 0.1, // 0.1% - very sensitive!
+    direction: 'both',
+    type: 'both',
+  }));
+
+  engine.addRule(createPriceChangeRule('price-any-1h', 'Any Price Move (1h)', {
+    timeframe: '1h',
+    threshold: 0.5, // 0.5%
+    direction: 'both',
+    type: 'both',
+  }));
+
+  engine.addRule(createVolumeSpikeRule('volume-any-5m', 'Any Volume (5m)', {
+    timeframe: '5m',
+    multiplier: 0.5, // Below average is fine for testing
+    type: 'both',
+  }));
+
+  const signals = await engine.analyzeToken(mint);
+
+  if (signals.length === 0) {
+    console.log('   Still no signals (data might be missing price history fields)');
+  } else {
+    console.log(`   ${signals.length} signal(s):\n`);
+    for (const signal of signals) {
+      const emoji = signal.type === 'buy' ? '🟢' : signal.type === 'sell' ? '🔴' : '⚪';
+      console.log(`   ${emoji} ${signal.ruleName}`);
+      console.log(`      ${signal.reason}`);
+      console.log(`      Data: ${JSON.stringify(signal.data, null, 2).split('\n').join('\n      ')}`);
+      console.log('');
+    }
+  }
+
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('Test complete!');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+}
+
+test().catch(console.error);

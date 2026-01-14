@@ -1,0 +1,105 @@
+---
+phase: 22-watchlist-style-screener-volume-trends
+plan: 01
+subsystem: ui
+tags: [screener, websocket, types, hooks]
+
+# Dependency graph
+requires:
+  - phase: 18-data-fixes
+    provides: Watchlist WebSocket subscription for instant symbols
+provides:
+  - ScreenerTokenData unified type for all screener columns
+  - Full market_data embedded in trending/watchlist tokens
+  - NATS fallback for whale price data
+affects: [22-02, 22-03]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - "WebSocket-first data for trending/watchlist columns"
+    - "Unified ScreenerTokenData type across screener"
+
+key-files:
+  created:
+    - apps/web-terminal/src/hooks/useAutopilot/types.ts
+  modified:
+    - apps/web-terminal/src/hooks/useAutopilot/index.ts
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts
+
+key-decisions:
+  - "Use WebSocket store data directly for trending/watchlist (has full trading_stats)"
+  - "Keep NATS fallback for whales (API doesn't provide trading_stats)"
+  - "Prefer embedded market_data, fall back to NATS only when needed"
+
+patterns-established:
+  - "ScreenerTokenData: unified type for all screener columns"
+  - "WebSocket-first with NATS fallback pattern"
+
+issues-created: []
+
+# Metrics
+duration: 4min
+completed: 2026-01-09
+---
+
+# Phase 22 Plan 01: Data Source Consolidation Summary
+
+**Unified ScreenerTokenData type with WebSocket-first data for trending/watchlist columns, NATS fallback for whales**
+
+## Performance
+
+- **Duration:** 4 min
+- **Started:** 2026-01-09T04:58:16Z
+- **Completed:** 2026-01-09T05:03:15Z
+- **Tasks:** 3
+- **Files modified:** 4
+
+## Accomplishments
+
+- Created `ScreenerTokenData` unified type with full market_data structure
+- Updated `useAutopilotDiscoveryTokens` to embed WebSocket market_data for trending/watchlist
+- Updated `useAutopilotTokensWithPrices` to prefer embedded data with NATS fallback
+- All three screener columns now return consistent data shape
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Audit current data sources and types** - (analysis only, no code changes)
+2. **Task 2: Create unified ScreenerTokenData type** - `b34bef70c` (feat)
+3. **Task 3: Update hooks to return unified type** - `5e8dcbe3e` (feat)
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/types.ts` - New ScreenerTokenData, ScreenerMarketData, TradingStats types
+- `apps/web-terminal/src/hooks/useAutopilot/index.ts` - Export new types
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts` - Embed market_data from WebSocket stores
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts` - WebSocket-first with NATS fallback
+
+## Decisions Made
+
+- **WebSocket for trending/watchlist:** Both have full `trading_stats_*` in WebSocket stores
+- **NATS fallback for whales:** Whale API only has `current_market_cap_usd`, no price change data
+- **Prefer embedded data:** Only fall back to NATS when WebSocket data unavailable
+- **Keep existing widget interface:** `AutopilotTokenWithPrices` maintained for backward compatibility
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Next Phase Readiness
+
+- Data layer consolidated with unified types
+- Ready for Plan 02: UI refactor to watchlist-style table layout
+- Full market_data available for price change calculations across timeframes
+
+---
+*Phase: 22-watchlist-style-screener-volume-trends*
+*Completed: 2026-01-09*

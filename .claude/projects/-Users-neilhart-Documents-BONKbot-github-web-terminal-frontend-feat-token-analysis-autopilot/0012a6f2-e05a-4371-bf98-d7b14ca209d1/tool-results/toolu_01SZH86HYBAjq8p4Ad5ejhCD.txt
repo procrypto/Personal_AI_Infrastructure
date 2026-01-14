@@ -1,0 +1,64 @@
+    60→  });
+    61→
+    62→  // Plugin to auto-start autopilot backend in local development
+    63→  const autopilotStartupPlugin = () => {
+    64→    let autopilotProcess: ChildProcess | null = null;
+    65→
+    66→    return {
+    67→      name: "autopilot-startup-plugin",
+    68→      configureServer(server: {
+    69→        httpServer?: { on: (event: string, callback: () => void) => void };
+    70→      }) {
+    71→        // Only run in local development
+    72→        if (process.env.VITE_APP_ENV !== "local") return;
+    73→
+    74→        const autopilotPath = path.resolve(
+    75→          __dirname,
+    76→          "../../token-analysis-autopilot"
+    77→        );
+    78→
+    79→        // Check if autopilot directory exists
+    80→        if (!fs.existsSync(autopilotPath)) {
+    81→          console.log(
+    82→            "[Autopilot] ⚠️  token-analysis-autopilot not found at",
+    83→            autopilotPath
+    84→          );
+    85→          console.log(
+    86→            "[Autopilot] Skipping auto-start. Run autopilot backend manually if needed."
+    87→          );
+    88→          return;
+    89→        }
+    90→
+    91→        console.log("[Autopilot] 🚀 Starting autopilot backend...");
+    92→
+    93→        autopilotProcess = spawn("npx", ["tsx", "src/index.ts"], {
+    94→          cwd: autopilotPath,
+    95→          stdio: ["ignore", "pipe", "pipe"],
+    96→          shell: true,
+    97→        });
+    98→
+    99→        autopilotProcess.stdout?.on("data", (data: Buffer) => {
+   100→          const lines = data.toString().trim().split("\n");
+   101→          lines.forEach((line: string) => console.log(`[Autopilot] ${line}`));
+   102→        });
+   103→
+   104→        autopilotProcess.stderr?.on("data", (data: Buffer) => {
+   105→          const lines = data.toString().trim().split("\n");
+   106→          lines.forEach((line: string) => console.error(`[Autopilot] ${line}`));
+   107→        });
+   108→
+   109→        autopilotProcess.on("error", (err: Error) => {
+   110→          console.error("[Autopilot] ❌ Failed to start:", err.message);
+   111→        });
+   112→
+   113→        autopilotProcess.on("exit", (code: number | null) => {
+   114→          if (code !== null && code !== 0) {
+   115→            console.log(`[Autopilot] Process exited with code ${code}`);
+   116→          }
+   117→        });
+   118→
+   119→        // Kill autopilot process when dev server stops
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

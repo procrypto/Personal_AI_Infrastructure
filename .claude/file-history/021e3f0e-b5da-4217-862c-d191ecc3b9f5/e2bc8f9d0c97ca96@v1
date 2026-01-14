@@ -1,0 +1,65 @@
+/**
+ * Slack Event Subscribers
+ *
+ * Wire up event bus subscriptions for Slack notifications.
+ * When tickets are created, posts Block Kit thread replies.
+ */
+
+import { getEventBus } from '../events/event-bus.js';
+import { findLinearMessageByIssueId } from '../store/linear-message-store.js';
+import { updateTicket } from '../store/ticket-store.js';
+import { postQAThreadReply } from './thread-reply.js';
+
+/**
+ * Set up all Slack-related event bus subscriptions.
+ * Call once at application startup.
+ */
+export function setupSlackSubscribers(): void {
+  const bus = getEventBus();
+
+  // Subscribe to ticket:created events
+  bus.subscribe('ticket:created', async (payload) => {
+    const { ticket } = payload;
+
+    // Look up the Linear message by issue ID to get thread info
+    const linearMessage = await findLinearMessageByIssueId(ticket.id);
+
+    if (!linearMessage) {
+      // Linear message not captured yet - may happen if webhook arrived before Linear posted
+      console.warn(
+        `[slack-subscriber] No LinearMessage found for ticket ${ticket.id} - cannot post thread reply`,
+        { ticketId: ticket.id, linearUrl: ticket.linearUrl }
+      );
+      return;
+    }
+
+    // Update ticket with Slack thread info
+    const updatedTicket = await updateTicket(ticket.id, {
+      slackThreadTs: linearMessage.slackMessageTs,
+      slackChannelId: linearMessage.slackChannelId,
+    });
+
+    if (!updatedTicket) {
+      console.error(
+        `[slack-subscriber] Failed to update ticket ${ticket.id} with Slack thread info`
+      );
+      return;
+    }
+
+    // Post the QA assignment message in the thread
+    const messageTs = await postQAThreadReply(updatedTicket);
+
+    if (messageTs) {
+      console.log(
+        `[slack-subscriber] Posted QA assignment for ticket ${ticket.id}`,
+        { messageTs, threadTs: linearMessage.slackMessageTs }
+      );
+    } else {
+      console.error(
+        `[slack-subscriber] Failed to post thread reply for ticket ${ticket.id}`
+      );
+    }
+  });
+
+  console.log('[slack-subscriber] Slack event subscribers initialized');
+}

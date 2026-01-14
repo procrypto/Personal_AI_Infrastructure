@@ -1,0 +1,50 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   494→          case 'refresh_sources':
+   495→            console.log('[WS] Refreshing auto-sources...');
+   496→            await autoSources.refresh();
+   497→            break;
+   498→          case 'get_config':
+   499→            // Just broadcast current config
+   500→            break;
+   501→          case 'get_strategies':
+   502→            // Just broadcast strategies
+   503→            break;
+   504→          case 'toggle_strategy': {
+   505→            const strategyId = cmd.strategyId;
+   506→            const enable = cmd.enabled;
+   507→            if (enable) {
+   508→              // Add strategy from templates
+   509→              const template = getTemplate(strategyId);
+   510→              if (template) {
+   511→                configStore.addRuleSet(template);
+   512→                await configStore.save();
+   513→                // Reload rules in engine
+   514→                engine.clearRules();
+   515→                for (const ruleSet of configStore.getRuleSets()) {
+   516→                  engine.addRulesFromConfig(ruleSet.rules);
+   517→                }
+   518→                console.log(`[WS] Strategy enabled: ${template.name}`);
+   519→              }
+   520→            } else {
+   521→              // Remove strategy
+   522→              if (configStore.removeRuleSet(strategyId)) {
+   523→                await configStore.save();
+   524→                // Reload rules in engine
+   525→                engine.clearRules();
+   526→                for (const ruleSet of configStore.getRuleSets()) {
+   527→                  engine.addRulesFromConfig(ruleSet.rules);
+   528→                }
+   529→                console.log(`[WS] Strategy disabled: ${strategyId}`);
+   530→              }
+   531→            }
+   532→            break;
+   533→          }
+   534→        }
+   535→        // Always broadcast updated config and strategies after any command
+   536→        wsServer.broadcastConfig(getCurrentConfig());
+   537→        wsServer.broadcastStrategies(getStrategiesData());
+   538→      });
+   539→
+   540→      // Broadcast initial config
+   541→      wsServer.broadcastConfig(getCurrentConfig());
+   542→

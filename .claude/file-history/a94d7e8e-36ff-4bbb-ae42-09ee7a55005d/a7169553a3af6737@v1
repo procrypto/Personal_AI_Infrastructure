@@ -1,0 +1,178 @@
+# GCP Setup Guide
+
+This guide explains how to configure GCP infrastructure for TrenchBench API deployments.
+
+## Prerequisites
+
+1. **GCP Project Access**
+   - Access to `bonkbotbeta` (beta) or `data-backend-prod` (production)
+   - Project Owner or IAM Admin role to create service accounts and WIF pools
+   - If Arthur manages IAM, coordinate with him for setup
+
+2. **Local Tools**
+   - `gcloud` CLI installed and authenticated
+   - Run: `gcloud auth login`
+
+3. **GitHub Repository Settings**
+   - OIDC is automatically available for GitHub Actions
+   - No additional GitHub configuration needed
+
+## Setup Steps
+
+### Beta Environment
+
+```bash
+# Preview commands (recommended first)
+./scripts/gcp-setup.sh bonkbotbeta --dry-run
+
+# Execute setup
+./scripts/gcp-setup.sh bonkbotbeta
+```
+
+### Production Environment
+
+```bash
+# Preview commands
+./scripts/gcp-setup.sh data-backend-prod --dry-run
+
+# Execute setup
+./scripts/gcp-setup.sh data-backend-prod
+```
+
+### Set Secret Values
+
+After running the setup script, add secret values in GCP Console:
+
+1. Go to [Secret Manager](https://console.cloud.google.com/security/secret-manager)
+2. Select the project (bonkbotbeta or data-backend-prod)
+3. For each secret, click "Add Secret Version":
+
+| Secret | Description | Where to get |
+|--------|-------------|--------------|
+| `CLICKHOUSE_KEY_ID` | ClickHouse API Key ID | ClickHouse Cloud Console |
+| `CLICKHOUSE_KEY_SECRET` | ClickHouse API Key Secret | ClickHouse Cloud Console |
+| `CLICKHOUSE_SERVICE_ID` | ClickHouse Service ID | ClickHouse Cloud Console URL |
+
+## Workflow Configuration
+
+After running the setup script, update the TODO placeholders in workflow files.
+
+### Beta Workflow (`.github/workflows/deploy.yml`)
+
+The script outputs values like:
+```
+workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/github/providers/github
+service_account: github-actions@bonkbotbeta.iam.gserviceaccount.com
+```
+
+Replace line 35:
+```yaml
+# Before (TODO placeholder)
+workload_identity_provider: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github
+
+# After (with actual project number)
+workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/github/providers/github
+```
+
+The service account email on line 38 should already be correct:
+```yaml
+service_account: github-actions@bonkbotbeta.iam.gserviceaccount.com
+```
+
+### Production Workflow (`.github/workflows/deploy-prod.yml`)
+
+Same process with production project number:
+```yaml
+workload_identity_provider: projects/PROD_PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github
+service_account: github-actions@data-backend-prod.iam.gserviceaccount.com
+```
+
+## Verification
+
+### 1. Verify WIF Pool Exists
+
+```bash
+# Beta
+gcloud iam workload-identity-pools list \
+  --project=bonkbotbeta \
+  --location=global
+
+# Production
+gcloud iam workload-identity-pools list \
+  --project=data-backend-prod \
+  --location=global
+```
+
+Expected output: `github` pool should be listed.
+
+### 2. Verify Service Account
+
+```bash
+# Beta
+gcloud iam service-accounts list --project=bonkbotbeta | grep github-actions
+
+# Production
+gcloud iam service-accounts list --project=data-backend-prod | grep github-actions
+```
+
+### 3. Verify Secrets Exist
+
+```bash
+# Beta
+gcloud secrets list --project=bonkbotbeta
+
+# Production
+gcloud secrets list --project=data-backend-prod
+```
+
+Should show: `CLICKHOUSE_KEY_ID`, `CLICKHOUSE_KEY_SECRET`, `CLICKHOUSE_SERVICE_ID`
+
+### 4. Verify Artifact Registry
+
+```bash
+# Beta
+gcloud artifacts repositories list --project=bonkbotbeta --location=us-central1
+
+# Production
+gcloud artifacts repositories list --project=data-backend-prod --location=us-central1
+```
+
+### 5. Test Deployment
+
+After configuration:
+- **Beta**: Push to `main` branch
+- **Production**: Create and push a version tag (e.g., `git tag v1.0.0 && git push origin v1.0.0`)
+
+Check GitHub Actions for deployment status.
+
+## Troubleshooting
+
+### "Unable to get federated token"
+- WIF pool or provider not created correctly
+- Check attribute condition matches your GitHub org
+
+### "Permission denied on secret"
+- Cloud Run service account lacks Secret Manager access
+- Re-run secret IAM binding commands from setup script
+
+### "Artifact Registry access denied"
+- Service account lacks `artifactregistry.writer` role
+- Re-run role binding commands from setup script
+
+## Architecture Reference
+
+```
+GitHub Actions
+    │
+    ▼ (OIDC token)
+Workload Identity Federation Pool
+    │
+    ▼ (impersonation)
+Service Account (github-actions@PROJECT.iam.gserviceaccount.com)
+    │
+    ├──▶ Artifact Registry (push images)
+    └──▶ Cloud Run (deploy service)
+              │
+              ▼ (runtime)
+         Secret Manager (ClickHouse credentials)
+```

@@ -1,0 +1,177 @@
+---
+phase: 13-layout-clarity
+plan: 01
+type: execute
+status: pending
+---
+
+<objective>
+Improve widget layout clarity and reorganize sections for better UX.
+
+Purpose: Make the widget more intuitive with clearer labels and better section organization.
+Output: Reorganized layout with positions at top, three-column token lists, and clarified header elements.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./summary.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+**Prior Phase (dependency):**
+@.planning/phases/12-data-flow-debugging/12-01-SUMMARY.md
+
+**Key Files:**
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+
+**User Requirements (from conversation):**
+
+1. **Open positions above performance stats** - Currently positions are inside Performance section
+2. **Clarify "#41 | 38 tokens" header info** - Add tooltip or better labels
+3. **Clarify activity row numbers "2/6"** - What does this mean?
+4. **Tokens in three columns side by side** - Currently vertical lists
+5. **Clarify the two green boxes at top** - Unrealized P&L badge and market status
+
+**Current Section Order:**
+1. Performance (contains Open Positions)
+2. Activity
+3. Token Watch (Watchlist, Trending, Whale Moves)
+4. Configuration
+
+**Target Section Order:**
+1. Open Positions (separate section)
+2. Performance (stats only)
+3. Activity
+4. Token Watch (three columns)
+5. Configuration
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Move Open Positions to separate top section</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+Extract Open Positions from Performance section into its own section at the top:
+
+1. Create new "Open Positions" section before Performance
+2. Move PositionCard rendering to new section
+3. Remove positions from StatsPanel/Performance section
+4. Add "No open positions" message when empty
+5. Keep section non-collapsible (always visible when positions exist)
+
+Section should show:
+- Header: "Open Positions (N)"
+- Position cards with P&L
+- Only visible when positions.length > 0
+</action>
+  <verify>Positions appear above Performance section</verify>
+  <done>Open positions displayed in dedicated top section</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add tooltips to clarify header elements</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+Add tooltips to explain header elements:
+
+1. **Scan counter "#41 | 38 tokens"**:
+   - Tooltip: "Scan #41 analyzed 38 tokens this cycle"
+   - Or change label to: "Scan #41 · 38 tokens analyzed"
+
+2. **Unrealized P&L badge** (the small green/red box):
+   - Tooltip: "Unrealized P&L from open positions"
+
+3. **Market Status badge** (SOL price + change):
+   - Tooltip: "SOL price change since widget opened"
+
+Use existing Tooltip component from "@/components/tooltip"
+</action>
+  <verify>Hover tooltips appear on header elements</verify>
+  <done>Header elements have explanatory tooltips</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Clarify Activity row numbers</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+The Activity section shows signals with format like "2/6". Clarify what this means:
+
+1. Find where "2/6" format is rendered in Activity section
+2. Add tooltip or label to explain: likely "6 signals total, showing page 2" or "matched 2 of 6 rules"
+3. If unclear from code, add comment noting this needs clarification from product
+
+Check SignalRow component or similar for this format.
+</action>
+  <verify>Activity numbers have clear meaning via tooltip or label</verify>
+  <done>Activity row numbers explained</done>
+</task>
+
+<task type="auto">
+  <name>Task 4: Three-column token layout</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+Change Token Watch section from vertical tabs to three side-by-side columns:
+
+Current: Tab navigation (Watchlist | Trending | Whale Moves) with one list visible
+Target: Three columns showing all lists simultaneously
+
+1. Remove tab state and tab switching logic
+2. Create three-column grid layout: `grid grid-cols-3 gap-2`
+3. Each column shows one token list with header:
+   - Column 1: "Watchlist" + tokens
+   - Column 2: "Trending" + tokens
+   - Column 3: "Whale Moves" + tokens
+4. Each column scrolls independently if needed
+5. If a list is empty, show "No tokens" placeholder
+
+Keep TokenRow component unchanged.
+</action>
+  <verify>Three token columns visible side by side</verify>
+  <done>Token Watch shows three columns simultaneously</done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Layout reorganization with positions at top and three-column tokens</what-built>
+  <how-to-verify>
+    1. Run: `cd apps/web-terminal && bun run dev`
+    2. Open: http://localhost:5174
+    3. Navigate to Dashboard, find Autopilot widget
+    4. Verify:
+       - Open positions appear at top (above Performance)
+       - Header elements have tooltips on hover
+       - Token Watch shows three columns side by side
+       - Activity section numbers are clarified
+    5. Report any issues or desired adjustments
+  </how-to-verify>
+  <resume-signal>Describe what you see and any adjustments needed</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] Open positions displayed above Performance section
+- [ ] Header elements have explanatory tooltips
+- [ ] Token Watch shows three columns simultaneously
+- [ ] Activity row numbers clarified
+- [ ] `bun run typecheck` passes
+</verification>
+
+<success_criteria>
+
+- Open positions in dedicated top section
+- All header elements have tooltips explaining their meaning
+- Three-column token layout replaces tabbed navigation
+- Activity numbers have clear explanation
+- No TypeScript errors
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/13-layout-clarity/13-01-SUMMARY.md`
+</output>

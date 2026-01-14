@@ -1,0 +1,104 @@
+# geyser-geezer - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2025-01-10
+- **Last updated**: 2025-01-10
+- **Discovery depth**: Standard
+- **Documentation quality**: Good
+
+---
+
+## System Identity
+
+**What it is**: Rust-based Geyser stream ingestion and routing system.
+
+**What it does**:
+- Connects to multiple Geyser providers (Helius, Triton, Laserstream)
+- Filters account updates by program (19+ DeFi protocols)
+- Publishes to NATS topics
+- Deduplicates via JetStream (tracker binary)
+- Measures provider latency (which one wins)
+
+**Key insight**: This is the ENTRY POINT for all blockchain data. Multiple geezer instances race, tracker deduplicates, downstream gets clean stream.
+
+---
+
+## Architecture Highlights
+
+### Two Binaries
+| Binary | Purpose |
+|--------|---------|
+| `geezer` | Stream Geyser → NATS (multiple instances) |
+| `tracker` | JetStream dedup + latency measurement |
+
+### Topic Flow
+```
+Geyser → geezer instances → input_*.* → tracker → *_deduped.* → PUM3/web-terminal
+```
+
+### Deduplication
+- 10s window for accounts/transactions
+- JetStream handles it automatically
+- Tracker measures which provider won
+
+---
+
+## Key Capabilities
+
+### Programs Filtered (19+)
+```
+boop, heaven, meteora_*, moonshot, orca, pumpfun, pumpswap,
+raydium_*, token_mill, vertigo, virtuals, token_program,
+mpl_token_metadata, pyth, chainlink
+```
+
+### NATS Topics
+| Raw | Deduped | Consumer |
+|-----|---------|----------|
+| `input_pum3.*` | `input_pum3_deduped.*` | PUM3 |
+| `input_initializer.*` | `input_initializer_deduped.*` | web-terminal |
+
+---
+
+## Integration Map
+
+### Upstream
+| Provider | Type |
+|----------|------|
+| Helius | Standard + Laserstream |
+| Triton | RPC Pool |
+
+### Downstream
+| Consumer | Topics |
+|----------|--------|
+| PUM3 | `input_pum3_deduped.*` |
+| web-terminal | `input_initializer_deduped.*` |
+
+---
+
+## Working Here
+
+### Quick Start
+```bash
+CONFIG_FILE=config/geezer-prod-us-helius-ewr.yaml cargo run --bin geezer
+```
+
+### Common Locations
+| Task | Path |
+|------|------|
+| Add program | `src/bin/geezer/subscriptions/account.rs` |
+| Add tx filter | `src/bin/geezer/subscriptions/transaction.rs` |
+| NATS publishing | `src/bin/geezer/publishers.rs` |
+| JetStream streams | `src/bin/tracker/jetstream_management.rs` |
+
+---
+
+## Session Notes
+
+*Accumulated learnings:*
+
+- Multiple geezer instances per provider create redundancy
+- Tracker measures which provider wins the race (latency metrics)
+- `reject_slot_age` prevents stale updates (default 25 slots)
+- Each provider/region combo has its own config file
+- Don't process data in geezer - just route to NATS

@@ -1,0 +1,299 @@
+---
+phase: 24-data-feed-implementation
+plan: 01
+type: execute
+---
+
+<objective>
+Implement data feed forwarding from frontend to CLI backend per backend engineer requirements.
+
+Purpose: CLI backend needs market data, OHLCV, trades, and CVD from frontend's NATS subscriptions to perform signal analysis without its own NATS connection.
+Output: Working data feed pipeline that forwards NATS data to CLI backend via WebSocket.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Phase 23 output (feed types to fix):
+@apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts
+
+# Existing subscription hook (wire into this):
+@apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+
+# NATS data types to map from:
+@apps/web-terminal/src/store/memoryStore/slices/websocket-messages-store/types.ts
+
+# Volume/CVD calculation reference:
+@apps/web-terminal/src/hooks/useAutopilot/useVolumeVz.ts
+
+**Backend Protocol (from backend engineers):**
+
+```typescript
+// DATA FEEDS (frontend → backend)
+{ type: 'market_data_feed', data: TokenMarketData }
+{ type: 'ohlcv_update', mint: string, ohlcv: OHLCV[] }
+{ type: 'trade_feed', trade: Trade }
+{ type: 'cvd_update', data: CVDData }
+
+interface CVDData {
+  mint: string;
+  timestamp: number;
+  cvd: number;           // Current cumulative volume delta
+  cvdChange: number;     // Change over period
+  buyVolume: number;     // Buy volume in period
+  sellVolume: number;    // Sell volume in period
+  netDelta: number;      // buyVolume - sellVolume for period
+  periodMs: number;      // Period length (e.g., 60000 for 1m)
+}
+```
+
+**Prior Decision:** Phase 23 used `feed` field but backend expects `type` field. Fix this.
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Fix feed types to match backend protocol</name>
+  <files>apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts</files>
+  <action>
+Update the feed types added in Phase 23 to match backend engineer spec:
+
+1. Change `feed` field to `type` field
+2. Update type values to match backend:
+   - `market_data` → `market_data_feed`
+   - `ohlcv` → `ohlcv_update`
+   - `trade` → `trade_feed`
+   - `cvd` → `cvd_update`
+
+3. Update data shapes to match backend expectations:
+   - MarketDataFeed: `{ type: 'market_data_feed', data: TokenMarketData }` (full TokenMarketData, not subset)
+   - OhlcvFeed: `{ type: 'ohlcv_update', mint: string, ohlcv: OHLCV[] }` (array of candles)
+   - TradeFeed: `{ type: 'trade_feed', trade: Trade }`
+   - CvdFeed: `{ type: 'cvd_update', data: CVDData }` with full CVDData interface
+
+4. Add CVDData interface matching backend spec exactly
+
+5. Update AutopilotFeed union type accordingly
+
+Do NOT change sendFeed method signature - it should still accept AutopilotFeed.
+  </action>
+  <verify>TypeScript compiles: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+  <done>Feed types match backend protocol exactly, CVDData interface added</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create feed adapter functions</name>
+  <files>apps/web-terminal/src/websocket/autopilot/feedAdapters.ts</files>
+  <action>
+Create new file with pure adapter functions to map NATS data → feed format:
+
+```typescript
+// feedAdapters.ts - Pure functions to convert NATS data to backend feed format
+
+import type { MarketDataMessage, OHLCVMessage, TradeMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+import type { MarketDataFeed, OhlcvFeed, TradeFeed, CvdFeed, CVDData } from "./AutopilotWebsocket";
+
+/**
+ * Convert MarketDataMessage from NATS → MarketDataFeed for backend
+ */
+export function toMarketDataFeed(msg: MarketDataMessage): MarketDataFeed {
+  return {
+    type: 'market_data_feed',
+    data: msg, // TokenMarketData is the full message
+  };
+}
+
+/**
+ * Convert OHLCVMessage from NATS → OhlcvFeed for backend
+ * Note: Backend expects array, so wrap single candle
+ */
+export function toOhlcvFeed(mint: string, msg: OHLCVMessage): OhlcvFeed {
+  return {
+    type: 'ohlcv_update',
+    mint,
+    ohlcv: [{
+      open: Number(msg.o_sol),
+      high: Number(msg.h_sol),
+      low: Number(msg.l_sol),
+      close: Number(msg.c_sol),
+      volume: Number(msg.v_sol),
+      timestamp: msg.timestamp_secs,
+    }],
+  };
+}
+
+/**
+ * Convert TradeMessage from NATS → TradeFeed for backend
+ */
+export function toTradeFeed(msg: TradeMessage): TradeFeed {
+  return {
+    type: 'trade_feed',
+    trade: {
+      mint: msg.mint,
+      side: msg.type === 'buy' ? 'buy' : 'sell',
+      price: Number(msg.sol_amount || 0) / Number(msg.token_amount || 1),
+      amount: Number(msg.token_amount),
+      timestamp: Number(msg.timestamp),
+    },
+  };
+}
+
+/**
+ * Calculate CVD from trading stats (1h period)
+ * Uses trading_stats_1h from MarketDataMessage
+ */
+export function toCvdFeed(mint: string, msg: MarketDataMessage): CvdFeed | null {
+  const stats = msg.trading_stats_1h;
+  if (!stats) return null;
+
+  const buyVolume = Number(stats.buy_volume_sol || 0);
+  const sellVolume = Number(stats.sell_volume_sol || 0);
+  const netDelta = buyVolume - sellVolume;
+
+  return {
+    type: 'cvd_update',
+    data: {
+      mint,
+      timestamp: Date.now(),
+      cvd: netDelta, // Simplified: use net delta as CVD
+      cvdChange: netDelta, // Change equals current for single period
+      buyVolume,
+      sellVolume,
+      netDelta,
+      periodMs: 3600000, // 1 hour
+    },
+  };
+}
+```
+
+Export all functions. Keep them pure for testability.
+  </action>
+  <verify>TypeScript compiles: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+  <done>Four adapter functions created, all exported, pure functions with no side effects</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Create useAutopilotDataForwarder hook</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts</files>
+  <action>
+Create hook that subscribes to store changes and forwards data to backend:
+
+```typescript
+/**
+ * useAutopilotDataForwarder
+ *
+ * Subscribes to NATS market data in store and forwards to CLI backend.
+ * Only forwards data for mints that are in positions or screener token list.
+ */
+
+import { useEffect, useRef } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import { toMarketDataFeed, toCvdFeed } from "@/websocket/autopilot/feedAdapters";
+import type { MarketDataMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+
+export function useAutopilotDataForwarder() {
+  // Track which mints we care about (positions + screener tokens)
+  const positionMints = useGlobalStore(
+    useShallow(state => Array.from(state.autopilot.positions.keys()))
+  );
+
+  // Get token list mints from autopilot store
+  const tokenListMints = useGlobalStore(
+    useShallow(state => {
+      const tokenList = state.autopilot.tokenList;
+      const mints = new Set<string>();
+      tokenList.watchlist.forEach(t => mints.add(t.mint));
+      tokenList.trending.forEach(t => mints.add(t.mint));
+      tokenList.whales.forEach(t => mints.add(t.mint));
+      return Array.from(mints);
+    })
+  );
+
+  // Combine all relevant mints
+  const relevantMints = useRef(new Set<string>());
+  useEffect(() => {
+    relevantMints.current = new Set([...positionMints, ...tokenListMints]);
+  }, [positionMints, tokenListMints]);
+
+  // Subscribe to market_data store changes and forward
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      state => state.websocketMessages.market_data.data,
+      (marketDataMap) => {
+        // Forward data for relevant mints only
+        for (const [mint, dataMap] of Object.entries(marketDataMap)) {
+          if (!relevantMints.current.has(mint)) continue;
+          if (!dataMap) continue;
+
+          // Get most recent market data
+          const entries = Array.from(dataMap.values());
+          const latest = entries[entries.length - 1] as MarketDataMessage | undefined;
+          if (!latest) continue;
+
+          // Forward market data
+          autopilotWebsocket.sendFeed(toMarketDataFeed(latest));
+
+          // Forward CVD if we have trading stats
+          const cvdFeed = toCvdFeed(mint, latest);
+          if (cvdFeed) {
+            autopilotWebsocket.sendFeed(cvdFeed);
+          }
+        }
+      },
+      { equalityFn: (a, b) => a === b } // Reference equality for performance
+    );
+
+    return unsubscribe;
+  }, []);
+}
+```
+
+Then integrate into useAutopilotSubscription.ts by adding:
+```typescript
+import { useAutopilotDataForwarder } from "@/hooks/useAutopilot/useAutopilotDataForwarder";
+
+// Inside useAutopilotSubscription:
+useAutopilotDataForwarder();
+```
+
+This ensures data forwarding is active whenever autopilot subscription is active.
+  </action>
+  <verify>
+1. TypeScript compiles: `cd apps/web-terminal && npx tsc --noEmit`
+2. Existing tests pass: `cd apps/web-terminal && bun run test`
+  </verify>
+  <done>useAutopilotDataForwarder hook created, integrated into useAutopilotSubscription, forwards market_data and CVD for relevant mints</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `cd apps/web-terminal && npx tsc --noEmit` passes
+- [ ] `cd apps/web-terminal && bun run test` passes
+- [ ] Feed types match backend protocol (type field, correct type names)
+- [ ] CVDData interface matches backend spec exactly
+- [ ] Adapter functions are pure and exported
+- [ ] Data forwarder hook is wired into useAutopilotSubscription
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Feed types match backend engineer specification
+- Data forwarding pipeline active for position and screener token mints
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/24-data-feed-implementation/24-01-SUMMARY.md`
+</output>

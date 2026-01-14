@@ -1,0 +1,306 @@
+/**
+ * LOIS-Aligned Types
+ *
+ * These types mirror the LOIS dispatcher/evaluator architecture to enable
+ * straightforward porting to Rust. The TypeScript implementation serves as
+ * a working specification for the production Rust version.
+ *
+ * Reference: pum3/lois/src/types/order_config.rs, intent.rs
+ */
+
+import type { TokenMarketData, OHLCV, Trade } from '../api/types.js';
+import type { AnyRuleConfig, Signal } from './types.js';
+
+// ============================================================================
+// Trigger Evaluation Result (mirrors LOIS TriggerEvaluationResult)
+// ============================================================================
+
+/**
+ * Result of evaluating a rule trigger - determines what action to take.
+ * This is the dispatcher's output before sending to evaluator.
+ */
+export type TriggerEvaluationResult =
+  | { action: 'no_action'; reason?: string }
+  | { action: 'evaluate_for_swap'; direction: 'buy' | 'sell'; confidence: number; signal: Signal }
+  | { action: 'update_state'; stateUpdate: RuleStateUpdate };
+
+/**
+ * State update for stateful rules (e.g., trailing stops, high water marks)
+ */
+export interface RuleStateUpdate {
+  intentId: string;
+  updateType: 'high_water_mark' | 'trailing_trigger';
+  newValue: number;
+  previousValue?: number;
+}
+
+// ============================================================================
+// Market Context (extends LOIS MarketContext)
+// ============================================================================
+
+/**
+ * Market context for rule evaluation.
+ * LOIS only has usd_market_cap - we extend with richer data for complex rules.
+ */
+export interface RuleMarketContext {
+  // Core LOIS fields
+  usdMarketCap: number;
+
+  // Extended fields for advanced rules
+  priceSol: number;
+  priceUsd: number;
+  volume24hUsd: number;
+  volumeChange5m?: number;
+  volumeChange1h?: number;
+  priceChange5m?: number;
+  priceChange1h?: number;
+  priceChange24h?: number;
+  buyCount5m?: number;
+  sellCount5m?: number;
+  buyers5m?: number;
+  sellers5m?: number;
+  liquidity?: number;
+
+  // Raw data for rules that need deeper analysis
+  ohlcv?: OHLCV[];
+  recentTrades?: Trade[];
+}
+
+/**
+ * Convert TokenMarketData to RuleMarketContext
+ */
+export function toRuleMarketContext(
+  token: TokenMarketData,
+  ohlcv?: OHLCV[],
+  trades?: Trade[]
+): RuleMarketContext {
+  // Calculate price changes from earliest prices
+  const priceChange5m = token.earliest_price_sol_5m > 0
+    ? ((token.price_sol - token.earliest_price_sol_5m) / token.earliest_price_sol_5m) * 100
+    : undefined;
+  const priceChange1h = token.earliest_price_sol_1h > 0
+    ? ((token.price_sol - token.earliest_price_sol_1h) / token.earliest_price_sol_1h) * 100
+    : undefined;
+  const priceChange24h = token.earliest_price_sol_24h > 0
+    ? ((token.price_sol - token.earliest_price_sol_24h) / token.earliest_price_sol_24h) * 100
+    : undefined;
+
+  // Calculate volume in USD (SOL volume * price)
+  const volume24hUsd = token.volume_24h_sol * token.price_usd;
+
+  return {
+    usdMarketCap: token.market_cap_usd ?? 0,
+    priceSol: token.price_sol ?? 0,
+    priceUsd: token.price_usd ?? 0,
+    volume24hUsd,
+    volumeChange5m: undefined, // Not directly available, would need historical data
+    volumeChange1h: undefined,
+    priceChange5m,
+    priceChange1h,
+    priceChange24h,
+    buyCount5m: token.buys_5m,
+    sellCount5m: token.sells_5m,
+    buyers5m: token.buyers_5m,
+    sellers5m: token.sellers_5m,
+    liquidity: token.liquidity_usd,
+    ohlcv,
+    recentTrades: trades,
+  };
+}
+
+// ============================================================================
+// Rule Intent (mirrors LOIS Intent)
+// ============================================================================
+
+/**
+ * A rule-based intent - combines rule configuration with target token info.
+ * This is the data structure stored and managed by the dispatcher.
+ */
+export interface RuleIntent {
+  /** Unique identifier for this intent */
+  id: string;
+
+  /** User ID that owns this intent (optional for paper trading) */
+  userId?: string;
+
+  /** Telemetry ID for tracking (optional for paper trading) */
+  telemetryId?: string;
+
+  /** The mint address to monitor */
+  mint: string;
+
+  /** Token symbol for display */
+  symbol?: string;
+
+  /** The rule configuration that defines trigger conditions */
+  ruleConfig: AnyRuleConfig;
+
+  /** Rule set this intent belongs to (for grouped rules) */
+  ruleSetId?: string;
+
+  /** Position size in SOL when triggered */
+  positionSizeSol: number;
+
+  /** Slippage tolerance in basis points */
+  slippageBps: number;
+
+  /** Priority fee in lamports (for LOIS execution) */
+  priorityFeeLamports: number;
+
+  /** Creation timestamp (Unix ms) */
+  createdAt: number;
+
+  /** Last update timestamp (Unix ms) */
+  updatedAt: number;
+
+  /** Intent status */
+  status: 'active' | 'triggered' | 'cancelled' | 'expired';
+
+  /** Stateful data for rules that track state (e.g., trailing stops) */
+  state?: Record<string, unknown>;
+}
+
+// ============================================================================
+// Evaluation Request (NATS message: dispatcher → evaluator)
+// ============================================================================
+
+/**
+ * Request sent from dispatcher to evaluator when a rule triggers.
+ * This mirrors the LOIS NATS message format for easy porting.
+ */
+export interface RuleEvaluationRequest {
+  /** Request ID for deduplication */
+  requestId: string;
+
+  /** The intent that triggered */
+  intentId: string;
+
+  /** User context */
+  userId?: string;
+  telemetryId?: string;
+
+  /** Token info */
+  mint: string;
+  symbol?: string;
+
+  /** Swap direction */
+  direction: 'buy' | 'sell';
+
+  /** Position sizing */
+  positionSizeSol: number;
+  slippageBps: number;
+  priorityFeeLamports: number;
+
+  /** Market context at trigger time */
+  marketContext: {
+    usdMarketCap: number;
+    priceSol: number;
+    priceUsd: number;
+  };
+
+  /** Signal that triggered this */
+  signal: {
+    ruleId: string;
+    ruleName: string;
+    confidence: number;
+    reason: string;
+  };
+
+  /** Timestamp of trigger */
+  triggeredAt: number;
+}
+
+/**
+ * Convert intent + trigger result to evaluation request
+ */
+export function toEvaluationRequest(
+  intent: RuleIntent,
+  result: Extract<TriggerEvaluationResult, { action: 'evaluate_for_swap' }>,
+  context: RuleMarketContext
+): RuleEvaluationRequest {
+  return {
+    requestId: `${intent.id}-${Date.now()}`,
+    intentId: intent.id,
+    userId: intent.userId,
+    telemetryId: intent.telemetryId,
+    mint: intent.mint,
+    symbol: intent.symbol,
+    direction: result.direction,
+    positionSizeSol: intent.positionSizeSol,
+    slippageBps: intent.slippageBps,
+    priorityFeeLamports: intent.priorityFeeLamports,
+    marketContext: {
+      usdMarketCap: context.usdMarketCap,
+      priceSol: context.priceSol,
+      priceUsd: context.priceUsd,
+    },
+    signal: {
+      ruleId: result.signal.ruleId,
+      ruleName: result.signal.ruleName,
+      confidence: result.confidence,
+      reason: result.signal.reason,
+    },
+    triggeredAt: Date.now(),
+  };
+}
+
+// ============================================================================
+// Evaluation Response (NATS message: evaluator → dispatcher)
+// ============================================================================
+
+/**
+ * Response from evaluator after processing a request.
+ * Used to update intent status and notify dispatcher.
+ */
+export interface RuleEvaluationResponse {
+  requestId: string;
+  intentId: string;
+  status: 'executed' | 'failed' | 'skipped';
+  reason?: string;
+
+  /** Execution details (if executed) */
+  execution?: {
+    tradeId: string;
+    executedPriceSol: number;
+    executedPriceUsd: number;
+    amountIn: number;
+    amountOut: number;
+    priceImpactBps: number;
+  };
+
+  /** Timing metrics */
+  metrics?: {
+    triggerToExecutionMs: number;
+    expectedMarketCap: number;
+    executedMarketCap: number;
+    slippageActualBps: number;
+  };
+}
+
+// ============================================================================
+// Rule Order Config (mirrors LOIS OrderConfig enum)
+// ============================================================================
+
+/**
+ * Order configuration that maps to LOIS OrderConfig variants.
+ * This enables rule configs to be directly translatable to Rust.
+ */
+export type RuleOrderConfig =
+  | { type: 'RuleBuyBreakout'; trigger: MarketCapTrigger; ruleConfig: AnyRuleConfig }
+  | { type: 'RuleBuyDip'; trigger: MarketCapTrigger; ruleConfig: AnyRuleConfig }
+  | { type: 'RuleStopLoss'; trigger: MarketCapTrigger; ruleConfig: AnyRuleConfig }
+  | { type: 'RuleTakeProfit'; trigger: MarketCapTrigger; ruleConfig: AnyRuleConfig }
+  | { type: 'RuleTrailingStopLoss'; trigger: TrailingMarketCapTrigger; ruleConfig: AnyRuleConfig }
+  | { type: 'RuleComplex'; ruleConfig: AnyRuleConfig }; // For multi-signal rules
+
+export interface MarketCapTrigger {
+  type: 'USD_MARKET_CAP';
+  triggerAmount: number;
+}
+
+export interface TrailingMarketCapTrigger {
+  type: 'TRAILING_STOP_USD_MARKET_CAP';
+  triggerAmount: number;
+  highWaterMark: number;
+  trailingPercentageBps?: number;
+}

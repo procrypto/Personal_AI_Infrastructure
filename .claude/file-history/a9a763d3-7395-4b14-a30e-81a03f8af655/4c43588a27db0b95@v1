@@ -1,0 +1,203 @@
+---
+phase: 06-store-migration
+plan: 01
+type: execute
+---
+
+<objective>
+Remove redundant CustomEvent listeners and dispatchers for cross-widget selection sync, completing the migration to pure store-based sync.
+
+Purpose: Phase 3 added store subscriptions alongside CustomEvents. Both mechanisms currently run in parallel. This plan removes the CustomEvent fallback, making the store the single source of truth for cross-widget selection sync.
+
+Output: Clean widget code with only store-based selection sync. No functional changes - sync behavior should be identical.
+</objective>
+
+<execution_context>
+@~/.claude/get-shit-done/workflows/execute-phase.md
+@~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/03-cross-widget-sync/03-01-SUMMARY.md
+
+**Key files:**
+@apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx
+@apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx
+@apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx
+@apps/web-terminal/src/store/trenchBenchStore.ts
+
+**Store selection state (added in Phase 3):**
+- `selectedTokenMints: Set<string>` - Tokens currently selected across widgets
+- `selectedTraderAddresses: Set<string>` - Traders currently selected
+- `toggleToken()`, `clearTokenSelections()` - Selection actions
+- All three widgets subscribe to these via `useTrenchBenchStore` with `useShallow`
+
+**CustomEvents to remove (cross-widget selection sync only):**
+
+Intel Grid listeners:
+- `vantage-token-select` (line ~2109)
+- `vantage-token-deselect` (line ~2132)
+- `anomalyzer-token-select` (line ~2162)
+
+Vantage listeners:
+- `anomalyzer-token-select` (line ~1303)
+- Note: `intel-grid-token-select` listener already removed per line 1268 comment
+
+Anomalyzer listeners:
+- `intel-grid-token-select` (line ~1563)
+- `vantage-token-select` (line ~1592)
+- `vantage-token-deselect` (line ~1596)
+- `vantage-kol-select` (line ~1624)
+
+Anomalyzer dispatchers (in handleAnomalySelect):
+- `anomalyzer-token-select` dispatches (lines ~1677, ~1706)
+- `vantage-kol-select` dispatch (line ~1683)
+- `vantage-token-deselect` dispatch (line ~1690)
+
+**Keep these CustomEvents (widget-instance sync, not cross-widget):**
+- `intel-grid-tab-change`, `intel-grid-sort-change`, `intel-grid-pause-change`, etc.
+- `vantage-settings-toggle`, `vantage-view-mode-change`
+- `anomalyzer-filter-change`, `anomalyzer-signal-filter-change`
+
+These sync settings across multiple instances of the same widget type and are out of scope for this migration.
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Remove Intel Grid CustomEvent listeners</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx</files>
+  <action>
+Remove the three cross-widget selection CustomEvent listeners and their handlers:
+
+1. Find the useEffect that adds listeners for `vantage-token-select`, `vantage-token-deselect`, `anomalyzer-token-select`
+2. Remove the entire useEffect block (listeners + cleanup)
+3. Remove the handler functions: `handleVantageTokenSelect`, `handleVantageTokenDeselect`, and the anomalyzer handler
+4. Keep all widget-instance sync events (tab-change, sort-change, pause-change, etc.)
+
+The store subscription added in Phase 3 (around line ~411: useEffect syncing from `sharedSelectedTokens`) handles this now.
+  </action>
+  <verify>
+- `grep -n "vantage-token-select\|vantage-token-deselect\|anomalyzer-token-select" intel-grid-widget.tsx` returns no matches
+- `tsc --noEmit` passes
+- Widget still renders without errors
+  </verify>
+  <done>Intel Grid has no cross-widget selection CustomEvent listeners. Store subscription is sole mechanism.</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Remove Vantage CustomEvent listeners</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx</files>
+  <action>
+Remove the cross-widget selection CustomEvent listener:
+
+1. Find the useEffect that adds listener for `anomalyzer-token-select`
+2. Remove the entire useEffect block (listener + cleanup)
+3. Remove the handler function for anomalyzer-token-select
+4. Keep all widget-instance sync events (settings-toggle, view-mode-change, etc.)
+
+Note: `intel-grid-token-select` listener was already removed (see line ~1268 comment). This task removes the remaining `anomalyzer-token-select` listener.
+
+The store subscription added in Phase 3 (useEffect syncing `selectedBagMints` from `sharedSelectedTokens`) handles this now.
+  </action>
+  <verify>
+- `grep -n "anomalyzer-token-select" vantage-widget.tsx` returns no matches
+- `tsc --noEmit` passes
+- Widget still renders without errors
+  </verify>
+  <done>Vantage has no cross-widget selection CustomEvent listeners. Store subscription is sole mechanism.</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Remove Anomalyzer CustomEvent listeners and dispatchers</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/anomalyzer-widget.tsx</files>
+  <action>
+Remove all cross-widget selection CustomEvent code:
+
+**Listeners to remove:**
+1. `intel-grid-token-select` listener and handler (handleIntelGridSelect)
+2. `vantage-token-select` and `vantage-token-deselect` listeners and handlers (handleVantageSelect, handleVantageDeselect)
+3. `vantage-kol-select` listener and handler (handleKolSelect)
+
+**Dispatchers to remove (in handleAnomalySelect and handleClearFilters):**
+1. `anomalyzer-token-select` CustomEvent dispatches
+2. `vantage-kol-select` CustomEvent dispatch
+3. `vantage-token-deselect` CustomEvent dispatch
+
+Find these in the handleAnomalySelect function - they have comments like "Dispatch events to Intel Grid and Vantage (fallback for CustomEvent listeners)" or "Dispatch clear events".
+
+**Keep:**
+- `anomalyzer-filter-change` and `anomalyzer-signal-filter-change` (widget-instance sync)
+- Store toggles: `toggleTokenInStore`, `toggleTraderInStore` (these ARE the primary mechanism now)
+
+The store subscription added in Phase 3 (useEffect syncing from `selectedTokenMints` and `selectedTraderAddresses`) handles incoming selections. The toggle functions handle outgoing selections.
+  </action>
+  <verify>
+- `grep -n "intel-grid-token-select\|vantage-token-select\|vantage-token-deselect\|vantage-kol-select\|anomalyzer-token-select" anomalyzer-widget.tsx` returns only storage key (anomalyzer-token-trackers) or comments
+- `tsc --noEmit` passes
+- Widget still renders without errors
+  </verify>
+  <done>Anomalyzer has no cross-widget selection CustomEvent code. Store-based sync is sole mechanism.</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `pnpm tsc --noEmit` passes without errors
+- [ ] All three widgets render without console errors
+- [ ] Cross-widget selection sync still works:
+  - Select token in Intel Grid → highlighted in Vantage and Anomalyzer
+  - Select token in Vantage → highlighted in Intel Grid and Anomalyzer
+  - Select anomaly in Anomalyzer → highlighted in Intel Grid and Vantage
+  - Deselect works in all directions
+</verification>
+
+<success_criteria>
+- All cross-widget selection CustomEvent listeners removed
+- All cross-widget selection CustomEvent dispatchers removed
+- Widget-instance sync CustomEvents preserved
+- Store-based sync works correctly in all directions
+- No TypeScript errors
+- No functional regressions
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/06-store-migration/06-01-SUMMARY.md`:
+
+# Phase 6 Plan 01: Store Migration Summary
+
+**[Substantive one-liner]**
+
+## Accomplishments
+
+- [Key outcome 1]
+- [Key outcome 2]
+
+## Files Modified
+
+- `path/to/file.ts` - Description
+
+## CustomEvents Removed
+
+- [List of events removed from each widget]
+
+## CustomEvents Preserved
+
+- [List of widget-instance sync events that remain]
+
+## Decisions Made
+
+[Key decisions and rationale, or "None"]
+
+## Issues Encountered
+
+[Problems and resolutions, or "None"]
+
+## Next Step
+
+Ready for Phase 7: Integration & PR
+</output>

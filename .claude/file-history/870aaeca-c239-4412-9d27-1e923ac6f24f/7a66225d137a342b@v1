@@ -1,0 +1,119 @@
+/**
+ * useVolumeVz
+ *
+ * Calculates "Vz" (Volume Delta) indicator for screener tokens.
+ * Shows buy vs sell pressure at a glance - inspired by CVD (Cumulative Volume Delta).
+ *
+ * Formula:
+ * - Delta = Buy Volume - Sell Volume (positive = buyers winning)
+ * - Direction based on delta as % of total volume
+ * - RVOL = 1h volume vs 6h average per hour (relative volume)
+ *
+ * Data source: trading_stats_1h and trading_stats_6h from market_data
+ */
+
+import { useMemo } from "react";
+import { useAutopilotDiscoveryTokens } from "./useAutopilotDiscoveryTokens";
+import type { TradingStats } from "./types";
+
+/**
+ * Volume Delta score for a token.
+ */
+export type VzScore = {
+  /** Delta: buy volume - sell volume (positive = buyers winning) */
+  delta: number;
+  /** Direction for display styling */
+  direction: "strong_buy" | "buy" | "neutral" | "sell" | "strong_sell";
+  /** RVOL: relative volume vs baseline (e.g., 2.3 = 2.3x normal) */
+  rvol: number;
+  /** Is volume elevated? (rvol > 1.5) */
+  isHot: boolean;
+};
+
+/**
+ * Calculate Vz score from trading stats.
+ */
+function calculateVzScore(
+  stats1h: TradingStats | undefined,
+  stats6h: TradingStats | undefined
+): VzScore | undefined {
+  if (!stats1h) return undefined;
+
+  // Delta = buy - sell (in SOL for consistency)
+  const buyVol = Number(stats1h.buy_volume_sol ?? 0);
+  const sellVol = Number(stats1h.sell_volume_sol ?? 0);
+  const delta = buyVol - sellVol;
+  const totalVol = buyVol + sellVol;
+
+  // Direction based on delta as % of total
+  const deltaPercent = totalVol > 0 ? delta / totalVol : 0;
+  const direction: VzScore["direction"] =
+    deltaPercent > 0.3
+      ? "strong_buy"
+      : deltaPercent > 0.1
+        ? "buy"
+        : deltaPercent < -0.3
+          ? "strong_sell"
+          : deltaPercent < -0.1
+            ? "sell"
+            : "neutral";
+
+  // RVOL: 1h volume vs 6h average per hour
+  const buyVol6h = Number(stats6h?.buy_volume_sol ?? 0);
+  const sellVol6h = Number(stats6h?.sell_volume_sol ?? 0);
+  const vol6hPerHour = (buyVol6h + sellVol6h) / 6;
+  const rvol = vol6hPerHour > 0 ? totalVol / vol6hPerHour : 1;
+
+  // Hot if volume is 1.5x+ normal
+  const isHot = rvol >= 1.5;
+
+  return {
+    delta,
+    direction,
+    rvol,
+    isHot,
+  };
+}
+
+/**
+ * Hook to get Volume Delta (Vz) scores for all screener tokens.
+ *
+ * Returns a Map keyed by mint address.
+ * Uses trading_stats_1h and trading_stats_6h from market_data.
+ *
+ * Note: Whales column won't have Vz data (no trading stats in whale API).
+ */
+export function useVolumeVz(): Map<string, VzScore> {
+  // Get raw token data with full market_data (has trading stats)
+  const tokenList = useAutopilotDiscoveryTokens();
+
+  return useMemo(() => {
+    const vzMap = new Map<string, VzScore>();
+
+    // Process all token sources
+    const allTokens = [
+      ...tokenList.watchlist,
+      ...tokenList.trending,
+      ...tokenList.whales,
+    ];
+
+    for (const token of allTokens) {
+      // Skip if we already have this token (dedup across lists)
+      if (vzMap.has(token.mint)) continue;
+
+      const marketData = token.market_data;
+      if (!marketData) continue;
+
+      const score = calculateVzScore(
+        marketData.trading_stats_1h,
+        marketData.trading_stats_6h
+      );
+
+      if (score) {
+        vzMap.set(token.mint, score);
+      }
+    }
+
+    return vzMap;
+  }, [tokenList]);
+}

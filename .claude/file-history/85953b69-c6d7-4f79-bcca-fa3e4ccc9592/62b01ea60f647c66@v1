@@ -1,0 +1,119 @@
+---
+phase: 03-interface-cleanup-cutover
+plan: 02
+subsystem: performance
+tags: [benchmark, metrics, performance, sub-100ms]
+
+# Dependency graph
+requires:
+  - phase: 03-01
+    provides: LOIS-ready SignalProcessor interface
+provides:
+  - Performance metrics collection (SignalProcessorMetrics)
+  - Benchmark tests proving sub-100ms latency
+  - getMetrics() and resetMetrics() methods
+affects: [production-monitoring, future-optimization]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [optional-metrics, performance-instrumentation]
+
+key-files:
+  created: [src/signal/processor.benchmark.test.ts]
+  modified: [src/signal/processor.ts]
+
+key-decisions:
+  - "Metrics disabled by default to avoid overhead in production"
+  - "Use performance.now() for sub-ms precision"
+  - "Running average calculation for avgProcessingTimeMs"
+
+patterns-established:
+  - "Optional metrics pattern: enableMetrics flag, getMetrics(), resetMetrics()"
+
+issues-created: []
+
+# Metrics
+duration: 3min
+completed: 2026-01-09
+---
+
+# Phase 3 Plan 2: Performance Validation Summary
+
+**Sub-100ms latency proven with benchmark tests - fast path 0.005ms, complex path 0.001ms average**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-09T07:06:43Z
+- **Completed:** 2026-01-09T07:09:48Z
+- **Tasks:** 2
+- **Files created/modified:** 2
+
+## Accomplishments
+- Added optional performance instrumentation to SignalProcessor
+- Created comprehensive benchmark tests validating sub-100ms requirement
+- Proven all paths exceed requirements by 1000x+
+
+## Benchmark Results
+
+| Path | Target | Average | P99 | Status |
+|------|--------|---------|-----|--------|
+| Fast (processMarketData) | <10ms | 0.005ms | 0.065ms | ✓ 2000x faster |
+| Complex (processOHLCV) | <50ms | 0.001ms | 0.060ms | ✓ 50000x faster |
+| Mixed Workload | <100ms P99 | 0.001ms | 0.006ms | ✓ 16667x faster |
+
+**Core requirement validated:** Sub-100ms signal evaluation latency achieved.
+
+## Task Commits
+
+1. **Task 1: Add performance instrumentation** - `bb1b0e1` (feat)
+2. **Task 2: Create benchmark test** - `3b16ceb` (test)
+
+## Files Created/Modified
+- `src/signal/processor.ts` - Added SignalProcessorMetrics, enableMetrics option, timing instrumentation
+- `src/signal/processor.benchmark.test.ts` - Benchmark test suite with realistic fixtures
+
+## Metrics API
+
+```typescript
+interface SignalProcessorMetrics {
+  lastProcessingTimeMs: number;
+  avgProcessingTimeMs: number;
+  totalCalls: number;
+}
+
+// Usage
+const processor = new SignalProcessor(engine, { enableMetrics: true });
+processor.processMarketData(data);
+const metrics = processor.getMetrics();
+processor.resetMetrics();
+```
+
+## Decisions Made
+- Metrics disabled by default - no performance impact in production
+- Uses `performance.now()` for sub-millisecond precision
+- Running average calculation to avoid storing all timing history
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+- Initial benchmark file named `.benchmark.ts` - vitest requires `.test.ts` suffix (fixed)
+- RuleEngine requires ApiClient in config - created mock client for benchmarks
+
+## Verification
+- [x] `npm test` passes all tests (65/65)
+- [x] Fast path consistently under 10ms ✓
+- [x] Complex path consistently under 50ms ✓
+- [x] No P99 exceeds 100ms ✓
+- [x] Metrics disabled by default ✓
+
+## Next Phase Readiness
+- Performance validation complete
+- Ready for Phase 03-03: Final cutover and cleanup
+
+---
+*Phase: 03-interface-cleanup-cutover*
+*Completed: 2026-01-09*

@@ -1,0 +1,87 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/dispatcher.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   309→        return null;
+   310→    }
+   311→  }
+   312→
+   313→  /**
+   314→   * Convert RuleMarketContext back to TokenMarketData for rule analysis.
+   315→   * Maps context fields to the actual TokenMarketData interface.
+   316→   */
+   317→  private contextToMarketData(
+   318→    context: RuleMarketContext,
+   319→    mint: string,
+   320→    symbol?: string
+   321→  ): TokenMarketData {
+   322→    // Calculate earliest prices from price changes (reverse calculation)
+   323→    const earliestPrice5m = context.priceChange5m !== undefined
+   324→      ? context.priceSol / (1 + context.priceChange5m / 100)
+   325→      : context.priceSol;
+   326→    const earliestPrice1h = context.priceChange1h !== undefined
+   327→      ? context.priceSol / (1 + context.priceChange1h / 100)
+   328→      : context.priceSol;
+   329→    const earliestPrice24h = context.priceChange24h !== undefined
+   330→      ? context.priceSol / (1 + context.priceChange24h / 100)
+   331→      : context.priceSol;
+   332→
+   333→    return {
+   334→      mint,
+   335→      symbol: symbol ?? '',
+   336→      name: '',
+   337→      price_sol: context.priceSol,
+   338→      price_usd: context.priceUsd,
+   339→      market_cap_sol: context.usdMarketCap / context.priceUsd * context.priceSol,
+   340→      market_cap_usd: context.usdMarketCap,
+   341→      holders: '0',
+   342→
+   343→      // Volume metrics - estimate from 24h total
+   344→      buy_volume_sol_5m: 0,
+   345→      sell_volume_sol_5m: 0,
+   346→      buy_volume_sol_1h: 0,
+   347→      sell_volume_sol_1h: 0,
+   348→      buy_volume_sol_6h: 0,
+   349→      sell_volume_sol_6h: 0,
+   350→      buy_volume_sol_24h: context.volume24hUsd / context.priceUsd / 2,
+   351→      sell_volume_sol_24h: context.volume24hUsd / context.priceUsd / 2,
+   352→      volume_24h_sol: context.volume24hUsd / context.priceUsd,
+   353→
+   354→      // Buy/sell counts
+   355→      buys_5m: context.buyCount5m ?? 0,
+   356→      buys_1h: 0,
+   357→      buys_6h: 0,
+   358→      buys_24h: 0,
+   359→      sells_5m: context.sellCount5m ?? 0,
+   360→      sells_1h: 0,
+   361→      sells_6h: 0,
+   362→      sells_24h: 0,
+   363→
+   364→      // Trader counts
+   365→      buyers_5m: context.buyers5m ?? 0,
+   366→      buyers_1h: 0,
+   367→      buyers_6h: 0,
+   368→      buyers_24h: 0,
+   369→      sellers_5m: context.sellers5m ?? 0,
+   370→      sellers_1h: 0,
+   371→      sellers_6h: 0,
+   372→      sellers_24h: 0,
+   373→      traders_5m: (context.buyers5m ?? 0) + (context.sellers5m ?? 0),
+   374→      traders_1h: 0,
+   375→      traders_6h: 0,
+   376→      traders_24h: 0,
+   377→
+   378→      // Price history for % change calculations
+   379→      earliest_price_sol_5m: earliestPrice5m,
+   380→      earliest_price_sol_1h: earliestPrice1h,
+   381→      earliest_price_sol_6h: context.priceSol,
+   382→      earliest_price_sol_24h: earliestPrice24h,
+   383→
+   384→      // Additional fields
+   385→      liquidity_sol: (context.liquidity ?? 0) / context.priceUsd * context.priceSol,
+   386→      liquidity_usd: context.liquidity ?? 0,
+   387→      total_supply: 0,
+   388→      circulating_supply: 0,
+   389→    };
+   390→  }
+   391→
+   392→  /**
+   393→   * Get dispatcher statistics
+   394→   */

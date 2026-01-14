@@ -1,0 +1,136 @@
+# Context for bonkbot-dashboard
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Internal admin dashboard for BonkBot operations. Provides a web UI for managing users, DAOs, notifications, referrals, VIP status, and other operational tasks. Deployed on GCP VMs and accessed by internal team members only.
+
+**Critical constraint**: This tool manages production user data - changes require careful validation and coordination with the ops team.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Backend | Fastify (Node.js) | API server |
+| Frontend | Next.js | Admin UI |
+| Database | PostgreSQL | Production bonkbot DB |
+| Auth | Google Cloud Secrets | Credential management |
+| Deployment | Docker + tmux | GCP VM hosting |
+
+### Project Structure
+
+```
+backend/          # Fastify API server
+frontend/         # Next.js admin UI
+deploy-beta.sh    # Beta deployment script
+deploy-prod.sh    # Production deployment script
+beta-compose.yaml # Docker compose for beta
+prod-compose.yaml # Docker compose for prod
+```
+
+## Capabilities
+
+### Admin Functions
+
+| Feature | Purpose |
+|---------|---------|
+| User Management | VIP status, account flags |
+| DAO Management | DAO creator permissions |
+| Referral Codes | Create/manage referral codes |
+| Early Access | Manage early access lists |
+| Partnership Tiers | Configure partner levels |
+| Broadcast Notifications | Send notifications to users |
+
+### External Integrations
+
+| System | Purpose |
+|--------|---------|
+| PostgreSQL | bonkbot production database |
+| Solana RPC | Blockchain queries |
+| Jupiter API | Token data |
+| Google Cloud Secrets | Secure credentials |
+
+## Working in This Repo
+
+### Common Tasks
+
+#### Access the Server
+
+```bash
+# SSH to GCP VM
+gcloud compute ssh --zone "europe-west4-c" "internal-tool" --project "bonkbot-core-prod"
+```
+
+#### Check Running Service
+
+```bash
+tmux ls                    # List sessions
+tmux attach -t dashboard   # Attach to dashboard session
+# Ctrl+B, D to detach
+```
+
+#### Deploy
+
+```bash
+# Beta environment
+sudo bash deploy-beta.sh
+
+# Production environment
+sudo bash deploy-prod.sh
+```
+
+#### Update Code
+
+```bash
+git pull
+# Then redeploy using deploy-*.sh
+```
+
+### Finding Code
+
+| Task | Path |
+|------|------|
+| Backend API routes | `backend/` |
+| Frontend pages | `frontend/` |
+| Docker config | `*-compose.yaml` |
+| Deployment scripts | `deploy-*.sh` |
+
+### Things to Avoid
+
+- Making database changes without backup
+- Deploying during peak trading hours
+- Hardcoding credentials (use Google Cloud Secrets)
+- Killing tmux sessions without proper shutdown
+
+## Related Documentation
+
+- [README.md](README.md) - Deployment instructions
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| bonkbot (PostgreSQL) | User and transaction data |
+| Solana RPC | Blockchain state |
+| Jupiter API | Token metadata |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| Ops team | Admin interface |
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] Full list of admin capabilities
+- [ ] Access control and permissions model
+- [ ] Operational procedures and runbooks
+- [ ] Common troubleshooting steps
+-->

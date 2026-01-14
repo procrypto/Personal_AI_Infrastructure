@@ -1,0 +1,232 @@
+---
+phase: 03-slack-listener-threads
+plan: 03
+type: execute
+---
+
+<objective>
+Create API route for Slack events and verify the complete integration flow.
+
+Purpose: Expose an HTTP endpoint for Slack to send events to, and verify the full flow works end-to-end.
+Output: Vercel API route for Slack events, integration verification.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/03-slack-listener-threads/DISCOVERY.md
+@.planning/phases/03-slack-listener-threads/03-01-PLAN.md
+@.planning/phases/03-slack-listener-threads/03-02-PLAN.md
+
+# Prior plans provide:
+# - Slack client singleton
+# - Message listener for Linear bot
+# - Block Kit builder
+# - Thread reply function
+# - Event bus subscriber
+
+@src/coordination/slack/index.ts
+@src/coordination/slack/client.ts
+@src/coordination/slack/listener.ts
+@src/coordination/slack/subscriber.ts
+
+**Tech stack available:** @vercel/kv, @linear/sdk, @slack/bolt
+**Established patterns:** Singleton pattern, Event bus subscribe/dispatch
+
+**Environment variables needed:**
+- SLACK_BOT_TOKEN
+- SLACK_SIGNING_SECRET
+- LINEAR_BOT_ID
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create Slack events API route</name>
+  <files>api/slack/events.ts</files>
+  <action>
+    Create api/slack/events.ts for Vercel Functions:
+
+    1. Import the Slack app singleton and setup functions
+    2. Handle Slack's URL verification challenge:
+       - If body.type === 'url_verification', return { challenge: body.challenge }
+
+    3. For event callbacks (body.type === 'event_callback'):
+       - Get the Bolt app
+       - Set up the listener (setupLinearMessageListener)
+       - Set up subscribers (setupSlackSubscribers)
+       - Process the event using Bolt's receiver
+
+    Note: Bolt has built-in support for Vercel Functions via the ExpressReceiver.
+    Use the pattern from Bolt docs for serverless:
+
+    ```typescript
+    import { App, ExpressReceiver } from '@slack/bolt';
+
+    const receiver = new ExpressReceiver({
+      signingSecret: process.env.SLACK_SIGNING_SECRET!,
+      processBeforeResponse: true,
+    });
+
+    const app = new App({
+      token: process.env.SLACK_BOT_TOKEN,
+      receiver,
+    });
+
+    // Setup listeners
+    setupLinearMessageListener(app);
+    setupSlackSubscribers();
+
+    export default receiver.app;
+    ```
+
+    This creates an Express-compatible handler that Vercel can use.
+  </action>
+  <verify>
+    - File exists at api/slack/events.ts
+    - TypeScript compiles: `bun run build` succeeds
+  </verify>
+  <done>
+    - Slack events API route created
+    - URL verification handled
+    - Event processing with Bolt
+    - Listeners and subscribers initialized
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create initialization module for subscriber setup</name>
+  <files>src/coordination/slack/init.ts, src/coordination/slack/index.ts</files>
+  <action>
+    1. Create src/coordination/slack/init.ts:
+       - Import App from '@slack/bolt'
+       - Import setupLinearMessageListener from './listener.js'
+       - Import setupSlackSubscribers from './subscriber.js'
+
+       Export `initializeSlackIntegration(app: App): void`:
+       - Call setupLinearMessageListener(app)
+       - Call setupSlackSubscribers()
+       - Log "Slack integration initialized"
+
+       This provides a single entry point for all Slack setup.
+
+    2. Update src/coordination/slack/index.ts:
+       - Add: export * from './init.js'
+
+    3. Update api/slack/events.ts to use initializeSlackIntegration:
+       ```typescript
+       initializeSlackIntegration(app);
+       ```
+  </action>
+  <verify>
+    - File exists at src/coordination/slack/init.ts
+    - TypeScript compiles: `bun run build` succeeds
+  </verify>
+  <done>
+    - Single initialization function for all Slack setup
+    - Clean separation of concerns
+    - Easy to call from API route
+  </done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>
+    Complete Slack integration:
+    - Slack client singleton
+    - Linear message listener (captures messages from Linear's Slack app)
+    - Block Kit message builder (Claim/Pass/Blocked buttons)
+    - Thread reply function
+    - Event bus subscriber (ticket:created → post reply)
+    - API route for Slack events
+  </what-built>
+  <how-to-verify>
+    1. Set up environment variables in .env.local:
+       - SLACK_BOT_TOKEN=xoxb-...
+       - SLACK_SIGNING_SECRET=...
+       - LINEAR_BOT_ID=B... (Linear's Slack app bot ID)
+       - KV_URL and KV_REST_API_TOKEN (for Vercel KV)
+
+    2. Run `bun run build` to verify TypeScript compilation
+
+    3. Deploy to Vercel (or use vercel dev) to get the API route URL
+
+    4. In Slack app settings (api.slack.com):
+       - Go to Event Subscriptions
+       - Enable events
+       - Set Request URL to: https://your-app.vercel.app/api/slack/events
+       - Wait for URL verification to pass
+       - Subscribe to bot events: message.channels, message.groups
+
+    5. Test the flow:
+       a. Add an issue to Linear's "QA:Mods" view
+       b. Watch for Linear's native message in #qa-mods
+       c. Verify the message mapping was stored (check Vercel KV dashboard)
+       d. Manually trigger a ticket:created event (or wait for Phase 4's full flow)
+       e. Verify Block Kit reply appears in thread
+
+    Note: Full end-to-end test requires Phase 4 (Assignment Engine) or manual event dispatch.
+    For now, verify:
+    - [ ] Build passes
+    - [ ] API route accepts events (URL verification passes)
+    - [ ] Linear messages are captured in KV store
+  </how-to-verify>
+  <resume-signal>Type "approved" to continue, or describe issues to fix</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run build` succeeds without errors
+- [ ] api/slack/events.ts exists and exports handler
+- [ ] src/coordination/slack/init.ts exists
+- [ ] All slack module files have proper exports
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- API route ready for Slack events
+- Human verified integration setup
+- Phase 3 complete
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-slack-listener-threads/03-03-SUMMARY.md`:
+
+# Phase 3 Plan 3: API Route & Verification Summary
+
+**[One-liner summary of what shipped]**
+
+## Accomplishments
+
+- API route for Slack events
+- Integration verified
+- Phase 3 complete
+
+## Files Created/Modified
+
+- `api/slack/events.ts` - Slack events API route
+- `src/coordination/slack/init.ts` - Initialization module
+
+## Decisions Made
+
+[Any decisions made during implementation]
+
+## Issues Encountered
+
+[Any issues and resolutions]
+
+## Next Phase Readiness
+
+Phase 4: Assignment Engine - Ready to implement smart tester assignment
+</output>

@@ -1,0 +1,41 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   488→                  tradeResults[tradeResults.length - 1] += ' EXIT';
+   489→                }
+   490→                await paperTracker.save();
+   491→              }
+   492→            } else {
+   493→              // Scan result (not an open trade)
+   494→              if (result.action !== 'hold') {
+   495→                // Skip new entries if market filter is blocking
+   496→                if (marketFilterResult.blockEntries && result.action === 'buy') {
+   497→                  // Don't open new long positions during market stress
+   498→                  continue;
+   499→                }
+   500→
+   501→                const conf = (result.confidence * 100).toFixed(0);
+   502→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   503→                const reset = '\x1b[0m';
+   504→
+   505→                const triggerResult = await trigger.trigger({
+   506→                  mint: token.mint,
+   507→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   508→                  action: result.action,
+   509→                  priceSol: marketData.price_sol,
+   510→                  priceUsd: marketData.price_usd,
+   511→                  ruleSetId: ruleSets[0].id,
+   512→                  signals: result.signals,
+   513→                  confidence: result.confidence,
+   514→                  quiet: true,
+   515→                });
+   516→
+   517→                // Only show signals that actually triggered a trade
+   518→                if (triggerResult.triggered) {
+   519→                  scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   520→                }
+   521→                await paperTracker.save();
+   522→              }
+   523→            }
+   524→          } catch {
+   525→            if (isOpenTrade) {
+   526→              tradeResults.push(`[${src}]${sym}:ERR`);
+   527→            } else {

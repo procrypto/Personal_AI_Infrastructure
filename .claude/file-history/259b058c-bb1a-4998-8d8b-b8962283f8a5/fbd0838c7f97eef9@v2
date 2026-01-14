@@ -1,0 +1,51 @@
+import { SolanaPriceMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+import { GlobalStore } from "@/store/memoryStore/types";
+import { TopicName, WebsocketJsonDataMessage } from "@/websocket/topic/types";
+import {
+  TopicConstructorArgs,
+  WebsocketTopic,
+} from "@/websocket/topic/websocketTopic";
+import { StoreApi } from "zustand";
+
+export type SolPriceTopicName = "sol_price";
+
+declare module "@/websocket/topic/types" {
+  interface TopicRegistry {
+    sol_price: {
+      name: SolPriceTopicName;
+      args: undefined;
+    };
+  }
+}
+
+export class SolPriceTopic extends WebsocketTopic<SolanaPriceMessage> {
+  private store: StoreApi<GlobalStore>;
+
+  /**
+   * Check if a topic is a solana price topic: sol_price
+   */
+  static isSolPriceTopic(topic: TopicName): topic is SolPriceTopicName {
+    return topic.startsWith("sol_price");
+  }
+
+  constructor(args: TopicConstructorArgs<{ store: StoreApi<GlobalStore> }>) {
+    super(args);
+    this.store = args.store;
+  }
+
+  /**
+   * Handle incoming solana price messages.
+   */
+  handleMessageData(data: WebsocketJsonDataMessage<SolanaPriceMessage>) {
+    const { usd: lastPrice, setPriceUsd } = this.store.getState().solanaPrice;
+
+    // Ignore the update if the price didn't move more than 0.05 USD
+    const newPrice = Number(data.message.price);
+    const shouldUpdatePrice =
+      !lastPrice || Math.abs(newPrice - Number(lastPrice)) >= 0.05;
+
+    if (shouldUpdatePrice) {
+      setPriceUsd(data.message.price, data.message.slot);
+    }
+  }
+}

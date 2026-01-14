@@ -1,0 +1,381 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+     1→#!/usr/bin/env node
+     2→/**
+     3→ * CLI Interface
+     4→ *
+     5→ * Simple CLI for configuring and running the analysis autopilot.
+     6→ */
+     7→
+     8→import { configStore } from './config/index.js';
+     9→import { templates, listTemplates, getTemplate, RuleEngine } from './rules/index.js';
+    10→import { localApi } from './api/index.js';
+    11→import { paperTracker, createTrigger } from './trading/index.js';
+    12→
+    13→const HELP = `
+    14→Token Analysis Autopilot CLI
+    15→
+    16→Commands:
+    17→  watch <mint> [symbol]  Add token to watchlist
+    18→  unwatch <mint>         Remove token from watchlist
+    19→  list                   List watchlist
+    20→
+    21→  templates              List available rule templates
+    22→  use <template>         Add a template to active rules
+    23→  remove <rule-id>       Remove a rule set
+    24→  rules                  List active rules
+    25→
+    26→  config                 Show current config
+    27→  mode <paper|live>      Set trigger mode
+    28→  size <sol>             Set default position size
+    29→
+    30→  analyze <mint>         Analyze a single token (with trigger)
+    31→  run                    Start analysis loop
+    32→
+    33→  trades                 List all paper trades
+    34→  stats                  Show trading stats
+    35→  close <mint>           Close open position for mint
+    36→  reset                  Clear all trading data
+    37→
+    38→  help                   Show this help
+    39→`;
+    40→
+    41→async function main() {
+    42→  const args = process.argv.slice(2);
+    43→  const command = args[0]?.toLowerCase();
+    44→
+    45→  await configStore.load();
+    46→  await paperTracker.load();
+    47→
+    48→  switch (command) {
+    49→    case 'watch': {
+    50→      const mint = args[1];
+    51→      const symbol = args[2];
+    52→      if (!mint) {
+    53→        console.error('Usage: watch <mint> [symbol]');
+    54→        process.exit(1);
+    55→      }
+    56→      configStore.addToWatchlist(mint, symbol);
+    57→      await configStore.save();
+    58→      console.log(`Added ${symbol || mint} to watchlist`);
+    59→      break;
+    60→    }
+    61→
+    62→    case 'unwatch': {
+    63→      const mint = args[1];
+    64→      if (!mint) {
+    65→        console.error('Usage: unwatch <mint>');
+    66→        process.exit(1);
+    67→      }
+    68→      if (configStore.removeFromWatchlist(mint)) {
+    69→        await configStore.save();
+    70→        console.log(`Removed ${mint} from watchlist`);
+    71→      } else {
+    72→        console.log('Token not found in watchlist');
+    73→      }
+    74→      break;
+    75→    }
+    76→
+    77→    case 'list': {
+    78→      const watchlist = configStore.getWatchlist();
+    79→      if (watchlist.length === 0) {
+    80→        console.log('Watchlist is empty');
+    81→      } else {
+    82→        console.log('\nWatchlist:');
+    83→        for (const token of watchlist) {
+    84→          console.log(`  ${token.symbol || 'Unknown'} - ${token.mint}`);
+    85→        }
+    86→      }
+    87→      break;
+    88→    }
+    89→
+    90→    case 'templates': {
+    91→      console.log('\nAvailable Templates:');
+    92→      for (const id of listTemplates()) {
+    93→        const template = templates[id];
+    94→        console.log(`  ${id}`);
+    95→        console.log(`    ${template.description}`);
+    96→        console.log(`    Mode: ${template.mode} (${template.rules.length} rules)`);
+    97→      }
+    98→      break;
+    99→    }
+   100→
+   101→    case 'use': {
+   102→      const templateId = args[1];
+   103→      if (!templateId) {
+   104→        console.error('Usage: use <template>');
+   105→        console.error('Available:', listTemplates().join(', '));
+   106→        process.exit(1);
+   107→      }
+   108→      const template = getTemplate(templateId);
+   109→      if (!template) {
+   110→        console.error(`Template not found: ${templateId}`);
+   111→        console.error('Available:', listTemplates().join(', '));
+   112→        process.exit(1);
+   113→      }
+   114→      configStore.addRuleSet(template);
+   115→      await configStore.save();
+   116→      console.log(`Added template: ${template.name}`);
+   117→      break;
+   118→    }
+   119→
+   120→    case 'remove': {
+   121→      const ruleId = args[1];
+   122→      if (!ruleId) {
+   123→        console.error('Usage: remove <rule-id>');
+   124→        process.exit(1);
+   125→      }
+   126→      if (configStore.removeRuleSet(ruleId)) {
+   127→        await configStore.save();
+   128→        console.log(`Removed rule set: ${ruleId}`);
+   129→      } else {
+   130→        console.log('Rule set not found');
+   131→      }
+   132→      break;
+   133→    }
+   134→
+   135→    case 'rules': {
+   136→      const ruleSets = configStore.getRuleSets();
+   137→      if (ruleSets.length === 0) {
+   138→        console.log('No active rule sets. Use "use <template>" to add one.');
+   139→      } else {
+   140→        console.log('\nActive Rule Sets:');
+   141→        for (const ruleSet of ruleSets) {
+   142→          console.log(`\n  ${ruleSet.name} (${ruleSet.id})`);
+   143→          console.log(`    Mode: ${ruleSet.mode}`);
+   144→          console.log(`    Rules:`);
+   145→          for (const rule of ruleSet.rules) {
+   146→            const status = rule.enabled ? 'Y' : 'X';
+   147→            console.log(`      ${status} ${rule.name} (${rule.ruleType})`);
+   148→          }
+   149→        }
+   150→      }
+   151→      break;
+   152→    }
+   153→
+   154→    case 'config': {
+   155→      const config = configStore.get();
+   156→      console.log('\nCurrent Configuration:');
+   157→      console.log(`  Watchlist: ${config.watchlist.length} tokens`);
+   158→      console.log(`  Rule Sets: ${config.ruleSets.length} active`);
+   159→      console.log(`  Trigger Mode: ${config.trigger.mode}`);
+   160→      console.log(`  Trigger Enabled: ${config.trigger.enabled}`);
+   161→      console.log(`  Position Size: ${config.trigger.defaultPositionSizeSol} SOL`);
+   162→      console.log(`  Poll Interval: ${config.pollIntervalMs}ms`);
+   163→      break;
+   164→    }
+   165→
+   166→    case 'mode': {
+   167→      const mode = args[1] as 'paper' | 'live';
+   168→      if (!mode || !['paper', 'live'].includes(mode)) {
+   169→        console.error('Usage: mode <paper|live>');
+   170→        process.exit(1);
+   171→      }
+   172→      configStore.setTriggerMode(mode);
+   173→      await configStore.save();
+   174→      console.log(`Set trigger mode to: ${mode}`);
+   175→      break;
+   176→    }
+   177→
+   178→    case 'size': {
+   179→      const size = parseFloat(args[1]);
+   180→      if (isNaN(size) || size <= 0) {
+   181→        console.error('Usage: size <sol_amount>');
+   182→        process.exit(1);
+   183→      }
+   184→      configStore.setPositionSize(size);
+   185→      await configStore.save();
+   186→      console.log(`Set default position size to: ${size} SOL`);
+   187→      break;
+   188→    }
+   189→
+   190→    case 'analyze': {
+   191→      const mint = args[1];
+   192→      if (!mint) {
+   193→        console.error('Usage: analyze <mint>');
+   194→        process.exit(1);
+   195→      }
+   196→
+   197→      const ruleSets = configStore.getRuleSets();
+   198→      if (ruleSets.length === 0) {
+   199→        console.error('No active rule sets. Use "use <template>" to add one.');
+   200→        process.exit(1);
+   201→      }
+   202→
+   203→      console.log(`\nAnalyzing ${mint}...`);
+   204→
+   205→      const engine = new RuleEngine({ api: localApi });
+   206→      for (const ruleSet of ruleSets) {
+   207→        engine.addRulesFromConfig(ruleSet.rules);
+   208→      }
+   209→
+   210→      const signals = await engine.analyzeToken(mint);
+   211→      const result = engine.aggregateSignals(signals);
+   212→
+   213→      console.log(`\nResult: ${result.action.toUpperCase()} (confidence: ${(result.confidence * 100).toFixed(0)}%)`);
+   214→
+   215→      if (signals.length > 0) {
+   216→        console.log('\nSignals:');
+   217→        for (const signal of signals) {
+   218→          const emoji = signal.type === 'buy' ? '+' : signal.type === 'sell' ? '-' : '*';
+   219→          console.log(`  ${emoji} ${signal.ruleName}: ${signal.reason}`);
+   220→        }
+   221→      } else {
+   222→        console.log('\nNo signals triggered');
+   223→      }
+   224→
+   225→      // Trigger trade if action is not hold
+   226→      if (result.action !== 'hold') {
+   227→        const trigger = createTrigger(configStore.getTriggerConfig());
+   228→        const marketData = await localApi.getMarketData(mint);
+   229→
+   230→        const triggerResult = await trigger.trigger({
+   231→          mint,
+   232→          symbol: marketData.symbol,
+   233→          action: result.action,
+   234→          priceSol: marketData.price_sol,
+   235→          priceUsd: marketData.price_usd,
+   236→          ruleSetId: ruleSets[0].id,
+   237→          signals: result.signals,
+   238→          confidence: result.confidence,
+   239→        });
+   240→
+   241→        if (!triggerResult.triggered) {
+   242→          console.log(`\nTrade not triggered: ${triggerResult.reason}`);
+   243→        }
+   244→
+   245→        await paperTracker.save();
+   246→      }
+   247→      break;
+   248→    }
+   249→
+   250→    case 'run': {
+   251→      const watchlist = configStore.getWatchlist();
+   252→      const ruleSets = configStore.getRuleSets();
+   253→
+   254→      if (watchlist.length === 0) {
+   255→        console.error('Watchlist is empty. Add tokens with "watch <mint>"');
+   256→        process.exit(1);
+   257→      }
+   258→      if (ruleSets.length === 0) {
+   259→        console.error('No active rule sets. Use "use <template>" to add one.');
+   260→        process.exit(1);
+   261→      }
+   262→
+   263→      const config = configStore.get();
+   264→      const trigger = createTrigger(config.trigger);
+   265→
+   266→      console.log('Starting analysis loop... (Ctrl+C to stop)');
+   267→      console.log(`  Watching: ${watchlist.length} tokens`);
+   268→      console.log(`  Rules: ${ruleSets.length} sets`);
+   269→      console.log(`  Mode: ${config.trigger.mode}`);
+   270→      console.log(`  Interval: ${config.pollIntervalMs}ms\n`);
+   271→
+   272→      const engine = new RuleEngine({ api: localApi });
+   273→      for (const ruleSet of ruleSets) {
+   274→        engine.addRulesFromConfig(ruleSet.rules);
+   275→      }
+   276→
+   277→      const runLoop = async () => {
+   278→        for (const token of watchlist) {
+   279→          try {
+   280→            const signals = await engine.analyzeToken(token.mint);
+   281→            const result = engine.aggregateSignals(signals);
+   282→
+   283→            if (result.action !== 'hold') {
+   284→              const marketData = await localApi.getMarketData(token.mint);
+   285→
+   286→              await trigger.trigger({
+   287→                mint: token.mint,
+   288→                symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   289→                action: result.action,
+   290→                priceSol: marketData.price_sol,
+   291→                priceUsd: marketData.price_usd,
+   292→                ruleSetId: ruleSets[0].id,
+   293→                signals: result.signals,
+   294→                confidence: result.confidence,
+   295→              });
+   296→
+   297→              await paperTracker.save();
+   298→            }
+   299→          } catch (error) {
+   300→            console.error(`Error analyzing ${token.symbol || token.mint}:`, error);
+   301→          }
+   302→        }
+   303→      };
+   304→
+   305→      // Run immediately, then on interval
+   306→      await runLoop();
+   307→      setInterval(runLoop, config.pollIntervalMs);
+   308→      break;
+   309→    }
+   310→
+   311→    case 'trades': {
+   312→      const trades = paperTracker.getAllTrades();
+   313→      if (trades.length === 0) {
+   314→        console.log('No trades recorded');
+   315→      } else {
+   316→        console.log('\nPaper Trades:');
+   317→        for (const trade of trades) {
+   318→          const status = trade.status === 'open' ? '[OPEN]' : '[CLOSED]';
+   319→          const pnl = trade.pnlPercent !== undefined ? ` P&L: ${trade.pnlPercent.toFixed(2)}%` : '';
+   320→          console.log(`  ${status} ${trade.action.toUpperCase()} ${trade.symbol}`);
+   321→          console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL${pnl}`);
+   322→          console.log(`    ID: ${trade.id}`);
+   323→        }
+   324→      }
+   325→      break;
+   326→    }
+   327→
+   328→    case 'stats': {
+   329→      const stats = paperTracker.getStats();
+   330→      console.log('\nTrading Statistics:');
+   331→      console.log(`  Total Trades: ${stats.totalTrades}`);
+   332→      console.log(`  Open: ${stats.openTrades} | Closed: ${stats.closedTrades}`);
+   333→      console.log(`  Wins: ${stats.wins} | Losses: ${stats.losses}`);
+   334→      console.log(`  Win Rate: ${(stats.winRate * 100).toFixed(1)}%`);
+   335→      console.log(`  Total P&L: ${stats.totalPnlSol.toFixed(4)} SOL ($${stats.totalPnlUsd.toFixed(2)})`);
+   336→      console.log(`  Avg P&L: ${stats.avgPnlPercent.toFixed(2)}%`);
+   337→      if (stats.bestTrade) {
+   338→        console.log(`  Best: ${stats.bestTrade.symbol} +${stats.bestTrade.pnlPercent?.toFixed(2)}%`);
+   339→      }
+   340→      if (stats.worstTrade) {
+   341→        console.log(`  Worst: ${stats.worstTrade.symbol} ${stats.worstTrade.pnlPercent?.toFixed(2)}%`);
+   342→      }
+   343→      break;
+   344→    }
+   345→
+   346→    case 'close': {
+   347→      const mint = args[1];
+   348→      if (!mint) {
+   349→        console.error('Usage: close <mint>');
+   350→        process.exit(1);
+   351→      }
+   352→
+   353→      const openTrade = paperTracker.getOpenTradeForMint(mint);
+   354→      if (!openTrade) {
+   355→        console.log('No open position for this mint');
+   356→        break;
+   357→      }
+   358→
+   359→      const marketData = await localApi.getMarketData(mint);
+   360→      const trigger = createTrigger(configStore.getTriggerConfig());
+   361→      await trigger.closePosition(mint, marketData.price_sol, marketData.price_usd);
+   362→      await paperTracker.save();
+   363→      break;
+   364→    }
+   365→
+   366→    case 'reset': {
+   367→      paperTracker.clearAll();
+   368→      await paperTracker.save();
+   369→      console.log('All trading data cleared');
+   370→      break;
+   371→    }
+   372→
+   373→    case 'help':
+   374→    default:
+   375→      console.log(HELP);
+   376→  }
+   377→}
+   378→
+   379→main().catch(console.error);
+   380→

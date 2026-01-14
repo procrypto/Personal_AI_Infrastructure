@@ -1,0 +1,248 @@
+---
+phase: 01-foundation
+plan: 01
+type: execute
+---
+
+<objective>
+Define TypeScript interfaces and types for the QA Coordination Hub data model.
+
+Purpose: Establish type-safe foundation that all subsequent phases depend on. These types define the contract between storage, business logic, and surface layers.
+Output: `src/coordination/types.ts` with all core entity types, enums, and utility types.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/codebase/CONVENTIONS.md
+@.planning/codebase/ARCHITECTURE.md
+
+**Discovery findings:**
+- Vercel KV stores entities as JSON in Redis hashes
+- Event bus will dispatch typed events to surfaces (Slack)
+- Need: QATicket, TesterProfile, LinearMessage, QASession (ceremony)
+
+**From PROJECT.md requirements:**
+- Pre-release QA: Linear view triggers → Slack thread replies with claim/pass/blocked
+- Ceremony QA: Deployment smoke test coordination
+- Alert-triggered QA: Grafana alerts → tester attention
+- Smart assignment: expertise, workload, history, priority scoring
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create core entity interfaces</name>
+  <files>src/coordination/types.ts</files>
+  <action>
+Create new directory `src/coordination/` and types.ts file with interfaces:
+
+```typescript
+// QATicket - represents a ticket requiring QA attention
+interface QATicket {
+  id: string;                    // Linear issue ID
+  linearUrl: string;             // Full Linear URL
+  title: string;                 // Issue title
+  priority: TicketPriority;      // urgent, high, normal, low
+  status: TicketStatus;          // pending, claimed, in_progress, blocked, passed, failed
+  assignedTo: string | null;     // Tester ID or null
+  createdAt: string;             // ISO timestamp
+  updatedAt: string;             // ISO timestamp
+  claimedAt: string | null;      // When claimed
+  slackThreadTs: string | null;  // Slack thread timestamp for replies
+  slackChannelId: string | null; // Slack channel ID
+  source: TicketSource;          // linear_view, ceremony, alert
+  metadata: Record<string, unknown>; // Flexible metadata
+}
+
+// TesterProfile - QA tester with assignment scoring data
+interface TesterProfile {
+  id: string;                    // Linear user ID
+  linearUserId: string;          // Linear user ID (same as id)
+  slackUserId: string;           // Slack user ID for mentions
+  displayName: string;           // Display name
+  email: string;                 // Email
+  expertise: string[];           // Areas of expertise (tags)
+  availability: TesterAvailability;
+  currentLoad: number;           // Active ticket count
+  totalCompleted: number;        // Historical completed count
+  avgCompletionTimeMs: number;   // Average time to complete
+  lastActiveAt: string;          // ISO timestamp
+}
+
+// LinearMessage - maps Linear's Slack message to ticket
+interface LinearMessage {
+  slackMessageTs: string;        // Slack message timestamp (unique ID)
+  slackChannelId: string;        // Slack channel ID
+  linearIssueId: string;         // Linear issue ID
+  capturedAt: string;            // When we captured the mapping
+}
+
+// QASession - ceremony QA session
+interface QASession {
+  id: string;                    // Unique session ID
+  ceremonyId: string;            // Ceremony Tracker ID
+  status: SessionStatus;         // pending, active, completed, failed
+  checklist: ChecklistItem[];    // Items to verify
+  startedAt: string | null;      // ISO timestamp
+  completedAt: string | null;    // ISO timestamp
+  testers: string[];             // Assigned tester IDs
+}
+
+// ChecklistItem for ceremony QA
+interface ChecklistItem {
+  id: string;
+  description: string;
+  status: 'pending' | 'passed' | 'failed' | 'skipped';
+  verifiedBy: string | null;     // Tester ID
+  verifiedAt: string | null;     // ISO timestamp
+  notes: string | null;
+}
+```
+
+Use camelCase for all properties. Export all interfaces.
+  </action>
+  <verify>tsc --noEmit src/coordination/types.ts compiles without errors</verify>
+  <done>All 5 core interfaces (QATicket, TesterProfile, LinearMessage, QASession, ChecklistItem) defined and exported</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create enum types</name>
+  <files>src/coordination/types.ts</files>
+  <action>
+Add enum types to the same file (before interfaces that use them):
+
+```typescript
+// Ticket priority levels
+type TicketPriority = 'urgent' | 'high' | 'normal' | 'low';
+
+// Ticket lifecycle status
+type TicketStatus = 'pending' | 'claimed' | 'in_progress' | 'blocked' | 'passed' | 'failed';
+
+// Source of the QA ticket
+type TicketSource = 'linear_view' | 'ceremony' | 'alert';
+
+// Tester availability status
+type TesterAvailability = 'available' | 'busy' | 'away' | 'offline';
+
+// Ceremony session status
+type SessionStatus = 'pending' | 'active' | 'completed' | 'failed';
+
+// Event types for the event bus
+type NotificationEvent =
+  | 'ticket:created'
+  | 'ticket:assigned'
+  | 'ticket:claimed'
+  | 'ticket:status_changed'
+  | 'ticket:escalated'
+  | 'session:started'
+  | 'session:completed'
+  | 'alert:triggered';
+```
+
+Use union types (not TypeScript enums) for better tree-shaking and JSON compatibility. Export all types.
+  </action>
+  <verify>tsc --noEmit src/coordination/types.ts compiles without errors</verify>
+  <done>All 6 type unions defined and exported (TicketPriority, TicketStatus, TicketSource, TesterAvailability, SessionStatus, NotificationEvent)</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Create utility types and type guards</name>
+  <files>src/coordination/types.ts</files>
+  <action>
+Add utility types for common operations:
+
+```typescript
+// Event payloads for type-safe event bus
+interface TicketCreatedPayload {
+  ticket: QATicket;
+}
+
+interface TicketAssignedPayload {
+  ticket: QATicket;
+  tester: TesterProfile;
+  autoAssigned: boolean;
+}
+
+interface TicketStatusChangedPayload {
+  ticket: QATicket;
+  previousStatus: TicketStatus;
+  changedBy: string; // Tester ID or 'system'
+}
+
+interface TicketEscalatedPayload {
+  ticket: QATicket;
+  escalationLevel: 'warning_24h' | 'critical_48h';
+  hoursSinceCreated: number;
+}
+
+interface SessionStartedPayload {
+  session: QASession;
+}
+
+interface SessionCompletedPayload {
+  session: QASession;
+  passedCount: number;
+  failedCount: number;
+}
+
+interface AlertTriggeredPayload {
+  alertName: string;
+  alertUrl: string;
+  severity: 'warning' | 'critical';
+  metric: string;
+  currentValue: number;
+  threshold: number;
+}
+
+// Union of all event payloads
+type EventPayload =
+  | TicketCreatedPayload
+  | TicketAssignedPayload
+  | TicketStatusChangedPayload
+  | TicketEscalatedPayload
+  | SessionStartedPayload
+  | SessionCompletedPayload
+  | AlertTriggeredPayload;
+
+// Type guard helpers
+function isQATicket(obj: unknown): obj is QATicket {
+  return typeof obj === 'object' && obj !== null && 'id' in obj && 'status' in obj && 'source' in obj;
+}
+
+function isTesterProfile(obj: unknown): obj is TesterProfile {
+  return typeof obj === 'object' && obj !== null && 'linearUserId' in obj && 'slackUserId' in obj;
+}
+```
+
+Export all payload types and type guards.
+  </action>
+  <verify>tsc --noEmit src/coordination/types.ts compiles without errors</verify>
+  <done>7 event payload types, EventPayload union, and 2 type guards defined and exported</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` passes without errors
+- [ ] All interfaces exported from src/coordination/types.ts
+- [ ] Types match PROJECT.md requirements (tickets, testers, sessions, alerts)
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Types cover all three QA modes: Pre-release, Ceremony, Alert-triggered
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-foundation/01-01-SUMMARY.md`
+</output>

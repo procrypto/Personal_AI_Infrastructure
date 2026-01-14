@@ -1,0 +1,37 @@
+# Stage 1: Install dependencies
+FROM oven/bun:1 AS install
+WORKDIR /app
+
+# Copy package files for dependency caching
+COPY package.json bun.lock ./
+
+# Install production dependencies only
+RUN bun install --frozen-lockfile --production
+
+# Stage 2: Production runtime
+FROM oven/bun:1-slim AS runtime
+WORKDIR /app
+
+# Copy production dependencies from install stage
+COPY --from=install /app/node_modules ./node_modules
+
+# Copy application source
+COPY package.json ./
+COPY src ./src
+
+# Cloud Run uses PORT env var, default to 8080
+ENV PORT=8080
+EXPOSE 8080
+
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
+# Health check for container orchestrators
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+# Run as non-root user (bun user exists in official image)
+USER bun
+
+# Start the server
+CMD ["bun", "run", "src/server.ts"]

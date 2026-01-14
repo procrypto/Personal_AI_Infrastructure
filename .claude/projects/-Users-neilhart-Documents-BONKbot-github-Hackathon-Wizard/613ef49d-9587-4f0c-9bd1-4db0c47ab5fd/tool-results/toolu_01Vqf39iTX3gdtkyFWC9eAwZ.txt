@@ -1,0 +1,39 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/trading/paper-tracker.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   133→  getRecentEvents(limit = 50): TriggerEvent[] {
+   134→    return this.events.slice(-limit);
+   135→  }
+   136→
+   137→  /**
+   138→   * Calculate unrealized P&L for an open trade given current price
+   139→   */
+   140→  calcUnrealizedPnl(trade: PaperTrade, currentPriceSol: number, currentPriceUsd: number): {
+   141→    pnlSol: number;
+   142→    pnlUsd: number;
+   143→    pnlPercent: number;
+   144→  } {
+   145→    if (trade.status === 'closed') {
+   146→      return { pnlSol: trade.pnlSol ?? 0, pnlUsd: trade.pnlUsd ?? 0, pnlPercent: trade.pnlPercent ?? 0 };
+   147→    }
+   148→
+   149→    let pnlSol: number;
+   150→    let pnlUsd: number;
+   151→    let pnlPercent: number;
+   152→
+   153→    if (trade.action === 'buy') {
+   154→      pnlSol = (currentPriceSol - trade.entryPriceSol) * trade.tokenAmount;
+   155→      pnlUsd = (currentPriceUsd - trade.entryPriceUsd) * trade.tokenAmount;
+   156→      pnlPercent = ((currentPriceSol - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+   157→    } else {
+   158→      pnlSol = (trade.entryPriceSol - currentPriceSol) * trade.tokenAmount;
+   159→      pnlUsd = (trade.entryPriceUsd - currentPriceUsd) * trade.tokenAmount;
+   160→      pnlPercent = ((trade.entryPriceSol - currentPriceSol) / trade.entryPriceSol) * 100;
+   161→    }
+   162→
+   163→    return { pnlSol, pnlUsd, pnlPercent };
+   164→  }
+   165→
+   166→  getStats(): TradingStats {
+   167→    const closed = this.getClosedTrades();
+   168→    const open = this.getOpenTrades();
+   169→
+   170→    const wins = closed.filter(t => (t.pnlSol ?? 0) > 0);

@@ -1,0 +1,629 @@
+#!/usr/bin/env node
+/**
+ * CLI Interface
+ *
+ * Simple CLI for configuring and running the analysis autopilot.
+ */
+
+import { configStore } from './config/index.js';
+import type { TokenSource } from './config/types.js';
+import { templates, listTemplates, getTemplate, getTemplateSummary, RuleEngine } from './rules/index.js';
+import { localApi } from './api/index.js';
+import { paperTracker, createTrigger, createAutoSourceManager } from './trading/index.js';
+
+const HELP = `
+Token Analysis Autopilot CLI
+
+Commands:
+  watch <mint> [symbol]  Add token to watchlist
+  unwatch <mint>         Remove token from watchlist
+  list                   List watchlist
+
+  sources                Show auto-source status (trending, whales)
+  sources on|off         Enable/disable auto-sources
+  sources trending on|off
+  sources whales on|off
+
+  templates              List available rule templates
+  use <template>         Add a template to active rules
+  remove <rule-id>       Remove a rule set
+  rules                  List active rules
+
+  config                 Show current config
+  mode <paper|live>      Set trigger mode
+  size <sol>             Set default position size
+
+  analyze <mint>         Analyze a single token (with trigger)
+  run                    Start analysis loop
+
+  status                 Live portfolio overview with P&L
+  trades                 List all paper trades
+  stats                  Show trading stats
+  close <mint>           Close open position for mint
+  reset                  Clear all trading data
+
+  help                   Show this help
+`;
+
+async function main() {
+  const args = process.argv.slice(2);
+  const command = args[0]?.toLowerCase();
+
+  await configStore.load();
+  await paperTracker.load();
+
+  switch (command) {
+    case 'watch': {
+      const mint = args[1];
+      const symbol = args[2];
+      if (!mint) {
+        console.error('Usage: watch <mint> [symbol]');
+        process.exit(1);
+      }
+      configStore.addToWatchlist(mint, symbol);
+      await configStore.save();
+      console.log(`Added ${symbol || mint} to watchlist`);
+      break;
+    }
+
+    case 'unwatch': {
+      const mint = args[1];
+      if (!mint) {
+        console.error('Usage: unwatch <mint>');
+        process.exit(1);
+      }
+      if (configStore.removeFromWatchlist(mint)) {
+        await configStore.save();
+        console.log(`Removed ${mint} from watchlist`);
+      } else {
+        console.log('Token not found in watchlist');
+      }
+      break;
+    }
+
+    case 'list': {
+      const watchlist = configStore.getWatchlist();
+      if (watchlist.length === 0) {
+        console.log('Watchlist is empty');
+      } else {
+        console.log('\nWatchlist:');
+        for (const token of watchlist) {
+          console.log(`  ${token.symbol || 'Unknown'} - ${token.mint}`);
+        }
+      }
+      break;
+    }
+
+    case 'sources': {
+      const subCmd = args[1]?.toLowerCase();
+      const sourceConfig = configStore.getAutoSourceConfig();
+
+      if (!subCmd) {
+        // Show status
+        console.log('\nAuto-Sources:');
+        console.log(`  Enabled: ${sourceConfig.enabled ? 'Yes' : 'No'}`);
+        console.log(`  Trending: ${sourceConfig.trending ? 'On' : 'Off'} (limit: ${sourceConfig.trendingLimit})`);
+        console.log(`  Whales: ${sourceConfig.whales ? 'On' : 'Off'} (limit: ${sourceConfig.whalesLimit})`);
+        console.log(`  Refresh: every ${sourceConfig.refreshIntervalMs / 1000 / 60}m`);
+        console.log('\nSource indicators: [W]=watchlist [T]=trending [$]=whales');
+        break;
+      }
+
+      if (subCmd === 'on') {
+        configStore.setAutoSourceEnabled(true);
+        await configStore.save();
+        console.log('Auto-sources enabled');
+        break;
+      }
+
+      if (subCmd === 'off') {
+        configStore.setAutoSourceEnabled(false);
+        await configStore.save();
+        console.log('Auto-sources disabled');
+        break;
+      }
+
+      // Handle "sources trending on|off" or "sources whales on|off"
+      const sourceType = subCmd as 'trending' | 'whales';
+      const toggle = args[2]?.toLowerCase();
+
+      if ((sourceType === 'trending' || sourceType === 'whales') && (toggle === 'on' || toggle === 'off')) {
+        configStore.setSourceEnabled(sourceType, toggle === 'on');
+        await configStore.save();
+        console.log(`${sourceType} source ${toggle === 'on' ? 'enabled' : 'disabled'}`);
+        break;
+      }
+
+      console.error('Usage: sources [on|off] | sources <trending|whales> <on|off>');
+      break;
+    }
+
+    case 'templates': {
+      console.log('');
+      for (const id of listTemplates()) {
+        const template = templates[id];
+        console.log(`  ${id}:  ${getTemplateSummary(template)}`);
+      }
+      console.log('');
+      break;
+    }
+
+    case 'use': {
+      const templateId = args[1];
+      if (!templateId) {
+        console.error('Usage: use <template>');
+        console.error('Available:', listTemplates().join(', '));
+        process.exit(1);
+      }
+      const template = getTemplate(templateId);
+      if (!template) {
+        console.error(`Template not found: ${templateId}`);
+        console.error('Available:', listTemplates().join(', '));
+        process.exit(1);
+      }
+      configStore.addRuleSet(template);
+      await configStore.save();
+      console.log(`Added template: ${template.name}`);
+      break;
+    }
+
+    case 'remove': {
+      const ruleId = args[1];
+      if (!ruleId) {
+        console.error('Usage: remove <rule-id>');
+        process.exit(1);
+      }
+      if (configStore.removeRuleSet(ruleId)) {
+        await configStore.save();
+        console.log(`Removed rule set: ${ruleId}`);
+      } else {
+        console.log('Rule set not found');
+      }
+      break;
+    }
+
+    case 'rules': {
+      const ruleSets = configStore.getRuleSets();
+      if (ruleSets.length === 0) {
+        console.log('No active rule sets. Use "use <template>" to add one.');
+      } else {
+        console.log('\nActive Rule Sets:');
+        for (const ruleSet of ruleSets) {
+          console.log(`\n  ${ruleSet.name} (${ruleSet.id})`);
+          console.log(`    Mode: ${ruleSet.mode}`);
+          console.log(`    Rules:`);
+          for (const rule of ruleSet.rules) {
+            const status = rule.enabled ? 'Y' : 'X';
+            console.log(`      ${status} ${rule.name} (${rule.ruleType})`);
+          }
+        }
+      }
+      break;
+    }
+
+    case 'config': {
+      const config = configStore.get();
+      console.log('\nCurrent Configuration:');
+      console.log(`  Watchlist: ${config.watchlist.length} tokens`);
+      console.log(`  Rule Sets: ${config.ruleSets.length} active`);
+      console.log(`  Auto-Sources: ${config.autoSources.enabled ? 'On' : 'Off'} (T:${config.autoSources.trending ? 'Y' : 'N'} $:${config.autoSources.whales ? 'Y' : 'N'})`);
+      console.log(`  Trigger Mode: ${config.trigger.mode}`);
+      console.log(`  Trigger Enabled: ${config.trigger.enabled}`);
+      console.log(`  Position Size: ${config.trigger.defaultPositionSizeSol} SOL`);
+      console.log(`  Poll Interval: ${config.pollIntervalMs}ms`);
+      break;
+    }
+
+    case 'mode': {
+      const mode = args[1] as 'paper' | 'live';
+      if (!mode || !['paper', 'live'].includes(mode)) {
+        console.error('Usage: mode <paper|live>');
+        process.exit(1);
+      }
+      configStore.setTriggerMode(mode);
+      await configStore.save();
+      console.log(`Set trigger mode to: ${mode}`);
+      break;
+    }
+
+    case 'size': {
+      const size = parseFloat(args[1]);
+      if (isNaN(size) || size <= 0) {
+        console.error('Usage: size <sol_amount>');
+        process.exit(1);
+      }
+      configStore.setPositionSize(size);
+      await configStore.save();
+      console.log(`Set default position size to: ${size} SOL`);
+      break;
+    }
+
+    case 'analyze': {
+      const mint = args[1];
+      if (!mint) {
+        console.error('Usage: analyze <mint>');
+        process.exit(1);
+      }
+
+      const ruleSets = configStore.getRuleSets();
+      if (ruleSets.length === 0) {
+        console.error('No active rule sets. Use "use <template>" to add one.');
+        process.exit(1);
+      }
+
+      console.log(`\nAnalyzing ${mint}...`);
+
+      const engine = new RuleEngine({ api: localApi });
+      for (const ruleSet of ruleSets) {
+        engine.addRulesFromConfig(ruleSet.rules);
+      }
+
+      const signals = await engine.analyzeToken(mint);
+      const result = engine.aggregateSignals(signals);
+
+      console.log(`\nResult: ${result.action.toUpperCase()} (confidence: ${(result.confidence * 100).toFixed(0)}%)`);
+
+      if (signals.length > 0) {
+        console.log('\nSignals:');
+        for (const signal of signals) {
+          const emoji = signal.type === 'buy' ? '+' : signal.type === 'sell' ? '-' : '*';
+          console.log(`  ${emoji} ${signal.ruleName}: ${signal.reason}`);
+        }
+      } else {
+        console.log('\nNo signals triggered');
+      }
+
+      // Trigger trade if action is not hold
+      if (result.action !== 'hold') {
+        const trigger = createTrigger(configStore.getTriggerConfig());
+        const marketData = await localApi.getMarketData(mint);
+
+        const triggerResult = await trigger.trigger({
+          mint,
+          symbol: marketData.symbol,
+          action: result.action,
+          priceSol: marketData.price_sol,
+          priceUsd: marketData.price_usd,
+          ruleSetId: ruleSets[0].id,
+          signals: result.signals,
+          confidence: result.confidence,
+        });
+
+        if (!triggerResult.triggered) {
+          console.log(`\nTrade not triggered: ${triggerResult.reason}`);
+        }
+
+        await paperTracker.save();
+      }
+      break;
+    }
+
+    case 'run': {
+      const watchlist = configStore.getWatchlist();
+      const ruleSets = configStore.getRuleSets();
+
+      if (ruleSets.length === 0) {
+        console.error('No active rule sets. Use "use <template>" to add one.');
+        process.exit(1);
+      }
+
+      const config = configStore.get();
+      const trigger = createTrigger(config.trigger);
+      const autoSources = createAutoSourceManager(localApi, config.autoSources);
+
+      // Initial refresh of auto-sources
+      if (config.autoSources.enabled) {
+        console.log('Fetching auto-sources (trending, whales)...');
+        await autoSources.refresh();
+      }
+
+      // Helper to get source label for output
+      const sourceLabel = (source: TokenSource): string => {
+        switch (source) {
+          case 'watchlist': return 'W';
+          case 'trending': return 'T';
+          case 'whales': return '$';
+          default: return '?';
+        }
+      };
+
+      // Combine all token sources: watchlist + auto-sources + open positions
+      const getAllTokens = () => {
+        const tokens = new Map<string, { mint: string; symbol?: string; source: TokenSource }>();
+
+        // Manual watchlist (highest priority)
+        for (const t of watchlist) {
+          tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: 'watchlist' });
+        }
+
+        // Auto-sources (if enabled)
+        if (config.autoSources.enabled) {
+          for (const t of autoSources.getSourcedTokens()) {
+            if (!tokens.has(t.mint)) {
+              tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: t.source });
+            }
+          }
+        }
+
+        // Open positions (always include)
+        for (const trade of paperTracker.getOpenTrades()) {
+          if (!tokens.has(trade.mint)) {
+            // Determine source from auto-sources if available
+            const autoSource = autoSources.getSourceForMint(trade.mint);
+            tokens.set(trade.mint, {
+              mint: trade.mint,
+              symbol: trade.symbol,
+              source: autoSource || 'watchlist',
+            });
+          }
+        }
+
+        return Array.from(tokens.values());
+      };
+
+      const allTokens = getAllTokens();
+      const autoSourceCounts = autoSources.getCounts();
+
+      if (allTokens.length === 0) {
+        console.error('Nothing to watch. Add tokens with "watch <mint>", enable auto-sources, or have open trades.');
+        process.exit(1);
+      }
+
+      const openCount = paperTracker.getOpenTrades().length;
+      console.log('Starting analysis loop... (Ctrl+C to stop)');
+      console.log(`  Watchlist: ${watchlist.length} | Trending: ${autoSourceCounts.trending} | Whales: ${autoSourceCounts.whales}`);
+      console.log(`  Open trades: ${openCount} | Rules: ${ruleSets.length} sets | Mode: ${config.trigger.mode}`);
+      console.log(`  Scan interval: ${config.pollIntervalMs}ms | Source refresh: ${config.autoSources.refreshIntervalMs / 1000}s\n`);
+
+      const engine = new RuleEngine({ api: localApi });
+      for (const ruleSet of ruleSets) {
+        engine.addRulesFromConfig(ruleSet.rules);
+      }
+
+      let scanCount = 0;
+      const runLoop = async () => {
+        scanCount++;
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+
+        // Refresh auto-sources if needed (every 15m by default)
+        await autoSources.refreshIfNeeded();
+
+        // Get fresh token list
+        const tokens = getAllTokens();
+        const openTrades = paperTracker.getOpenTrades();
+        const openMints = new Set(openTrades.map(t => t.mint));
+
+        const scanResults: string[] = [];
+        const tradeResults: string[] = [];
+
+        // Process all tokens
+        for (const token of tokens) {
+          const isOpenTrade = openMints.has(token.mint);
+
+          try {
+            const signals = await engine.analyzeToken(token.mint);
+            const result = engine.aggregateSignals(signals);
+            const sym = token.symbol || token.mint.slice(0, 6);
+            const src = sourceLabel(token.source);
+
+            // If this is an open trade, show P&L
+            if (isOpenTrade) {
+              const trade = openTrades.find(t => t.mint === token.mint)!;
+              const marketData = await localApi.getMarketData(token.mint);
+              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+              const size = trade.positionSizeSol.toFixed(2);
+              const color = pnl.pnlPercent >= 0 ? '\x1b[32m' : '\x1b[31m';
+              const reset = '\x1b[0m';
+              tradeResults.push(`[${src}]${sym} (${size}) ${color}${sign}${pnl.pnlPercent.toFixed(1)}%${reset}`);
+
+              // Check for exit signals
+              if (result.action !== 'hold') {
+                const triggerResult = await trigger.trigger({
+                  mint: token.mint,
+                  symbol: trade.symbol,
+                  action: result.action,
+                  priceSol: marketData.price_sol,
+                  priceUsd: marketData.price_usd,
+                  ruleSetId: ruleSets[0].id,
+                  signals: result.signals,
+                  confidence: result.confidence,
+                  quiet: true,
+                });
+                if (triggerResult.triggered) {
+                  tradeResults[tradeResults.length - 1] += ' EXIT';
+                }
+                await paperTracker.save();
+              }
+            } else {
+              // Scan result (not an open trade)
+              if (result.action === 'hold') {
+                // Don't show hold results to reduce noise
+              } else {
+                const marketData = await localApi.getMarketData(token.mint);
+                const conf = (result.confidence * 100).toFixed(0);
+                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+                const reset = '\x1b[0m';
+
+                const triggerResult = await trigger.trigger({
+                  mint: token.mint,
+                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+                  action: result.action,
+                  priceSol: marketData.price_sol,
+                  priceUsd: marketData.price_usd,
+                  ruleSetId: ruleSets[0].id,
+                  signals: result.signals,
+                  confidence: result.confidence,
+                  quiet: true,
+                });
+
+                // Only show signals that actually triggered a trade
+                if (triggerResult.triggered) {
+                  scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+                }
+                await paperTracker.save();
+              }
+            }
+          } catch {
+            const sym = token.symbol || token.mint.slice(0, 6);
+            const src = sourceLabel(token.source);
+            if (isOpenTrade) {
+              tradeResults.push(`[${src}]${sym}:ERR`);
+            } else {
+              scanResults.push(`[${src}]${sym}:ERR`);
+            }
+          }
+        }
+
+        // Output - compact single line
+        let line = `[${time}] #${scanCount} (${tokens.length})`;
+        if (scanResults.length > 0) {
+          line += `  |  New: ${scanResults.join(' ')}`;
+        }
+        if (tradeResults.length > 0) {
+          line += `  |  Open: ${tradeResults.join(' ')}`;
+        }
+        if (scanResults.length === 0 && tradeResults.length === 0) {
+          line += '  |  No signals';
+        }
+        console.log(line);
+      };
+
+      // Run immediately, then on interval
+      await runLoop();
+      setInterval(runLoop, config.pollIntervalMs);
+      break;
+    }
+
+    case 'status': {
+      const openTrades = paperTracker.getOpenTrades();
+      const stats = paperTracker.getStats();
+      const ruleSets = configStore.getRuleSets();
+      const watchlist = configStore.getWatchlist();
+
+      console.log('\n=== PORTFOLIO STATUS ===\n');
+
+      // Open positions with live P&L
+      if (openTrades.length === 0) {
+        console.log('Open Positions: none\n');
+      } else {
+        console.log('Open Positions:');
+        let totalUnrealizedSol = 0;
+        let totalUnrealizedUsd = 0;
+        let totalExposure = 0;
+
+        for (const trade of openTrades) {
+          try {
+            const marketData = await localApi.getMarketData(trade.mint);
+            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+            const sign = pnl.pnlPercent >= 0 ? '+' : '';
+            totalUnrealizedSol += pnl.pnlSol;
+            totalUnrealizedUsd += pnl.pnlUsd;
+            totalExposure += trade.positionSizeSol;
+
+            console.log(`  ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${pnl.pnlPercent.toFixed(2)}%  (${sign}${pnl.pnlSol.toFixed(4)} SOL)`);
+            console.log(`    Entry: ${trade.entryPriceSol} -> Now: ${marketData.price_sol} SOL`);
+          } catch {
+            console.log(`  ${trade.action.toUpperCase()} ${trade.symbol}  (price fetch failed)`);
+          }
+        }
+
+        const unrealizedSign = totalUnrealizedSol >= 0 ? '+' : '';
+        console.log(`\n  Exposure: ${totalExposure.toFixed(4)} SOL`);
+        console.log(`  Unrealized: ${unrealizedSign}${totalUnrealizedSol.toFixed(4)} SOL ($${totalUnrealizedUsd.toFixed(2)})\n`);
+      }
+
+      // Realized P&L
+      console.log('Realized P&L:');
+      const realizedSign = stats.totalPnlSol >= 0 ? '+' : '';
+      console.log(`  ${stats.closedTrades} trades | ${stats.wins}W/${stats.losses}L | ${(stats.winRate * 100).toFixed(0)}% win`);
+      console.log(`  Total: ${realizedSign}${stats.totalPnlSol.toFixed(4)} SOL ($${stats.totalPnlUsd.toFixed(2)})\n`);
+
+      // Active config
+      console.log('Config:');
+      console.log(`  Watching: ${watchlist.length} tokens | Rules: ${ruleSets.length} sets`);
+      console.log(`  Mode: ${configStore.getTriggerConfig().mode}\n`);
+
+      break;
+    }
+
+    case 'trades': {
+      const trades = paperTracker.getAllTrades();
+      if (trades.length === 0) {
+        console.log('No trades recorded');
+      } else {
+        console.log('\nPaper Trades:');
+        for (const trade of trades) {
+          if (trade.status === 'open') {
+            try {
+              const marketData = await localApi.getMarketData(trade.mint);
+              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+              console.log(`  [OPEN] ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${pnl.pnlPercent.toFixed(2)}%`);
+              console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+            } catch {
+              console.log(`  [OPEN] ${trade.action.toUpperCase()} ${trade.symbol}`);
+              console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+            }
+          } else {
+            const sign = (trade.pnlPercent ?? 0) >= 0 ? '+' : '';
+            console.log(`  [CLOSED] ${trade.action.toUpperCase()} ${trade.symbol}  ${sign}${trade.pnlPercent?.toFixed(2)}%`);
+            console.log(`    Entry: ${trade.entryPriceSol} SOL | Size: ${trade.positionSizeSol.toFixed(4)} SOL`);
+          }
+        }
+      }
+      break;
+    }
+
+    case 'stats': {
+      const stats = paperTracker.getStats();
+      console.log('\nTrading Statistics:');
+      console.log(`  Total Trades: ${stats.totalTrades}`);
+      console.log(`  Open: ${stats.openTrades} | Closed: ${stats.closedTrades}`);
+      console.log(`  Wins: ${stats.wins} | Losses: ${stats.losses}`);
+      console.log(`  Win Rate: ${(stats.winRate * 100).toFixed(1)}%`);
+      console.log(`  Total P&L: ${stats.totalPnlSol.toFixed(4)} SOL ($${stats.totalPnlUsd.toFixed(2)})`);
+      console.log(`  Avg P&L: ${stats.avgPnlPercent.toFixed(2)}%`);
+      if (stats.bestTrade) {
+        console.log(`  Best: ${stats.bestTrade.symbol} +${stats.bestTrade.pnlPercent?.toFixed(2)}%`);
+      }
+      if (stats.worstTrade) {
+        console.log(`  Worst: ${stats.worstTrade.symbol} ${stats.worstTrade.pnlPercent?.toFixed(2)}%`);
+      }
+      break;
+    }
+
+    case 'close': {
+      const mint = args[1];
+      if (!mint) {
+        console.error('Usage: close <mint>');
+        process.exit(1);
+      }
+
+      const openTrade = paperTracker.getOpenTradeForMint(mint);
+      if (!openTrade) {
+        console.log('No open position for this mint');
+        break;
+      }
+
+      const marketData = await localApi.getMarketData(mint);
+      const trigger = createTrigger(configStore.getTriggerConfig());
+      await trigger.closePosition(mint, marketData.price_sol, marketData.price_usd);
+      await paperTracker.save();
+      break;
+    }
+
+    case 'reset': {
+      paperTracker.clearAll();
+      await paperTracker.save();
+      console.log('All trading data cleared');
+      break;
+    }
+
+    case 'help':
+    default:
+      console.log(HELP);
+  }
+}
+
+main().catch(console.error);

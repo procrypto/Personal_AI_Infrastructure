@@ -1,0 +1,218 @@
+     1→/**
+     2→ * Paper Trading Tracker
+     3→ *
+     4→ * Tracks simulated trades and calculates P&L.
+     5→ */
+     6→
+     7→import { readFile, writeFile, mkdir } from 'fs/promises';
+     8→import { existsSync } from 'fs';
+     9→import { join } from 'path';
+    10→import type { PaperTrade, TradingStats, TriggerEvent } from './types.js';
+    11→
+    12→const DATA_DIR = join(process.cwd(), '.autopilot');
+    13→const TRADES_FILE = join(DATA_DIR, 'trades.json');
+    14→const EVENTS_FILE = join(DATA_DIR, 'events.json');
+    15→
+    16→export class PaperTracker {
+    17→  private trades: PaperTrade[] = [];
+    18→  private events: TriggerEvent[] = [];
+    19→
+    20→  async load(): Promise<void> {
+    21→    try {
+    22→      if (existsSync(TRADES_FILE)) {
+    23→        const data = await readFile(TRADES_FILE, 'utf-8');
+    24→        this.trades = JSON.parse(data);
+    25→      }
+    26→      if (existsSync(EVENTS_FILE)) {
+    27→        const data = await readFile(EVENTS_FILE, 'utf-8');
+    28→        this.events = JSON.parse(data);
+    29→      }
+    30→    } catch (error) {
+    31→      console.warn('Failed to load trading data:', error);
+    32→    }
+    33→  }
+    34→
+    35→  async save(): Promise<void> {
+    36→    try {
+    37→      if (!existsSync(DATA_DIR)) {
+    38→        await mkdir(DATA_DIR, { recursive: true });
+    39→      }
+    40→      await writeFile(TRADES_FILE, JSON.stringify(this.trades, null, 2));
+    41→      await writeFile(EVENTS_FILE, JSON.stringify(this.events, null, 2));
+    42→    } catch (error) {
+    43→      console.error('Failed to save trading data:', error);
+    44→    }
+    45→  }
+    46→
+    47→  generateTradeId(): string {
+    48→    return `trade_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    49→  }
+    50→
+    51→  recordEvent(event: TriggerEvent): void {
+    52→    this.events.push(event);
+    53→    // Keep last 1000 events
+    54→    if (this.events.length > 1000) {
+    55→      this.events = this.events.slice(-1000);
+    56→    }
+    57→  }
+    58→
+    59→  openTrade(params: {
+    60→    mint: string;
+    61→    symbol: string;
+    62→    action: 'buy' | 'sell';
+    63→    priceSol: number;
+    64→    priceUsd: number;
+    65→    positionSizeSol: number;
+    66→    ruleSetId: string;
+    67→    signalStrength: number;
+    68→    reason: string;
+    69→  }): PaperTrade {
+    70→    const tokenAmount = params.positionSizeSol / params.priceSol;
+    71→
+    72→    const trade: PaperTrade = {
+    73→      id: this.generateTradeId(),
+    74→      timestamp: Date.now(),
+    75→      mint: params.mint,
+    76→      symbol: params.symbol,
+    77→      action: params.action,
+    78→      entryPriceSol: params.priceSol,
+    79→      entryPriceUsd: params.priceUsd,
+    80→      positionSizeSol: params.positionSizeSol,
+    81→      tokenAmount,
+    82→      ruleSetId: params.ruleSetId,
+    83→      signalStrength: params.signalStrength,
+    84→      reason: params.reason,
+    85→      status: 'open',
+    86→    };
+    87→
+    88→    this.trades.push(trade);
+    89→    return trade;
+    90→  }
+    91→
+    92→  closeTrade(tradeId: string, exitPriceSol: number, exitPriceUsd: number): PaperTrade | null {
+    93→    const trade = this.trades.find(t => t.id === tradeId);
+    94→    if (!trade || trade.status === 'closed') return null;
+    95→
+    96→    trade.exitPriceSol = exitPriceSol;
+    97→    trade.exitPriceUsd = exitPriceUsd;
+    98→    trade.exitTimestamp = Date.now();
+    99→    trade.status = 'closed';
+   100→
+   101→    // Calculate P&L based on trade direction
+   102→    if (trade.action === 'buy') {
+   103→      // Buy low, sell high
+   104→      trade.pnlSol = (exitPriceSol - trade.entryPriceSol) * trade.tokenAmount;
+   105→      trade.pnlUsd = (exitPriceUsd - trade.entryPriceUsd) * trade.tokenAmount;
+   106→      trade.pnlPercent = ((exitPriceSol - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+   107→    } else {
+   108→      // Short: sell high, buy low
+   109→      trade.pnlSol = (trade.entryPriceSol - exitPriceSol) * trade.tokenAmount;
+   110→      trade.pnlUsd = (trade.entryPriceUsd - exitPriceUsd) * trade.tokenAmount;
+   111→      trade.pnlPercent = ((trade.entryPriceSol - exitPriceSol) / trade.entryPriceSol) * 100;
+   112→    }
+   113→
+   114→    return trade;
+   115→  }
+   116→
+   117→  getOpenTrades(): PaperTrade[] {
+   118→    return this.trades.filter(t => t.status === 'open');
+   119→  }
+   120→
+   121→  getOpenTradeForMint(mint: string): PaperTrade | null {
+   122→    return this.trades.find(t => t.mint === mint && t.status === 'open') || null;
+   123→  }
+   124→
+   125→  getClosedTrades(): PaperTrade[] {
+   126→    return this.trades.filter(t => t.status === 'closed');
+   127→  }
+   128→
+   129→  getAllTrades(): PaperTrade[] {
+   130→    return [...this.trades];
+   131→  }
+   132→
+   133→  getRecentEvents(limit = 50): TriggerEvent[] {
+   134→    return this.events.slice(-limit);
+   135→  }
+   136→
+   137→  /**
+   138→   * Calculate unrealized P&L for an open trade given current price
+   139→   */
+   140→  calcUnrealizedPnl(trade: PaperTrade, currentPriceSol: number, currentPriceUsd: number): {
+   141→    pnlSol: number;
+   142→    pnlUsd: number;
+   143→    pnlPercent: number;
+   144→  } {
+   145→    if (trade.status === 'closed') {
+   146→      return { pnlSol: trade.pnlSol ?? 0, pnlUsd: trade.pnlUsd ?? 0, pnlPercent: trade.pnlPercent ?? 0 };
+   147→    }
+   148→
+   149→    let pnlSol: number;
+   150→    let pnlUsd: number;
+   151→    let pnlPercent: number;
+   152→
+   153→    if (trade.action === 'buy') {
+   154→      pnlSol = (currentPriceSol - trade.entryPriceSol) * trade.tokenAmount;
+   155→      pnlUsd = (currentPriceUsd - trade.entryPriceUsd) * trade.tokenAmount;
+   156→      pnlPercent = ((currentPriceSol - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+   157→    } else {
+   158→      pnlSol = (trade.entryPriceSol - currentPriceSol) * trade.tokenAmount;
+   159→      pnlUsd = (trade.entryPriceUsd - currentPriceUsd) * trade.tokenAmount;
+   160→      pnlPercent = ((trade.entryPriceSol - currentPriceSol) / trade.entryPriceSol) * 100;
+   161→    }
+   162→
+   163→    return { pnlSol, pnlUsd, pnlPercent };
+   164→  }
+   165→
+   166→  getStats(): TradingStats {
+   167→    const closed = this.getClosedTrades();
+   168→    const open = this.getOpenTrades();
+   169→
+   170→    const wins = closed.filter(t => (t.pnlSol ?? 0) > 0);
+   171→    const losses = closed.filter(t => (t.pnlSol ?? 0) <= 0);
+   172→
+   173→    const totalPnlSol = closed.reduce((sum, t) => sum + (t.pnlSol ?? 0), 0);
+   174→    const totalPnlUsd = closed.reduce((sum, t) => sum + (t.pnlUsd ?? 0), 0);
+   175→    const avgPnlPercent = closed.length > 0
+   176→      ? closed.reduce((sum, t) => sum + (t.pnlPercent ?? 0), 0) / closed.length
+   177→      : 0;
+   178→
+   179→    // Find best and worst trades
+   180→    let bestTrade: PaperTrade | null = null;
+   181→    let worstTrade: PaperTrade | null = null;
+   182→    for (const trade of closed) {
+   183→      if (!bestTrade || (trade.pnlPercent ?? 0) > (bestTrade.pnlPercent ?? 0)) {
+   184→        bestTrade = trade;
+   185→      }
+   186→      if (!worstTrade || (trade.pnlPercent ?? 0) < (worstTrade.pnlPercent ?? 0)) {
+   187→        worstTrade = trade;
+   188→      }
+   189→    }
+   190→
+   191→    return {
+   192→      totalTrades: this.trades.length,
+   193→      openTrades: open.length,
+   194→      closedTrades: closed.length,
+   195→      wins: wins.length,
+   196→      losses: losses.length,
+   197→      winRate: closed.length > 0 ? wins.length / closed.length : 0,
+   198→      totalPnlSol,
+   199→      totalPnlUsd,
+   200→      avgPnlPercent,
+   201→      bestTrade,
+   202→      worstTrade,
+   203→    };
+   204→  }
+   205→
+   206→  clearAll(): void {
+   207→    this.trades = [];
+   208→    this.events = [];
+   209→  }
+   210→}
+   211→
+   212→// Singleton instance
+   213→export const paperTracker = new PaperTracker();
+   214→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

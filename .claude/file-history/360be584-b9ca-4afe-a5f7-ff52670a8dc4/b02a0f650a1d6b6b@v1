@@ -1,0 +1,114 @@
+# Architecture
+
+**Analysis Date:** 2026-01-13
+
+## Pattern Overview
+
+**Overall:** Monolithic HTTP API with Pluggable Extension System
+
+**Key Characteristics:**
+- Single unified HTTP server (no microservices)
+- Stateless request handlers
+- Direct ClickHouse Cloud API integration
+- Development-only mirror of production data
+- Plugin-based extension system
+
+## Layers
+
+**Framework Layer (`src/server.ts`):**
+- Purpose: Application initialization and route orchestration
+- Contains: Elysia app instance, route registration
+- Depends on: All endpoint modules, config
+- Used by: Entry point (bun invocation)
+
+**Endpoint Layer (`src/endpoints/generic/*.ts`):**
+- Purpose: HTTP request handling and business logic
+- Contains: 15 endpoint modules with validate/build/format pattern
+- Depends on: ClickHouse client
+- Used by: Server (via registerXxxRoutes functions)
+
+**Extension Layer (`src/extensions/`):**
+- Purpose: Augment base endpoints with additional data
+- Contains: Registry, type definitions, extension catalog
+- Depends on: Base endpoint exports, ClickHouse client
+- Used by: Server (conditionally via env flag)
+
+**Data Access Layer (`src/clickhouse/client.ts`):**
+- Purpose: Encapsulate ClickHouse Cloud API interaction
+- Contains: clickhouseQuery(), SQL helpers (escapeString, buildInList, clamp)
+- Depends on: Config (credentials)
+- Used by: All endpoints and extensions
+
+**Config Layer (`src/config.ts`):**
+- Purpose: Load and validate environment variables
+- Contains: ClickHouse credentials, server port, feature flags
+- Depends on: Environment variables
+- Used by: Server startup, ClickHouse client
+
+## Data Flow
+
+**HTTP Request:**
+
+1. Request arrives at Elysia route handler
+2. Handler calls `validateXxxRequest()` - validate inputs, parse params
+3. Handler calls `buildXxxSql()` - construct parameterized SQL
+4. Handler calls `clickhouseQuery(sql)` - execute against ClickHouse Cloud
+5. Handler calls `formatXxxResponse()` - transform to API response
+6. Response returned to client
+
+**State Management:**
+- Stateless - no persistent in-memory state
+- All data comes from ClickHouse on each request
+
+## Key Abstractions
+
+**Endpoint Registration Pattern:**
+- Purpose: Modular route registration
+- Examples: `registerTradesRoutes(app)`, `registerSearchTokenRoutes(app)`
+- Pattern: Each endpoint exports a single registration function
+
+**Validation/Build/Format Pattern:**
+- Purpose: Reusable endpoint logic for extensions
+- Examples: `validateTradesRequest()`, `buildTradesSql()`, `formatTradesResponse()`
+- Pattern: Exported functions allow extensions to wrap base behavior
+
+**Extension Plugin:**
+- Purpose: Augment base endpoints without modifying them
+- Examples: `searchTokenDetailsExtension` in `src/extensions/catalog/`
+- Pattern: `ExtensionDefinition` with metadata + register function
+
+## Entry Points
+
+**CLI Entry:**
+- Location: `src/server.ts`
+- Triggers: `bun dev` or `bun run src/server.ts`
+- Responsibilities: Validate config, register routes, start HTTP server
+
+## Error Handling
+
+**Strategy:** Return discriminated union responses, log errors
+
+**Patterns:**
+- All responses use `{ ok: boolean, ... }` pattern
+- ClickHouse errors returned as `{ ok: false, error: string }`
+- Startup validation exits process on missing credentials
+
+## Cross-Cutting Concerns
+
+**Logging:**
+- `console.log()` for debugging and startup messages
+- No structured logging framework
+
+**Validation:**
+- Input validation in each endpoint's `validate*Request()` function
+- SQL injection prevention via `escapeString()` and `buildInList()`
+- Numeric bounds via `clamp()` function
+
+**Security:**
+- Credentials loaded from environment (never hardcoded)
+- Query limits enforced to prevent expensive operations
+
+---
+
+*Architecture analysis: 2026-01-13*
+*Update when major patterns change*

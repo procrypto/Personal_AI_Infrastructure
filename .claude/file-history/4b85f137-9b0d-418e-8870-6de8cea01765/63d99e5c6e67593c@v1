@@ -1,0 +1,336 @@
+/**
+ * Feed Adapters Tests
+ *
+ * Tests for pure functions that convert NATS data to backend feed format.
+ * Validates data transformation for market_data, ohlcv, trade, and cvd feeds.
+ */
+
+import { describe, expect, it, vi } from "vitest";
+import {
+  toMarketDataFeed,
+  toOhlcvFeed,
+  toTradeFeed,
+  toCvdFeed,
+} from "./feedAdapters";
+import type {
+  MarketDataMessage,
+  OHLCVMessage,
+  TradeMessage,
+} from "@/store/memoryStore/slices/websocket-messages-store/types";
+
+// Minimal mock factory functions with required fields only
+const createMinimalMarketData = (
+  overrides: Partial<MarketDataMessage> = {}
+): MarketDataMessage =>
+  ({
+    mint: "testMint123",
+    name: "Test Token",
+    symbol: "TEST",
+    price_sol: 0.001,
+    price_usd: 0.15,
+    market_cap_sol: "1000",
+    market_cap_usd: "150000",
+    ...overrides,
+  }) as MarketDataMessage;
+
+const createMinimalOHLCV = (
+  overrides: Partial<OHLCVMessage> = {}
+): OHLCVMessage =>
+  ({
+    mint: "testMint123",
+    o_sol: "0.001",
+    h_sol: "0.0015",
+    l_sol: "0.0008",
+    c_sol: "0.0012",
+    v_sol: "500",
+    timestamp_secs: 1704067200,
+    resolution: "1m",
+    ...overrides,
+  }) as OHLCVMessage;
+
+const createMinimalTrade = (
+  overrides: Partial<TradeMessage> = {}
+): TradeMessage =>
+  ({
+    mint: "testMint123",
+    type: "buy",
+    sol_amount: "1.5",
+    token_amount: "1000000",
+    timestamp: "1704067200000000000",
+    signature: "sig123",
+    ...overrides,
+  }) as TradeMessage;
+
+describe("feedAdapters", () => {
+  describe("toMarketDataFeed", () => {
+    it("wraps MarketDataMessage with correct type", () => {
+      const msg = createMinimalMarketData();
+
+      const result = toMarketDataFeed(msg);
+
+      expect(result.type).toBe("market_data_feed");
+      expect(result.data).toBe(msg);
+    });
+
+    it("preserves all market data fields", () => {
+      const msg = createMinimalMarketData({
+        mint: "customMint",
+        symbol: "CUSTOM",
+        price_sol: 0.005,
+      });
+
+      const result = toMarketDataFeed(msg);
+
+      expect(result.data.mint).toBe("customMint");
+      expect(result.data.symbol).toBe("CUSTOM");
+      expect(result.data.price_sol).toBe(0.005);
+    });
+  });
+
+  describe("toOhlcvFeed", () => {
+    it("converts OHLCV message with correct type and structure", () => {
+      const msg = createMinimalOHLCV();
+
+      const result = toOhlcvFeed("testMint123", msg);
+
+      expect(result.type).toBe("ohlcv_update");
+      expect(result.mint).toBe("testMint123");
+      expect(result.ohlcv).toHaveLength(1);
+    });
+
+    it("converts string values to numbers", () => {
+      const msg = createMinimalOHLCV({
+        o_sol: "0.001",
+        h_sol: "0.0015",
+        l_sol: "0.0008",
+        c_sol: "0.0012",
+        v_sol: "500.5",
+      });
+
+      const result = toOhlcvFeed("testMint", msg);
+      const candle = result.ohlcv[0];
+
+      expect(candle.open).toBe(0.001);
+      expect(candle.high).toBe(0.0015);
+      expect(candle.low).toBe(0.0008);
+      expect(candle.close).toBe(0.0012);
+      expect(candle.volume).toBe(500.5);
+    });
+
+    it("preserves timestamp_secs as timestamp", () => {
+      const msg = createMinimalOHLCV({ timestamp_secs: 1704067200 });
+
+      const result = toOhlcvFeed("testMint", msg);
+
+      expect(result.ohlcv[0].timestamp).toBe(1704067200);
+    });
+
+    it("uses provided mint parameter not message mint", () => {
+      const msg = createMinimalOHLCV({ mint: "messageMint" });
+
+      const result = toOhlcvFeed("parameterMint", msg);
+
+      expect(result.mint).toBe("parameterMint");
+    });
+  });
+
+  describe("toTradeFeed", () => {
+    it("converts trade message with correct type", () => {
+      const msg = createMinimalTrade();
+
+      const result = toTradeFeed(msg);
+
+      expect(result.type).toBe("trade_feed");
+      expect(result.trade.mint).toBe("testMint123");
+    });
+
+    it("maps buy type correctly", () => {
+      const msg = createMinimalTrade({ type: "buy" });
+
+      const result = toTradeFeed(msg);
+
+      expect(result.trade.side).toBe("buy");
+    });
+
+    it("maps sell type correctly", () => {
+      const msg = createMinimalTrade({ type: "sell" });
+
+      const result = toTradeFeed(msg);
+
+      expect(result.trade.side).toBe("sell");
+    });
+
+    it("maps non-buy types to sell", () => {
+      const addMsg = createMinimalTrade({ type: "add" });
+      const remMsg = createMinimalTrade({ type: "rem" });
+
+      expect(toTradeFeed(addMsg).trade.side).toBe("sell");
+      expect(toTradeFeed(remMsg).trade.side).toBe("sell");
+    });
+
+    it("calculates price from sol_amount / token_amount", () => {
+      const msg = createMinimalTrade({
+        sol_amount: "2.0",
+        token_amount: "1000",
+      });
+
+      const result = toTradeFeed(msg);
+
+      expect(result.trade.price).toBe(0.002);
+    });
+
+    it("handles missing sol_amount gracefully", () => {
+      const msg = createMinimalTrade({
+        sol_amount: undefined,
+        token_amount: "1000",
+      });
+
+      const result = toTradeFeed(msg);
+
+      expect(result.trade.price).toBe(0);
+    });
+
+    it("handles missing token_amount gracefully (defaults to 1)", () => {
+      const msg = createMinimalTrade({
+        sol_amount: "1.5",
+        token_amount: undefined as unknown as string,
+      });
+
+      const result = toTradeFeed(msg);
+
+      expect(result.trade.price).toBe(1.5);
+    });
+
+    it("converts amount to number", () => {
+      const msg = createMinimalTrade({ token_amount: "1500000" });
+
+      const result = toTradeFeed(msg);
+
+      expect(result.trade.amount).toBe(1500000);
+    });
+
+    it("converts timestamp to number", () => {
+      const msg = createMinimalTrade({ timestamp: "1704067200000000000" });
+
+      const result = toTradeFeed(msg);
+
+      expect(result.trade.timestamp).toBe(1704067200000000000);
+    });
+  });
+
+  describe("toCvdFeed", () => {
+    it("returns null when trading_stats_1h is missing", () => {
+      const msg = createMinimalMarketData({ trading_stats_1h: undefined });
+
+      const result = toCvdFeed("testMint", msg);
+
+      expect(result).toBeNull();
+    });
+
+    it("calculates CVD from trading stats", () => {
+      const msg = createMinimalMarketData({
+        trading_stats_1h: {
+          buy_volume_sol: "100",
+          sell_volume_sol: "60",
+          earliest_price_sol: "0.001",
+          earliest_price_usd: "0.15",
+          buys: 50,
+          sells: 30,
+          buy_volume_usd: "15000",
+          sell_volume_usd: "9000",
+          buyers: 40,
+          sellers: 25,
+          traders: 55,
+        },
+      });
+
+      const result = toCvdFeed("testMint", msg);
+
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe("cvd_update");
+      expect(result!.data.mint).toBe("testMint");
+      expect(result!.data.buyVolume).toBe(100);
+      expect(result!.data.sellVolume).toBe(60);
+      expect(result!.data.netDelta).toBe(40);
+      expect(result!.data.cvd).toBe(40);
+      expect(result!.data.cvdChange).toBe(40);
+      expect(result!.data.periodMs).toBe(3600000);
+    });
+
+    it("handles zero volumes", () => {
+      const msg = createMinimalMarketData({
+        trading_stats_1h: {
+          buy_volume_sol: "0",
+          sell_volume_sol: "0",
+          earliest_price_sol: "0.001",
+          earliest_price_usd: "0.15",
+          buys: 0,
+          sells: 0,
+          buy_volume_usd: "0",
+          sell_volume_usd: "0",
+          buyers: 0,
+          sellers: 0,
+          traders: 0,
+        },
+      });
+
+      const result = toCvdFeed("testMint", msg);
+
+      expect(result).not.toBeNull();
+      expect(result!.data.buyVolume).toBe(0);
+      expect(result!.data.sellVolume).toBe(0);
+      expect(result!.data.netDelta).toBe(0);
+    });
+
+    it("handles negative net delta (more sells than buys)", () => {
+      const msg = createMinimalMarketData({
+        trading_stats_1h: {
+          buy_volume_sol: "30",
+          sell_volume_sol: "80",
+          earliest_price_sol: "0.001",
+          earliest_price_usd: "0.15",
+          buys: 10,
+          sells: 40,
+          buy_volume_usd: "4500",
+          sell_volume_usd: "12000",
+          buyers: 8,
+          sellers: 35,
+          traders: 40,
+        },
+      });
+
+      const result = toCvdFeed("testMint", msg);
+
+      expect(result).not.toBeNull();
+      expect(result!.data.netDelta).toBe(-50);
+      expect(result!.data.cvd).toBe(-50);
+    });
+
+    it("sets timestamp to current time", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2024-01-01T12:00:00Z"));
+
+      const msg = createMinimalMarketData({
+        trading_stats_1h: {
+          buy_volume_sol: "100",
+          sell_volume_sol: "60",
+          earliest_price_sol: "0.001",
+          earliest_price_usd: "0.15",
+          buys: 50,
+          sells: 30,
+          buy_volume_usd: "15000",
+          sell_volume_usd: "9000",
+          buyers: 40,
+          sellers: 25,
+          traders: 55,
+        },
+      });
+
+      const result = toCvdFeed("testMint", msg);
+
+      expect(result!.data.timestamp).toBe(Date.now());
+
+      vi.useRealTimers();
+    });
+  });
+});

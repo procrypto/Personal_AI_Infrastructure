@@ -1,0 +1,137 @@
+/**
+ * Volume Spike Rule
+ *
+ * Triggers when volume in a timeframe exceeds a multiplier of the average.
+ * Uses buy/sell volume to determine direction.
+ */
+
+import type { Rule, VolumeSpkeRuleConfig, Signal, AnalysisContext } from './types.js';
+
+export class VolumeSpikeRule implements Rule<VolumeSpkeRuleConfig> {
+  constructor(public config: VolumeSpkeRuleConfig) {}
+
+  analyze(context: AnalysisContext): Signal | null {
+    if (!this.config.enabled) return null;
+
+    const { token } = context;
+    const { timeframe, multiplier } = this.config;
+
+    // Get volume for current timeframe
+    const buyVolumeKey = `buy_volume_sol_${timeframe}` as keyof typeof token;
+    const sellVolumeKey = `sell_volume_sol_${timeframe}` as keyof typeof token;
+
+    const buyVolume = (token[buyVolumeKey] as number) ?? 0;
+    const sellVolume = (token[sellVolumeKey] as number) ?? 0;
+    const currentVolume = buyVolume + sellVolume;
+
+    if (currentVolume === 0) {
+      return null; // No volume data
+    }
+
+    // Compare with longer timeframe to get baseline
+    // For 5m, compare with 1h. For 1h, compare with 6h. etc.
+    const baselineTimeframe = this.getBaselineTimeframe(timeframe);
+    const baselineBuyKey = `buy_volume_sol_${baselineTimeframe}` as keyof typeof token;
+    const baselineSellKey = `sell_volume_sol_${baselineTimeframe}` as keyof typeof token;
+    const baselineBuy = (token[baselineBuyKey] as number) ?? 0;
+    const baselineSell = (token[baselineSellKey] as number) ?? 0;
+    const baselineVolume = baselineBuy + baselineSell;
+
+    if (baselineVolume === 0) {
+      return null; // Can't calculate baseline
+    }
+
+    // Calculate normalized volume (per-timeframe average)
+    const timeframeMinutes = this.getTimeframeMinutes(timeframe);
+    const baselineMinutes = this.getTimeframeMinutes(baselineTimeframe);
+    const baselineAvgPerTimeframe = (baselineVolume / baselineMinutes) * timeframeMinutes;
+
+    // Check if current volume exceeds threshold
+    const volumeRatio = currentVolume / baselineAvgPerTimeframe;
+
+    if (volumeRatio < multiplier) {
+      return null; // Below threshold
+    }
+
+    // Determine if it's buy or sell dominated
+    const buyDominant = buyVolume > sellVolume;
+    const dominanceRatio = buyDominant
+      ? buyVolume / (sellVolume || 1)
+      : sellVolume / (buyVolume || 1);
+
+    // Signal strength based on how much it exceeds threshold
+    const strength = Math.min(volumeRatio / (multiplier * 2), 1);
+
+    // Determine signal type based on buy/sell dominance
+    let signalType: 'buy' | 'sell' | 'alert' = 'alert';
+    if (this.config.type === 'buy' && buyDominant) signalType = 'buy';
+    if (this.config.type === 'sell' && !buyDominant) signalType = 'sell';
+    if (this.config.type === 'both') {
+      signalType = buyDominant ? 'buy' : 'sell';
+    }
+
+    return {
+      ruleId: this.config.id,
+      ruleName: this.config.name,
+      mint: token.mint,
+      symbol: token.symbol,
+      type: signalType,
+      strength,
+      reason: `Volume spike ${volumeRatio.toFixed(1)}x average in ${timeframe} (${buyDominant ? 'buy' : 'sell'} dominated ${dominanceRatio.toFixed(1)}:1)`,
+      data: {
+        currentVolume,
+        baselineAvgPerTimeframe,
+        volumeRatio,
+        buyVolume,
+        sellVolume,
+        buyDominant,
+        dominanceRatio,
+        timeframe,
+        multiplier,
+      },
+      timestamp: Date.now(),
+    };
+  }
+
+  private getBaselineTimeframe(timeframe: string): string {
+    switch (timeframe) {
+      case '5m': return '1h';
+      case '1h': return '6h';
+      case '6h': return '24h';
+      case '24h': return '24h'; // Use same (can't go higher)
+      default: return '24h';
+    }
+  }
+
+  private getTimeframeMinutes(timeframe: string): number {
+    switch (timeframe) {
+      case '5m': return 5;
+      case '1h': return 60;
+      case '6h': return 360;
+      case '24h': return 1440;
+      default: return 60;
+    }
+  }
+}
+
+// Factory function for easy creation
+export function createVolumeSpikeRule(
+  id: string,
+  name: string,
+  options: {
+    timeframe: VolumeSpkeRuleConfig['timeframe'];
+    multiplier: number;
+    type?: 'buy' | 'sell' | 'both';
+  }
+): VolumeSpikeRule {
+  return new VolumeSpikeRule({
+    id,
+    name,
+    description: `Triggers when volume is ${options.multiplier}x average in ${options.timeframe}`,
+    enabled: true,
+    type: options.type ?? 'both',
+    ruleType: 'volume_spike',
+    timeframe: options.timeframe,
+    multiplier: options.multiplier,
+  });
+}

@@ -1,0 +1,115 @@
+/**
+ * Signal Processor Integration
+ *
+ * Wires SignalProcessor to WebSocket data feeds.
+ * Provides the bridge between incoming market data and signal generation.
+ */
+
+import type { TokenMarketData, OHLCV } from '../api/types.js';
+import type { Signal } from '../rules/types.js';
+import type { DataFeedMessage } from '../websocket-server.js';
+import { RuleEngine } from '../rules/engine.js';
+import { SignalProcessor } from './processor.js';
+
+export interface SignalPipeline {
+  /** The underlying SignalProcessor instance */
+  processor: SignalProcessor;
+  /** Handle incoming data feed messages - routes to appropriate processor method */
+  handleDataFeed: (message: DataFeedMessage) => Signal[];
+  /** Register callback for real-time signal emission */
+  onSignal: (callback: (signal: Signal) => void) => void;
+  /** Aggregate signals using engine's aggregation logic */
+  aggregateSignals: (signals: Signal[], mode: 'all' | 'any') => {
+    action: 'buy' | 'sell' | 'hold';
+    confidence: number;
+    signals: Signal[];
+  };
+}
+
+export interface SignalPipelineOptions {
+  /** Optional function to look up market data by mint */
+  marketDataProvider?: () => Map<string, TokenMarketData>;
+}
+
+/**
+ * Create a signal pipeline that wires SignalProcessor to data feeds.
+ *
+ * Usage:
+ * ```typescript
+ * const pipeline = createSignalPipeline(engine, {
+ *   marketDataProvider: () => wsServer.getAllMarketData()
+ * });
+ * pipeline.onSignal((signal) => {
+ *   wsServer.broadcastSignal({ ... });
+ * });
+ * wsServer.onDataFeed(pipeline.handleDataFeed);
+ * ```
+ */
+export function createSignalPipeline(
+  engine: RuleEngine,
+  options?: SignalPipelineOptions
+): SignalPipeline {
+  // Create SignalProcessor with market data provider
+  const processor = new SignalProcessor(engine, {
+    marketDataProvider: options?.marketDataProvider,
+  });
+
+  // Signal emission callback
+  let signalCallback: ((signal: Signal) => void) | null = null;
+
+  /**
+   * Route data feed messages to appropriate processor method
+   */
+  function handleDataFeed(message: DataFeedMessage): Signal[] {
+    let signals: Signal[] = [];
+
+    switch (message.type) {
+      case 'market_data_feed':
+        // Fast path: process market data with simple rules
+        signals = processor.processMarketData(message.data);
+        break;
+
+      case 'ohlcv_update':
+        // Complex path: process OHLCV with OHLCV-requiring rules
+        signals = processor.processOHLCV(message.mint, message.ohlcv);
+        break;
+
+      case 'trade_feed':
+        // No trade-only rules yet - ignore
+        break;
+    }
+
+    // Emit signals if callback registered
+    if (signalCallback && signals.length > 0) {
+      for (const signal of signals) {
+        signalCallback(signal);
+      }
+    }
+
+    return signals;
+  }
+
+  /**
+   * Register callback for real-time signal emission
+   */
+  function onSignal(callback: (signal: Signal) => void): void {
+    signalCallback = callback;
+  }
+
+  /**
+   * Aggregate signals using engine's aggregation logic
+   */
+  function aggregateSignals(
+    signals: Signal[],
+    mode: 'all' | 'any'
+  ): { action: 'buy' | 'sell' | 'hold'; confidence: number; signals: Signal[] } {
+    return engine.aggregateSignals(signals, mode);
+  }
+
+  return {
+    processor,
+    handleDataFeed,
+    onSignal,
+    aggregateSignals,
+  };
+}

@@ -1,0 +1,480 @@
+/**
+ * Market Filter - SOL Dump Protection System
+ *
+ * ============================================================================
+ * STRATEGY OVERVIEW
+ * ============================================================================
+ *
+ * The Market Filter monitors SOL price to protect against broad market dumps.
+ * When SOL is falling significantly, it's often not the right time to:
+ *   - Open new positions (high risk of buying into a falling market)
+ *   - Hold existing positions (risk of correlated losses)
+ *
+ * This is a simple but effective risk management layer that operates
+ * independently of individual token signals.
+ *
+ * ============================================================================
+ * WHY SOL?
+ * ============================================================================
+ *
+ * 1. Correlation: Most Solana tokens are correlated with SOL price
+ * 2. Liquidity: SOL is the base pair - when SOL dumps, everything dumps
+ * 3. Available: SOL price is available through our existing API
+ * 4. Simple: No need to track BTC, ETH, or complex correlations
+ *
+ * ============================================================================
+ * STATE MACHINE
+ * ============================================================================
+ *
+ *                    ┌─────────────────────────────────────┐
+ *                    │                                     │
+ *                    ▼                                     │
+ *   NORMAL ──(-3%)──► CAUTION ──(-5%)──► DUMP             │
+ *      ▲                                   │               │
+ *      │                                   │               │
+ *      └─────────────(≥0%)─────────────────┘               │
+ *                                                          │
+ *                                                          │
+ * NORMAL:  Trading normally, all signals processed
+ * CAUTION: Skip new entries, keep existing positions
+ * DUMP:    Exit all positions, skip all entries
+ *
+ * Recovery requires 15m change to be >= 0% (not negative)
+ *
+ * ============================================================================
+ * THRESHOLD RATIONALE
+ * ============================================================================
+ *
+ * Based on typical SOL volatility in 15m windows:
+ *
+ * | 15m Change | Frequency   | Interpretation              |
+ * |------------|-------------|-----------------------------|
+ * | ±1-2%      | Common      | Normal volatility, noise    |
+ * | -3%        | Occasional  | Notable selling pressure    |
+ * | -5%        | Uncommon    | Significant dump, risk-off  |
+ * | -7%+       | Rare        | Major event (news, hack)    |
+ *
+ * -3% for caution: "Something's off, let's not add risk"
+ * -5% for exit:    "This is a real dump, protect capital"
+ * 0% for recovery: "Wait until bleeding stops completely"
+ *
+ * ============================================================================
+ * INTEGRATION
+ * ============================================================================
+ *
+ * The market filter is checked at the start of each scan cycle:
+ *   1. Fetch SOL price data
+ *   2. Calculate 15m price change
+ *   3. Update state (NORMAL, CAUTION, DUMP)
+ *   4. If DUMP: exit all positions
+ *   5. If CAUTION or DUMP: skip new entry signals
+ *
+ * The filter does NOT affect:
+ *   - Magic exits (TP/SL) - structure-based exits still work
+ *   - Existing position monitoring - P&L still tracked
+ *   - Signal generation - signals still calculated (just not acted on)
+ */
+
+import type { TokenMarketData } from '../api/types.js';
+import type { ApiClient } from '../api/client.js';
+import type { PaperTrade } from './types.js';
+import { paperTracker } from './paper-tracker.js';
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/**
+ * Wrapped SOL mint address.
+ * This is the token we monitor to track SOL price.
+ */
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+/**
+ * Market filter state.
+ *
+ * NORMAL:  Business as usual - process all signals
+ * CAUTION: Don't open new positions, but keep existing ones
+ * DUMP:    Exit everything, full risk-off mode
+ */
+export type MarketFilterState = 'NORMAL' | 'CAUTION' | 'DUMP';
+
+/**
+ * Configuration for the market filter.
+ */
+export interface MarketFilterConfig {
+  /** Enable/disable the market filter */
+  enabled: boolean;
+
+  /** Timeframe for price change calculation (in minutes) */
+  timeframeMinutes: number;
+
+  /**
+   * Skip new entries when 15m change is below this threshold.
+   * Default: -3 (skip entries when SOL is down 3%+ in 15m)
+   */
+  skipEntriesThreshold: number;
+
+  /**
+   * Exit all positions when 15m change is below this threshold.
+   * Default: -5 (exit everything when SOL is down 5%+ in 15m)
+   */
+  exitAllThreshold: number;
+
+  /**
+   * Resume normal trading when 15m change is at or above this threshold.
+   * Default: 0 (resume when SOL is flat or positive)
+   */
+  recoveryThreshold: number;
+
+  /**
+   * Delay before executing exit-all (ms).
+   * Brief delay to confirm dump isn't a brief wick.
+   * Default: 5000 (5 seconds)
+   */
+  exitDelayMs: number;
+}
+
+/**
+ * Result of a market filter check.
+ */
+export interface MarketFilterResult {
+  /** Current filter state */
+  state: MarketFilterState;
+
+  /** SOL price change over the timeframe (percentage) */
+  priceChangePercent: number;
+
+  /** Whether new entries should be blocked */
+  blockEntries: boolean;
+
+  /** Whether all positions should be exited */
+  exitAll: boolean;
+
+  /** Human-readable status message */
+  message: string;
+}
+
+/**
+ * Price history entry for calculating changes.
+ */
+interface PricePoint {
+  timestamp: number;
+  price: number;
+}
+
+// ============================================================================
+// DEFAULT CONFIGURATION
+// ============================================================================
+
+export const DEFAULT_MARKET_FILTER_CONFIG: MarketFilterConfig = {
+  enabled: true,
+  timeframeMinutes: 15,
+  skipEntriesThreshold: -3,  // -3% = skip new entries
+  exitAllThreshold: -5,      // -5% = exit all positions
+  recoveryThreshold: 0,      // 0% = resume when not bleeding
+  exitDelayMs: 5000,         // 5 second delay to confirm
+};
+
+// ============================================================================
+// MARKET FILTER
+// ============================================================================
+
+/**
+ * MarketFilter - SOL dump protection system.
+ *
+ * Monitors SOL price and manages market-wide risk by:
+ *   - Blocking new entries during selloffs
+ *   - Exiting all positions during dumps
+ *   - Resuming normal operations when market stabilizes
+ */
+export class MarketFilter {
+  private config: MarketFilterConfig;
+  private state: MarketFilterState = 'NORMAL';
+  private priceHistory: PricePoint[] = [];
+  private lastDumpDetected: number = 0;
+  private api: ApiClient | null = null;
+
+  constructor(config: Partial<MarketFilterConfig> = {}) {
+    this.config = { ...DEFAULT_MARKET_FILTER_CONFIG, ...config };
+  }
+
+  /**
+   * Set the API client for fetching SOL price.
+   * Must be called before using the filter.
+   */
+  setApi(api: ApiClient): void {
+    this.api = api;
+  }
+
+  /**
+   * Update configuration at runtime.
+   */
+  updateConfig(config: Partial<MarketFilterConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
+   * Get current filter state.
+   */
+  getState(): MarketFilterState {
+    return this.state;
+  }
+
+  /**
+   * Record a SOL price point.
+   * Called during each scan cycle to build price history.
+   */
+  recordPrice(price: number): void {
+    const now = Date.now();
+    this.priceHistory.push({ timestamp: now, price });
+
+    // Keep only prices within 2x timeframe (for safety margin)
+    const cutoff = now - (this.config.timeframeMinutes * 2 * 60 * 1000);
+    this.priceHistory = this.priceHistory.filter(p => p.timestamp >= cutoff);
+  }
+
+  /**
+   * Calculate price change over the configured timeframe.
+   * Returns null if not enough history.
+   */
+  calculatePriceChange(currentPrice: number): number | null {
+    const now = Date.now();
+    const targetTime = now - (this.config.timeframeMinutes * 60 * 1000);
+
+    // Find the price closest to the target time
+    let closestPoint: PricePoint | null = null;
+    let closestDiff = Infinity;
+
+    for (const point of this.priceHistory) {
+      const diff = Math.abs(point.timestamp - targetTime);
+      if (diff < closestDiff) {
+        closestDiff = diff;
+        closestPoint = point;
+      }
+    }
+
+    // Require a point within 2 minutes of target time
+    if (!closestPoint || closestDiff > 2 * 60 * 1000) {
+      return null;
+    }
+
+    // Calculate percentage change
+    const change = ((currentPrice - closestPoint.price) / closestPoint.price) * 100;
+    return change;
+  }
+
+  /**
+   * Check market conditions and update filter state.
+   *
+   * This is the main entry point - call this at the start of each scan cycle.
+   *
+   * @param solMarketData - Market data for SOL (or provide solPrice directly)
+   * @param solPrice - Direct SOL price (if market data not available)
+   * @returns MarketFilterResult with current state and actions
+   */
+  check(solMarketData?: TokenMarketData, solPrice?: number): MarketFilterResult {
+    if (!this.config.enabled) {
+      return {
+        state: 'NORMAL',
+        priceChangePercent: 0,
+        blockEntries: false,
+        exitAll: false,
+        message: 'Market filter disabled',
+      };
+    }
+
+    // Get current SOL price
+    const currentPrice = solPrice ?? solMarketData?.price_usd;
+    if (!currentPrice) {
+      return {
+        state: this.state,
+        priceChangePercent: 0,
+        blockEntries: this.state !== 'NORMAL',
+        exitAll: false,
+        message: 'No SOL price available',
+      };
+    }
+
+    // Record price for history
+    this.recordPrice(currentPrice);
+
+    // Calculate 15m change
+    const priceChange = this.calculatePriceChange(currentPrice);
+
+    if (priceChange === null) {
+      // Not enough history yet - stay in current state
+      return {
+        state: this.state,
+        priceChangePercent: 0,
+        blockEntries: this.state !== 'NORMAL',
+        exitAll: false,
+        message: `Building price history (${this.priceHistory.length} points)`,
+      };
+    }
+
+    // ========================================================================
+    // STATE TRANSITIONS
+    // ========================================================================
+    const previousState = this.state;
+
+    // Check for DUMP condition (-5% or worse)
+    if (priceChange <= this.config.exitAllThreshold) {
+      this.state = 'DUMP';
+      if (previousState !== 'DUMP') {
+        this.lastDumpDetected = Date.now();
+      }
+    }
+    // Check for CAUTION condition (-3% to -5%)
+    else if (priceChange <= this.config.skipEntriesThreshold) {
+      this.state = 'CAUTION';
+    }
+    // Check for RECOVERY condition (back to 0% or better)
+    else if (priceChange >= this.config.recoveryThreshold) {
+      this.state = 'NORMAL';
+    }
+    // Between thresholds - maintain current state (hysteresis)
+
+    // ========================================================================
+    // DETERMINE ACTIONS
+    // ========================================================================
+    const blockEntries = this.state !== 'NORMAL';
+
+    // Only exit all if in DUMP state AND delay has passed
+    const dumpConfirmed = this.state === 'DUMP' &&
+      (Date.now() - this.lastDumpDetected) >= this.config.exitDelayMs;
+
+    // Build status message
+    let message: string;
+    const changeStr = priceChange >= 0 ? `+${priceChange.toFixed(1)}%` : `${priceChange.toFixed(1)}%`;
+
+    switch (this.state) {
+      case 'DUMP':
+        message = `⚠️ DUMP: SOL ${changeStr} (15m) - Exiting all positions`;
+        break;
+      case 'CAUTION':
+        message = `⚠️ CAUTION: SOL ${changeStr} (15m) - Skipping entries`;
+        break;
+      default:
+        message = `✓ NORMAL: SOL ${changeStr} (15m)`;
+    }
+
+    return {
+      state: this.state,
+      priceChangePercent: priceChange,
+      blockEntries,
+      exitAll: dumpConfirmed,
+      message,
+    };
+  }
+
+  /**
+   * Fetch SOL price from API and check market conditions.
+   * Convenience method that handles API call.
+   */
+  async checkWithApi(): Promise<MarketFilterResult> {
+    if (!this.api) {
+      return {
+        state: this.state,
+        priceChangePercent: 0,
+        blockEntries: this.state !== 'NORMAL',
+        exitAll: false,
+        message: 'API not configured',
+      };
+    }
+
+    try {
+      const solData = await this.api.getMarketData(SOL_MINT);
+      return this.check(solData);
+    } catch {
+      return {
+        state: this.state,
+        priceChangePercent: 0,
+        blockEntries: this.state !== 'NORMAL',
+        exitAll: false,
+        message: 'Failed to fetch SOL price',
+      };
+    }
+  }
+
+  /**
+   * Execute exit-all if dump conditions are met.
+   *
+   * @param marketDataMap - Market data for all tokens (for exit pricing)
+   * @param quiet - Suppress console output
+   * @returns Array of closed trades
+   */
+  async executeExitAll(
+    marketDataMap: Map<string, TokenMarketData>,
+    quiet: boolean = false
+  ): Promise<PaperTrade[]> {
+    const closedTrades: PaperTrade[] = [];
+    const openTrades = paperTracker.getOpenTrades();
+
+    for (const trade of openTrades) {
+      const marketData = marketDataMap.get(trade.mint);
+      if (!marketData) continue;
+
+      const closed = paperTracker.closeTrade(
+        trade.id,
+        marketData.price_sol,
+        marketData.price_usd
+      );
+
+      if (closed) {
+        closedTrades.push(closed);
+
+        if (!quiet) {
+          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+          console.log(
+            `\n[MARKET DUMP EXIT] ${closed.symbol} | ${pnlSign}${closed.pnlPercent?.toFixed(2)}%`
+          );
+        }
+      }
+    }
+
+    if (closedTrades.length > 0) {
+      await paperTracker.save();
+    }
+
+    return closedTrades;
+  }
+
+  /**
+   * Get current configuration.
+   */
+  getConfig(): MarketFilterConfig {
+    return { ...this.config };
+  }
+
+  /**
+   * Get price history length (for debugging).
+   */
+  getHistoryLength(): number {
+    return this.priceHistory.length;
+  }
+
+  /**
+   * Reset filter state and history.
+   * Useful for testing or manual recovery.
+   */
+  reset(): void {
+    this.state = 'NORMAL';
+    this.priceHistory = [];
+    this.lastDumpDetected = 0;
+  }
+}
+
+// ============================================================================
+// SINGLETON INSTANCE
+// ============================================================================
+
+/**
+ * Default market filter instance.
+ * Used by the CLI run loop for market-wide risk management.
+ */
+export const marketFilter = new MarketFilter();

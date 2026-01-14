@@ -1,0 +1,150 @@
+# Context for web-terminal-frontend
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+React 19 frontend for the BONKbot Web Terminal trading platform. Provides the user-facing trading interface including swaps, limit orders, DCA strategies, real-time market data display, multi-wallet portfolio management, token discovery/analysis, and alert systems. Consumes both bonkbot (user operations) and web-terminal (market data) backends.
+
+**Critical constraint**: Performance and real-time responsiveness are essential - users trade with real money based on this UI.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Framework | React 19 + TypeScript | UI rendering |
+| Build | Vite | Fast builds |
+| Routing | TanStack Router | File-based routing |
+| State | Zustand (24 slices) + React Query | Client/server state |
+| Styling | Tailwind + Radix UI | Design system |
+| Real-time | NATS WebSocket | Live market data |
+
+### Monorepo Structure
+
+```
+apps/web-terminal/    # Main application
+packages/ui/          # Shared components
+packages/pvp/         # PvP features
+packages/xray-bubbles # Token visualization
+```
+
+### State Management
+
+| Layer | Tool | Purpose |
+|-------|------|---------|
+| UI State | Zustand (24 slices) | Local, optimistic updates |
+| Server State | React Query | API caching, mutations |
+| Memory Store | memoryStore/ | Feature-specific slices |
+| Persistent | localStorage | User preferences |
+
+## Capabilities
+
+### Pages (23)
+
+Dashboard, Trading, Portfolio, Discovery, XRay, Warzone, Sentinel, Wallet, Settings, Security, Rewards, AutoStrat, and more.
+
+### Key Features
+
+| Feature | User Value |
+|---------|------------|
+| Trading Page | Core swap/limit order experience |
+| Portfolio | Track holdings, PnL across wallets |
+| Discovery | Find trending tokens |
+| XRay | Deep token analysis |
+| AutoStrat | Set-and-forget DCA |
+| Wallet Tracking | Follow smart money |
+| Sentinel | Custom price/volume alerts |
+
+### APIs Consumed
+
+| API | Base | Purpose |
+|-----|------|---------|
+| bonkbot | `/v1` | Auth, swaps, orders, wallets |
+| web-terminal | `/data` | Market data, discovery, search |
+
+### WebSocket Topics
+
+| Topic | Data |
+|-------|------|
+| `market_data.{mint}` | Real-time prices |
+| `trades_2.{mint}.*` | Live trades |
+| `pnl_v2.{user}.{wallet}` | Portfolio updates |
+| `sol_price` | SOL/USD rate |
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- File-based routing (TanStack Router)
+- Orval for API client generation from OpenAPI
+- Lingui for internationalization
+- Test IDs on all interactive elements
+- Git worktrees: main-ui (prod), develop-ui (dev), feat-* (features)
+
+### Common Tasks
+
+#### Development
+
+```bash
+bun install
+bun run dev
+```
+
+#### API Client Generation
+
+```bash
+bun run orval    # Regenerate from OpenAPI spec
+```
+
+#### Finding Code
+
+| Task | Path |
+|------|------|
+| Add page | `src/pages/` + `src/routes/` |
+| Add API call | `src/api/` |
+| Add WebSocket topic | `src/websocket/` |
+| Add store slice | `src/store/memoryStore/` |
+| Shared components | `packages/ui/` |
+
+### Things to Avoid
+
+- Direct DOM manipulation (use React state)
+- Blocking renders with synchronous operations
+- Skipping Orval regeneration after API changes
+- Creating new Zustand stores instead of slices
+- Ignoring WebSocket batching patterns
+
+## Related Documentation
+
+- [docs/](docs/) - API and WebSocket reference
+- Internal: Check docs/ folder for detailed specifications
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| bonkbot | User auth, trading operations |
+| web-terminal | Market data, search, discovery |
+| DexScreener | Fallback token data |
+| BubbleMap | Holder visualization |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| Users | Trading interface |
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] Component library conventions
+- [ ] Performance optimization patterns
+- [ ] Testing requirements
+- [ ] Design system guidelines
+- [ ] Deployment and preview process
+-->

@@ -1,0 +1,118 @@
+---
+phase: 12-multi-region-deployment
+plan: 01
+subsystem: infra
+tags: [gcp, cloud-run, multi-region, workflows, wif]
+
+requires:
+  - phase: 11-clickhouse-client-migration
+    provides: New credential pattern for ClickHouse
+provides:
+  - Multi-region production deployment (asia, eu, usa)
+  - EU-based artifact registry and beta deployment
+  - Pre-configured WIF credentials (no TODOs)
+  - Region-specific secret naming convention
+affects: [deployment, ops]
+
+tech-stack:
+  added: []
+  patterns: [build-once-deploy-many, matrix-deployment, region-specific-secrets]
+
+key-files:
+  modified:
+    - .github/workflows/deploy.yml
+    - .github/workflows/deploy-prod.yml
+
+key-decisions:
+  - "EU regions for beta (europe-west3) and artifact registry (europe-west4)"
+  - "Multi-region prod: asia-southeast1, europe-west3, us-east4"
+  - "Build once in europe-west4, deploy to all regions"
+  - "Region-specific secrets: clickhouse-{env}-{region}-ro-{uri|user|password}"
+  - "Service names: trenchbench-api-{asia|eu|usa} for prod"
+
+patterns-established:
+  - "Matrix deployment for multi-region"
+  - "Separate build and deploy jobs"
+  - "Region suffix naming (asia, eu, usa)"
+
+issues-created: []
+
+duration: N/A (external PR)
+completed: 2026-01-14
+
+debugging:
+  sessions: 0
+  time-spent: 0min
+  patterns: []
+---
+
+# Phase 12 Plan 1: Multi-Region Deployment Summary
+
+**Reconfigured workflows for EU-based beta and multi-region production with pre-filled WIF credentials**
+
+## Performance
+
+- **Duration:** N/A (work done via external PR #16)
+- **Completed:** 2026-01-14
+- **Author:** passingBySol
+
+## Accomplishments
+
+- Moved beta deployment to europe-west3
+- Moved artifact registry to europe-west4
+- Added multi-region production deployment (3 regions in parallel)
+- Pre-configured WIF credentials (removed all TODO placeholders)
+- Established region-specific secret naming convention
+
+## Architecture
+
+| Environment | Region(s) | Service Name(s) |
+|-------------|-----------|-----------------|
+| Beta | europe-west3 | trenchbench-api |
+| Production | asia-southeast1, europe-west3, us-east4 | trenchbench-api-{asia,eu,usa} |
+
+## Secret Naming Convention
+
+```
+clickhouse-{env}-{region}-ro-{uri|user|password}
+twitter-api-key
+```
+
+**Beta (4 secrets):**
+- clickhouse-beta-eu-ro-uri/user/password
+- twitter-api-key
+
+**Prod (10 secrets):**
+- clickhouse-prod-asia-ro-uri/user/password
+- clickhouse-prod-eu-ro-uri/user/password
+- clickhouse-prod-usa-ro-uri/user/password
+- twitter-api-key
+
+## Workflow Changes
+
+### Beta (`deploy.yml`)
+- Region: us-central1 → europe-west3
+- WIF Provider: Pre-configured (projects/1034486134720/...)
+- Service Account: bonkbot-github-actions@bonkbotbeta.iam.gserviceaccount.com
+
+### Production (`deploy-prod.yml`)
+- Build job: Single build in europe-west4
+- Deploy job: Matrix deployment to 3 regions
+- WIF Provider: Pre-configured (projects/145759184861/...)
+- Service Account: web-terminal@data-backend-prod.iam.gserviceaccount.com
+- Added workflow_dispatch trigger
+
+## Decisions Made
+
+- **EU-based infrastructure:** Artifact registry in europe-west4, beta in europe-west3
+- **Build once, deploy many:** Single Docker build, deployed to all regions
+- **Region suffixes:** asia, eu, usa (short, clear identifiers)
+- **Allow unauthenticated:** Public API access (auth handled elsewhere)
+
+## Source
+
+PR #16: feat: migrate to standard ClickHouse client with EU for beta and MULTIREGION for prod deployments
+
+---
+*Phase: 12-multi-region-deployment*
+*Completed: 2026-01-14*

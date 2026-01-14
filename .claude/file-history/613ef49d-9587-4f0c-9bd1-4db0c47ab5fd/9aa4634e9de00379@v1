@@ -1,0 +1,124 @@
+/**
+ * Test Trading Loop
+ *
+ * End-to-end test: config -> analysis -> trigger -> P&L
+ */
+
+import { configStore } from './config/index.js';
+import { RuleEngine, createPriceChangeRule, createVolumeSpikeRule } from './rules/index.js';
+import { localApi } from './api/index.js';
+import { paperTracker, createTrigger } from './trading/index.js';
+
+async function testTradingLoop() {
+  console.log('╔══════════════════════════════════════════════════════════════╗');
+  console.log('║  TRADING LOOP TEST                                           ║');
+  console.log('╚══════════════════════════════════════════════════════════════╝\n');
+
+  const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'; // BONK
+
+  // Load config and trading data
+  await configStore.load();
+  await paperTracker.load();
+
+  // Clear previous test data
+  paperTracker.clearAll();
+
+  // Create engine with sensitive rules
+  const engine = new RuleEngine({ api: localApi });
+  engine.addRule(createPriceChangeRule('test-price', 'Price Move Test', {
+    timeframe: '5m',
+    threshold: 0.1, // Very low - should trigger
+    direction: 'both',
+    type: 'both',
+  }));
+  engine.addRule(createVolumeSpikeRule('test-volume', 'Volume Test', {
+    timeframe: '5m',
+    multiplier: 0.5, // Very low - should trigger
+    type: 'both',
+  }));
+
+  // Create trigger
+  const trigger = createTrigger({
+    enabled: true,
+    mode: 'paper',
+    defaultPositionSizeSol: 0.1,
+    maxPositionSizeSol: 1,
+    cooldownMs: 0, // No cooldown for testing
+  });
+
+  console.log('1. Analyzing token...');
+  const signals = await engine.analyzeToken(mint);
+  const result = engine.aggregateSignals(signals);
+
+  console.log(`   Action: ${result.action.toUpperCase()}`);
+  console.log(`   Confidence: ${(result.confidence * 100).toFixed(0)}%`);
+  console.log(`   Signals: ${signals.length}`);
+
+  if (result.action === 'hold') {
+    console.log('\n   No trade triggered (action is HOLD)');
+    return;
+  }
+
+  console.log('\n2. Triggering trade...');
+  const marketData = await localApi.getMarketData(mint);
+
+  const triggerResult = await trigger.trigger({
+    mint,
+    symbol: marketData.symbol,
+    action: result.action,
+    priceSol: marketData.price_sol,
+    priceUsd: marketData.price_usd,
+    ruleSetId: 'test',
+    signals,
+    confidence: result.confidence,
+  });
+
+  if (!triggerResult.triggered) {
+    console.log(`   Trade not triggered: ${triggerResult.reason}`);
+    return;
+  }
+
+  console.log(`   Trade created: ${triggerResult.trade?.id}`);
+
+  console.log('\n3. Checking open trades...');
+  const openTrades = paperTracker.getOpenTrades();
+  console.log(`   Open trades: ${openTrades.length}`);
+  for (const trade of openTrades) {
+    console.log(`   - ${trade.action} ${trade.symbol} @ ${trade.entryPriceSol} SOL`);
+  }
+
+  console.log('\n4. Simulating price change and closing trade...');
+  // Simulate a small price movement for P&L calculation
+  const exitPrice = marketData.price_sol * 1.02; // +2%
+  const exitPriceUsd = marketData.price_usd * 1.02;
+
+  const closed = paperTracker.closeTrade(
+    triggerResult.trade!.id,
+    exitPrice,
+    exitPriceUsd
+  );
+
+  if (closed) {
+    console.log(`   Closed trade: ${closed.symbol}`);
+    console.log(`   Entry: ${closed.entryPriceSol} SOL`);
+    console.log(`   Exit: ${closed.exitPriceSol} SOL`);
+    console.log(`   P&L: ${closed.pnlPercent?.toFixed(2)}% (${closed.pnlSol?.toFixed(6)} SOL)`);
+  }
+
+  console.log('\n5. Final stats...');
+  const stats = paperTracker.getStats();
+  console.log(`   Total trades: ${stats.totalTrades}`);
+  console.log(`   Wins: ${stats.wins} | Losses: ${stats.losses}`);
+  console.log(`   Win rate: ${(stats.winRate * 100).toFixed(1)}%`);
+  console.log(`   Total P&L: ${stats.totalPnlSol.toFixed(6)} SOL`);
+
+  // Save trading data
+  await paperTracker.save();
+
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('Full loop test complete!');
+  console.log('  Config -> Analysis -> Trigger -> P&L Update');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+}
+
+testTradingLoop().catch(console.error);

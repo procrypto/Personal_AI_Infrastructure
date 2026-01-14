@@ -1,0 +1,71 @@
+# Phase 20: Controls & Accuracy - Context
+
+**Gathered:** 2026-01-09
+**Status:** Ready for planning
+**Focus:** Controls only (P&L calculations deferred)
+
+<vision>
+## How This Should Work
+
+The position close controls should just work. When you click "Close All" in the performance section, it sends a command to the autopilot backend which executes sells for all open positions. Same pattern for individual positions - each position card has a close button that sends a command to close just that position.
+
+The backend already has the WebSocket command infrastructure. We just need to add the new command types and wire up the frontend buttons.
+
+</vision>
+
+<essential>
+## What Must Be Nailed
+
+- **Close All button works** - Click it, all positions close via backend
+- **Per-position close buttons** - X button on each position card to close individually
+- **Consistent naming** - `close_all_positions` and `close_position` (with mint)
+
+</essential>
+
+<boundaries>
+## What's Out of Scope
+
+- P&L calculations - that's a separate fix, not part of this phase
+- Any other widget changes - just the close controls
+- Confirmation dialogs - just make it work first
+
+</boundaries>
+
+<specifics>
+## Specific Ideas
+
+**Backend commands to add** (in `token-analysis-autopilot/src/websocket-server.ts`):
+```typescript
+// Add to AutopilotCommand union (lines 39-49)
+| { command: 'close_all_positions' }
+| { command: 'close_position'; mint: string }
+```
+
+**Frontend sends** (JSON over WebSocket):
+- Close All: `{ "command": "close_all_positions" }`
+- Single: `{ "command": "close_position", "mint": "tokenMintAddress" }`
+
+**Existing patterns:**
+- Commands: AutopilotCommand union in websocket-server.ts
+- Handler: `wsServer.onCommand(handler)`
+- Response: Backend broadcasts `{ type: 'signal', signal: SignalData }` for each position being closed
+
+**UI placement:**
+- Close All button already exists in performance section (currently does nothing)
+- Per-position close button: X icon on each position card in Open Positions section
+
+</specifics>
+
+<notes>
+## Additional Context
+
+This is a backend + frontend wiring fix. The backend needs the command handlers, and the frontend needs to send the right commands when buttons are clicked.
+
+The Close All button already exists but sends `{ command: "close_all" }` - need to verify if backend expects that or if we need to update both sides.
+
+</notes>
+
+---
+
+*Phase: 20-controls-accuracy*
+*Context gathered: 2026-01-09*

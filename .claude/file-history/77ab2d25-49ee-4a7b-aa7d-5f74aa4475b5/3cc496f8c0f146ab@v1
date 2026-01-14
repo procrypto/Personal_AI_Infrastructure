@@ -1,0 +1,68 @@
+# Phase 04: Topic Mode Usability
+
+## Goal
+Polish Topic Mode with date filtering and export capabilities.
+
+## User Requirements
+
+### 1. Date Range Selection
+- Add date range picker above the guided themes and ad-hoc search blocks
+- Filter search results to only include messages within the selected date range
+- Use the existing DatePicker component (already used in Group/User modes)
+- Date range should apply to both theme searches and ad-hoc searches
+
+### 2. Export Search Results
+Once the user is satisfied with search results, provide download options:
+
+**ZIP Export containing:**
+- Individual JSON files per chat (only messages that matched)
+- A combined `all_results.json` file with ALL matched messages in chronological order
+
+**Export format for individual chat files:**
+```json
+{
+  "chatId": "123",
+  "chatName": "Chat Name",
+  "searchQuery": "bug, feature",
+  "searchMode": "and",
+  "dateRange": { "start": "2024-01-01", "end": "2024-12-31" },
+  "messages": [ /* matched messages */ ]
+}
+```
+
+**Export format for combined file:**
+```json
+{
+  "exportedAt": "2026-01-09T...",
+  "searchQuery": "bug, feature",
+  "searchMode": "and",
+  "dateRange": { "start": "2024-01-01", "end": "2024-12-31" },
+  "totalMatches": 150,
+  "messages": [
+    /* ALL matched messages from all chats, sorted chronologically */
+  ]
+}
+```
+
+## Technical Context
+
+### Existing Infrastructure
+- `DatePicker` component already imported and styled in App.tsx
+- `JSZip` already available for ZIP creation
+- `downloadBlob` helper already exists
+- Search results stored in `searchResults: SearchResultWithContext`
+- Results include full message objects with dates
+
+### Implementation Notes
+- Date filtering can happen in the worker (more efficient) or UI (simpler)
+- Worker already has access to message dates during search
+- Export should only include the currently displayed results (respects date filter)
+
+## Acceptance Criteria
+
+- [ ] Date range picker appears above search UI in Topic Mode
+- [ ] Searching with date range filters results to that range
+- [ ] "Export Results" button appears when search results exist
+- [ ] Export creates ZIP with individual chat files + combined chronological file
+- [ ] Export respects current date range filter
+- [ ] Date picker matches existing app styling

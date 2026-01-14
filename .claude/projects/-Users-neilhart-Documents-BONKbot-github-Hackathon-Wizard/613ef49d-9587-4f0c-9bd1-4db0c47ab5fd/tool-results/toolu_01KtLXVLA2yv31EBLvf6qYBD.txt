@@ -1,0 +1,79 @@
+     1→import { PresetsTrigger } from "@/layouts/header/presets-trigger";
+     2→import { MenuItem } from "@/layouts/header/menu-item";
+     3→import { UserWallet } from "@/layouts/header/user-wallet";
+     4→import { createMenuItems } from "@/layouts/const";
+     5→import { HomeIcon } from "@/layouts/header/home-icon";
+     6→import { UserDropdownMenu } from "@/layouts/header/user-dropdown";
+     7→import { Search } from "@/layouts/header/search";
+     8→import { Account } from "@/layouts/header/account";
+     9→import { Notifications } from "@/layouts/header/notifications/notifications.tsx";
+    10→import { useLocation } from "@tanstack/react-router";
+    11→import { MOBILE_BREAKPOINT } from "@/utils/breakpoints";
+    12→import { useMediaQuery } from "usehooks-ts";
+    13→import { RewardsMenuItem } from "@/ui/rewards/RewardsMenuItem";
+    14→
+    15→import { useFeatureFlagEnabled } from "posthog-js/react";
+    16→import { IS_PRODUCTION_ENV } from "@/config";
+    17→import { PvpTrigger } from "@bonkbot/pvp";
+    18→
+    19→export const Header = () => {
+    20→  const location = useLocation();
+    21→  const isMobileScreen = useMediaQuery(MOBILE_BREAKPOINT);
+    22→  const isSentinelEnabled = useFeatureFlagEnabled("sentinel-feature");
+    23→  const isDashboardEnabled = useFeatureFlagEnabled("dashboard-feature");
+    24→
+    25→  const menuItems = createMenuItems({
+    26→    isSentinelEnabled: IS_PRODUCTION_ENV ? !!isSentinelEnabled : true,
+    27→    isDashboardEnabled: IS_PRODUCTION_ENV ? !!isDashboardEnabled : true,
+    28→  }).map(item => {
+    29→    const isCurrentPage =
+    30→      (item.to && location.pathname.includes(item.to)) || false;
+    31→    return {
+    32→      ...item,
+    33→      isCurrentPage: isCurrentPage,
+    34→    };
+    35→  });
+    36→
+    37→  return (
+    38→    <>
+    39→      <header className="bg-bg-primary @container flex items-center justify-between gap-2 p-2 md:p-4">
+    40→        {/* Left */}
+    41→        <div className="flex items-center gap-2 md:gap-4">
+    42→          <HomeIcon />
+    43→          {!isMobileScreen && (
+    44→            <div className="flex items-center gap-2">
+    45→              {menuItems.map((props, index) => {
+    46→                return (
+    47→                  <MenuItem
+    48→                    key={index}
+    49→                    iconClassName="lg:hidden"
+    50→                    labelClassName="hidden lg:block"
+    51→                    {...props}
+    52→                  />
+    53→                );
+    54→              })}
+    55→              <PvpTrigger />
+    56→            </div>
+    57→          )}
+    58→        </div>
+    59→
+    60→        {/* Right */}
+    61→        <div className="flex items-center gap-2">
+    62→          <Search />
+    63→          <Notifications />
+    64→          <PresetsTrigger />
+    65→          <RewardsMenuItem />
+    66→          <UserWallet />
+    67→          <Account />
+    68→          <UserDropdownMenu />
+    69→        </div>
+    70→      </header>
+    71→      {/* <NewVersionBanner /> */}
+    72→    </>
+    73→  );
+    74→};
+    75→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

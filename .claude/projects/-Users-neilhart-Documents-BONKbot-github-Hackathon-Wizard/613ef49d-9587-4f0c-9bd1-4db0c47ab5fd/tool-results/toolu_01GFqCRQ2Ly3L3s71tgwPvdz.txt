@@ -1,0 +1,50 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/lois-types.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+    65→  ohlcv?: OHLCV[];
+    66→  recentTrades?: Trade[];
+    67→}
+    68→
+    69→/**
+    70→ * Convert TokenMarketData to RuleMarketContext
+    71→ */
+    72→export function toRuleMarketContext(
+    73→  token: TokenMarketData,
+    74→  ohlcv?: OHLCV[],
+    75→  trades?: Trade[]
+    76→): RuleMarketContext {
+    77→  // Calculate price changes from earliest prices
+    78→  const priceChange5m = token.earliest_price_sol_5m > 0
+    79→    ? ((token.price_sol - token.earliest_price_sol_5m) / token.earliest_price_sol_5m) * 100
+    80→    : undefined;
+    81→  const priceChange1h = token.earliest_price_sol_1h > 0
+    82→    ? ((token.price_sol - token.earliest_price_sol_1h) / token.earliest_price_sol_1h) * 100
+    83→    : undefined;
+    84→  const priceChange24h = token.earliest_price_sol_24h > 0
+    85→    ? ((token.price_sol - token.earliest_price_sol_24h) / token.earliest_price_sol_24h) * 100
+    86→    : undefined;
+    87→
+    88→  // Calculate volume in USD (SOL volume * price)
+    89→  const volume24hUsd = token.volume_24h_sol * token.price_usd;
+    90→
+    91→  return {
+    92→    usdMarketCap: token.market_cap_usd ?? 0,
+    93→    priceSol: token.price_sol ?? 0,
+    94→    priceUsd: token.price_usd ?? 0,
+    95→    volume24hUsd,
+    96→    volumeChange5m: undefined, // Not directly available, would need historical data
+    97→    volumeChange1h: undefined,
+    98→    priceChange5m,
+    99→    priceChange1h,
+   100→    priceChange24h,
+   101→    buyCount5m: token.buys_5m,
+   102→    sellCount5m: token.sells_5m,
+   103→    buyers5m: token.buyers_5m,
+   104→    sellers5m: token.sellers_5m,
+   105→    liquidity: token.liquidity_usd,
+   106→    ohlcv,
+   107→    recentTrades: trades,
+   108→  };
+   109→}
+   110→
+   111→// ============================================================================
+   112→// Rule Intent (mirrors LOIS Intent)
+   113→// ============================================================================

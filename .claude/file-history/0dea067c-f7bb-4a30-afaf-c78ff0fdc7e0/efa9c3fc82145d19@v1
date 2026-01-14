@@ -1,0 +1,41 @@
+/**
+ * Slack Events API Route
+ *
+ * Vercel Function handler for Slack events.
+ * Handles URL verification challenge and event processing.
+ */
+
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { App, ExpressReceiver } from '@slack/bolt';
+import { initializeSlackIntegration } from '../../src/coordination/slack/init.js';
+
+// ============================================================================
+// Create Receiver and App
+// ============================================================================
+
+const receiver = new ExpressReceiver({
+  signingSecret: process.env.SLACK_SIGNING_SECRET!,
+  processBeforeResponse: true,
+});
+
+const app = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  receiver,
+});
+
+// Initialize listeners and subscribers
+initializeSlackIntegration(app);
+
+// ============================================================================
+// Export Handler
+// ============================================================================
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Handle Slack URL verification challenge
+  if (req.body?.type === 'url_verification') {
+    return res.status(200).json({ challenge: req.body.challenge });
+  }
+
+  // Forward all other requests to Bolt
+  return receiver.app(req, res);
+}

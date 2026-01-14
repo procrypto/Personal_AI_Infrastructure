@@ -1,0 +1,241 @@
+/**
+ * Auto Source Manager
+ *
+ * Manages automatic token sources from discovery endpoints.
+ * Refreshes trending and whale_moves lists on a configurable interval (default 15m).
+ * Tokens from these sources are analyzed alongside the manual watchlist.
+ */
+
+import type { AutoSourceConfig, SourcedToken, TokenSource } from '../config/types.js';
+import type { ApiClient } from '../api/client.js';
+import type { TrendingFeedItem, WhaleMoveFeedItem } from '../websocket-server.js';
+
+export interface AutoSourceToken {
+  mint: string;
+  symbol: string;
+  source: TokenSource;
+  metadata?: {
+    // Trending metadata
+    rank?: number;
+    volumeUsd?: number;
+    // Whale metadata
+    whaleCount?: number;
+    tradeCount?: number;
+    marketCapUsd?: number;
+  };
+}
+
+export class AutoSourceManager {
+  private trendingTokens: AutoSourceToken[] = [];
+  private whaleTokens: AutoSourceToken[] = [];
+  private lastRefresh: number = 0;
+  private refreshPromise: Promise<void> | null = null;
+
+  constructor(
+    private api: ApiClient,
+    private config: AutoSourceConfig
+  ) {}
+
+  updateConfig(config: AutoSourceConfig): void {
+    this.config = config;
+  }
+
+  /**
+   * Check if refresh is needed and perform if so
+   */
+  async refreshIfNeeded(): Promise<void> {
+    if (!this.config.enabled) return;
+
+    const now = Date.now();
+    const elapsed = now - this.lastRefresh;
+
+    if (elapsed >= this.config.refreshIntervalMs || this.lastRefresh === 0) {
+      await this.refresh();
+    }
+  }
+
+  /**
+   * Force refresh of all enabled sources
+   */
+  async refresh(): Promise<void> {
+    // Prevent concurrent refreshes
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = this._doRefresh();
+    try {
+      await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async _doRefresh(): Promise<void> {
+    const promises: Promise<void>[] = [];
+
+    if (this.config.trending) {
+      promises.push(this.refreshTrending());
+    }
+
+    if (this.config.whales) {
+      promises.push(this.refreshWhales());
+    }
+
+    await Promise.allSettled(promises);
+    this.lastRefresh = Date.now();
+  }
+
+  private async refreshTrending(): Promise<void> {
+    try {
+      const trending = await this.api.getTrending(this.config.trendingLimit);
+
+      this.trendingTokens = trending
+        .filter(item => item.mint && item.market_data)
+        .map((item, index) => ({
+          mint: item.mint,
+          symbol: item.market_data?.symbol || item.mint.slice(0, 6),
+          source: 'trending' as TokenSource,
+          metadata: {
+            rank: index + 1,
+            volumeUsd: item.trending_data?.volume_usd_1h,
+          },
+        }));
+
+      // TODO: Add spam filtering here when expanding to broader sources
+    } catch (error) {
+      // Silently fail - trending might not be available on all API endpoints
+      // Keep existing tokens on failure
+    }
+  }
+
+  private async refreshWhales(): Promise<void> {
+    try {
+      const whales = await this.api.getWhaleMoves();
+
+      this.whaleTokens = whales
+        .slice(0, this.config.whalesLimit)
+        .map(item => ({
+          mint: item.mint,
+          symbol: item.token_symbol || item.mint.slice(0, 6),
+          source: 'whales' as TokenSource,
+          metadata: {
+            whaleCount: parseInt(item.whales_1h) || 0,
+            tradeCount: parseInt(item.trades_1h) || 0,
+            marketCapUsd: item.current_market_cap_usd,
+          },
+        }));
+
+      // TODO: Add spam filtering here when expanding to broader sources
+    } catch (error) {
+      // Silently fail - keep existing tokens on failure
+    }
+  }
+
+  /**
+   * Get all tokens from auto-sources (deduplicated)
+   */
+  getTokens(): AutoSourceToken[] {
+    if (!this.config.enabled) return [];
+
+    const seen = new Set<string>();
+    const tokens: AutoSourceToken[] = [];
+
+    // Add trending first (higher priority)
+    if (this.config.trending) {
+      for (const token of this.trendingTokens) {
+        if (!seen.has(token.mint)) {
+          seen.add(token.mint);
+          tokens.push(token);
+        }
+      }
+    }
+
+    // Add whale tokens
+    if (this.config.whales) {
+      for (const token of this.whaleTokens) {
+        if (!seen.has(token.mint)) {
+          seen.add(token.mint);
+          tokens.push(token);
+        }
+      }
+    }
+
+    return tokens;
+  }
+
+  /**
+   * Get tokens as SourcedToken format (for merging with watchlist)
+   */
+  getSourcedTokens(): SourcedToken[] {
+    return this.getTokens().map(t => ({
+      mint: t.mint,
+      symbol: t.symbol,
+      source: t.source,
+    }));
+  }
+
+  /**
+   * Get count of tokens per source
+   */
+  getCounts(): { trending: number; whales: number; total: number } {
+    const tokens = this.getTokens();
+    return {
+      trending: this.config.trending ? this.trendingTokens.length : 0,
+      whales: this.config.whales ? this.whaleTokens.length : 0,
+      total: tokens.length,
+    };
+  }
+
+  /**
+   * Get time since last refresh
+   */
+  getTimeSinceRefresh(): number {
+    return Date.now() - this.lastRefresh;
+  }
+
+  /**
+   * Check if a mint is from auto-sources
+   */
+  getSourceForMint(mint: string): TokenSource | null {
+    // Check trending first
+    if (this.trendingTokens.some(t => t.mint === mint)) {
+      return 'trending';
+    }
+    if (this.whaleTokens.some(t => t.mint === mint)) {
+      return 'whales';
+    }
+    return null;
+  }
+
+  /**
+   * Set trending tokens from data feed (replaces API polling data)
+   */
+  setTrendingFromFeed(tokens: TrendingFeedItem[]): void {
+    this.trendingTokens = tokens.map((item, index) => ({
+      mint: item.mint,
+      symbol: item.symbol || item.mint.slice(0, 6),
+      source: 'trending' as TokenSource,
+      metadata: { rank: index + 1, volumeUsd: item.volume_usd },
+    }));
+    this.lastRefresh = Date.now();
+  }
+
+  /**
+   * Set whale tokens from data feed (replaces API polling data)
+   */
+  setWhalesFromFeed(tokens: WhaleMoveFeedItem[]): void {
+    this.whaleTokens = tokens.map(item => ({
+      mint: item.mint,
+      symbol: item.symbol || item.mint.slice(0, 6),
+      source: 'whales' as TokenSource,
+      metadata: { whaleCount: item.whale_count, volumeUsd: item.volume_usd },
+    }));
+    this.lastRefresh = Date.now();
+  }
+}
+
+// Factory function
+export function createAutoSourceManager(api: ApiClient, config: AutoSourceConfig): AutoSourceManager {
+  return new AutoSourceManager(api, config);
+}

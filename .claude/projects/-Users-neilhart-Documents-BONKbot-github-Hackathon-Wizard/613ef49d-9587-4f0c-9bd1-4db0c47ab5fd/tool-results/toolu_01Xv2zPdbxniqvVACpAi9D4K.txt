@@ -1,0 +1,355 @@
+     1→/**
+     2→ * Rule Templates
+     3→ *
+     4→ * Pre-configured rule combinations for common trading strategies.
+     5→ * Users can use these as starting points and customize thresholds.
+     6→ */
+     7→
+     8→import type { RuleSet, AnyRuleConfig } from './types.js';
+     9→
+    10→/**
+    11→ * Momentum Buy Template
+    12→ *
+    13→ * Looks for tokens with:
+    14→ * - Rising price (5m and 1h both up)
+    15→ * - Volume spike above average
+    16→ * - Buy pressure exceeding sell pressure
+    17→ */
+    18→export const momentumBuyTemplate: RuleSet = {
+    19→  id: 'momentum-buy',
+    20→  name: 'Momentum Buy',
+    21→  description: 'Triggers when price is rising with strong volume and buy pressure',
+    22→  mode: 'all', // All conditions must be met
+    23→  rules: [
+    24→    {
+    25→      id: 'momentum-price-5m',
+    26→      name: 'Price Rising (5m)',
+    27→      description: 'Price up in last 5 minutes',
+    28→      enabled: true,
+    29→      type: 'buy',
+    30→      ruleType: 'price_change',
+    31→      timeframe: '5m',
+    32→      threshold: 1, // 1% minimum
+    33→      direction: 'up',
+    34→    },
+    35→    {
+    36→      id: 'momentum-price-1h',
+    37→      name: 'Price Rising (1h)',
+    38→      description: 'Price up in last hour',
+    39→      enabled: true,
+    40→      type: 'buy',
+    41→      ruleType: 'price_change',
+    42→      timeframe: '1h',
+    43→      threshold: 2, // 2% minimum
+    44→      direction: 'up',
+    45→    },
+    46→    {
+    47→      id: 'momentum-volume',
+    48→      name: 'Volume Spike',
+    49→      description: 'Volume above average',
+    50→      enabled: true,
+    51→      type: 'buy',
+    52→      ruleType: 'volume_spike',
+    53→      timeframe: '5m',
+    54→      multiplier: 1.5,
+    55→    },
+    56→    {
+    57→      id: 'momentum-pressure',
+    58→      name: 'Buy Pressure',
+    59→      description: 'More buy volume than sell',
+    60→      enabled: true,
+    61→      type: 'buy',
+    62→      ruleType: 'buy_sell_ratio',
+    63→      timeframe: '5m',
+    64→      minRatio: 1.5,
+    65→    },
+    66→  ],
+    67→};
+    68→
+    69→/**
+    70→ * Momentum Sell Template
+    71→ *
+    72→ * Looks for tokens showing weakness:
+    73→ * - Falling price
+    74→ * - Sell pressure exceeding buy pressure
+    75→ */
+    76→export const momentumSellTemplate: RuleSet = {
+    77→  id: 'momentum-sell',
+    78→  name: 'Momentum Sell',
+    79→  description: 'Triggers when price is falling with sell pressure',
+    80→  mode: 'all',
+    81→  rules: [
+    82→    {
+    83→      id: 'sell-price-5m',
+    84→      name: 'Price Falling (5m)',
+    85→      description: 'Price down in last 5 minutes',
+    86→      enabled: true,
+    87→      type: 'sell',
+    88→      ruleType: 'price_change',
+    89→      timeframe: '5m',
+    90→      threshold: 2,
+    91→      direction: 'down',
+    92→    },
+    93→    {
+    94→      id: 'sell-pressure',
+    95→      name: 'Sell Pressure',
+    96→      description: 'More sell volume than buy',
+    97→      enabled: true,
+    98→      type: 'sell',
+    99→      ruleType: 'buy_sell_ratio',
+   100→      timeframe: '5m',
+   101→      minRatio: 1.5, // Sell side dominant
+   102→    },
+   103→  ],
+   104→};
+   105→
+   106→/**
+   107→ * Volume Alert Template
+   108→ *
+   109→ * Simple volume-based alerts without price requirement.
+   110→ * Good for catching early moves.
+   111→ */
+   112→export const volumeAlertTemplate: RuleSet = {
+   113→  id: 'volume-alert',
+   114→  name: 'Volume Alert',
+   115→  description: 'Alerts on significant volume spikes',
+   116→  mode: 'any', // Any volume spike triggers
+   117→  rules: [
+   118→    {
+   119→      id: 'vol-spike-5m',
+   120→      name: 'Volume Spike (5m)',
+   121→      description: '2x volume in 5 minutes',
+   122→      enabled: true,
+   123→      type: 'both',
+   124→      ruleType: 'volume_spike',
+   125→      timeframe: '5m',
+   126→      multiplier: 2,
+   127→    },
+   128→    {
+   129→      id: 'vol-spike-1h',
+   130→      name: 'Volume Spike (1h)',
+   131→      description: '3x volume in 1 hour',
+   132→      enabled: true,
+   133→      type: 'both',
+   134→      ruleType: 'volume_spike',
+   135→      timeframe: '1h',
+   136→      multiplier: 3,
+   137→    },
+   138→  ],
+   139→};
+   140→
+   141→/**
+   142→ * Retail Interest Template
+   143→ *
+   144→ * Looks for tokens gaining retail attention:
+   145→ * - High unique trader count
+   146→ * - More buyers than sellers
+   147→ */
+   148→export const retailInterestTemplate: RuleSet = {
+   149→  id: 'retail-interest',
+   150→  name: 'Retail Interest',
+   151→  description: 'Triggers on high retail participation',
+   152→  mode: 'all',
+   153→  rules: [
+   154→    {
+   155→      id: 'retail-traders',
+   156→      name: 'Active Traders',
+   157→      description: 'Many unique traders',
+   158→      enabled: true,
+   159→      type: 'both',
+   160→      ruleType: 'trader_count',
+   161→      timeframe: '5m',
+   162→      minTraders: 50,
+   163→      minBuyers: 30,
+   164→    },
+   165→    {
+   166→      id: 'retail-pressure',
+   167→      name: 'Buyer Majority',
+   168→      description: 'More buyers than sellers',
+   169→      enabled: true,
+   170→      type: 'buy',
+   171→      ruleType: 'buy_sell_ratio',
+   172→      timeframe: '5m',
+   173→      minRatio: 1.2,
+   174→    },
+   175→  ],
+   176→};
+   177→
+   178→/**
+   179→ * Rotations S/R Template
+   180→ *
+   181→ * Market structure based trading using candlestick rotations:
+   182→ * - Detects break of structure (new rotations)
+   183→ * - Identifies pullbacks to support/resistance
+   184→ * - Catches false breakouts (SFP patterns)
+   185→ *
+   186→ * Based on Rotations v1.5.2 indicator
+   187→ */
+   188→export const rotationsTemplate: RuleSet = {
+   189→  id: 'rotations',
+   190→  name: 'Rotations S/R',
+   191→  description: 'Market structure via candlestick rotations - BOS, pullbacks, SFP',
+   192→  mode: 'any',
+   193→  rules: [
+   194→    {
+   195→      id: 'rotations-default',
+   196→      name: 'Rotations S/R',
+   197→      description: 'Detects rotation changes, pullbacks, and false breakouts',
+   198→      enabled: true,
+   199→      type: 'both',
+   200→      ruleType: 'rotations',
+   201→      levelBuffer: 0.5, // 0.5% buffer for "at level" detection
+   202→      requireHtfAlignment: false, // Set to true for more conservative signals
+   203→      signalOnRotation: true, // Signal on new up/down rotations
+   204→      signalOnPullback: true, // Signal on pullback to support/resistance
+   205→      signalOnSFP: true, // Signal on false breakouts
+   206→    },
+   207→  ],
+   208→};
+   209→
+   210→/**
+   211→ * Rotations Conservative Template
+   212→ *
+   213→ * Same as rotations but only signals on new structure breaks.
+   214→ * More selective, fewer signals.
+   215→ */
+   216→export const rotationsConservativeTemplate: RuleSet = {
+   217→  id: 'rotations-conservative',
+   218→  name: 'Rotations (Conservative)',
+   219→  description: 'Only signals on structure breaks - fewer, higher quality signals',
+   220→  mode: 'any',
+   221→  rules: [
+   222→    {
+   223→      id: 'rotations-conservative',
+   224→      name: 'Rotations (BOS Only)',
+   225→      description: 'Only triggers on break of structure',
+   226→      enabled: true,
+   227→      type: 'both',
+   228→      ruleType: 'rotations',
+   229→      levelBuffer: 0.5,
+   230→      requireHtfAlignment: false,
+   231→      signalOnRotation: true,
+   232→      signalOnPullback: false,
+   233→      signalOnSFP: false,
+   234→    },
+   235→  ],
+   236→};
+   237→
+   238→/**
+   239→ * All available templates
+   240→ */
+   241→export const templates: Record<string, RuleSet> = {
+   242→  'momentum-buy': momentumBuyTemplate,
+   243→  'momentum-sell': momentumSellTemplate,
+   244→  'volume-alert': volumeAlertTemplate,
+   245→  'retail-interest': retailInterestTemplate,
+   246→  'rotations': rotationsTemplate,
+   247→  'rotations-conservative': rotationsConservativeTemplate,
+   248→};
+   249→
+   250→/**
+   251→ * Get a template by ID
+   252→ */
+   253→export function getTemplate(id: string): RuleSet | undefined {
+   254→  return templates[id];
+   255→}
+   256→
+   257→/**
+   258→ * List all template IDs
+   259→ */
+   260→export function listTemplates(): string[] {
+   261→  return Object.keys(templates);
+   262→}
+   263→
+   264→/**
+   265→ * Format a rule as a compact string
+   266→ * Examples: price +1%/5m, vol 2x/5m, ratio 1.5:1/5m, 50+30 traders/5m
+   267→ */
+   268→export function formatRuleCompact(rule: AnyRuleConfig): string {
+   269→  const tf = rule.ruleType !== 'breakout' && rule.ruleType !== 'ma_crossover'
+   270→    ? `/${(rule as any).timeframe}`
+   271→    : '';
+   272→
+   273→  switch (rule.ruleType) {
+   274→    case 'price_change': {
+   275→      const r = rule as any;
+   276→      const dir = r.direction === 'up' ? '+' : r.direction === 'down' ? '-' : '+-';
+   277→      return `price ${dir}${r.threshold}%${tf}`;
+   278→    }
+   279→    case 'volume_spike': {
+   280→      const r = rule as any;
+   281→      return `vol ${r.multiplier}x${tf}`;
+   282→    }
+   283→    case 'buy_sell_ratio': {
+   284→      const r = rule as any;
+   285→      return `ratio ${r.minRatio}:1${tf}`;
+   286→    }
+   287→    case 'trader_count': {
+   288→      const r = rule as any;
+   289→      const buyers = r.minBuyers ? `+${r.minBuyers}` : '';
+   290→      return `${r.minTraders}${buyers} traders${tf}`;
+   291→    }
+   292→    case 'breakout': {
+   293→      const r = rule as any;
+   294→      return `breakout ${r.breakoutPercent}%/${r.lookbackCandles}c`;
+   295→    }
+   296→    case 'ma_crossover': {
+   297→      const r = rule as any;
+   298→      return `ma ${r.fastPeriod}x${r.slowPeriod}`;
+   299→    }
+   300→    case 'rotations': {
+   301→      const r = rule as any;
+   302→      const signals = [];
+   303→      if (r.signalOnRotation) signals.push('BOS');
+   304→      if (r.signalOnPullback) signals.push('PB');
+   305→      if (r.signalOnSFP) signals.push('SFP');
+   306→      return `rotations [${signals.join('+')}]`;
+   307→    }
+   308→    default:
+   309→      return '?';
+   310→  }
+   311→}
+   312→
+   313→/**
+   314→ * Get compact summary of a template
+   315→ */
+   316→export function getTemplateSummary(template: RuleSet): string {
+   317→  const mode = template.mode === 'all' ? '&' : '|';
+   318→  const rules = template.rules.map(formatRuleCompact).join(` ${mode} `);
+   319→  return rules;
+   320→}
+   321→
+   322→/**
+   323→ * Clone a template with custom overrides
+   324→ */
+   325→export function cloneTemplate(
+   326→  templateId: string,
+   327→  overrides: Partial<Omit<RuleSet, 'rules'>> & {
+   328→    ruleOverrides?: Record<string, Partial<AnyRuleConfig>>;
+   329→  }
+   330→): RuleSet | null {
+   331→  const template = templates[templateId];
+   332→  if (!template) return null;
+   333→
+   334→  const cloned: RuleSet = {
+   335→    ...template,
+   336→    id: overrides.id ?? `${template.id}-custom`,
+   337→    name: overrides.name ?? template.name,
+   338→    description: overrides.description ?? template.description,
+   339→    mode: overrides.mode ?? template.mode,
+   340→    rules: template.rules.map(rule => {
+   341→      const ruleOverride = overrides.ruleOverrides?.[rule.id];
+   342→      if (ruleOverride) {
+   343→        return { ...rule, ...ruleOverride } as AnyRuleConfig;
+   344→      }
+   345→      return { ...rule };
+   346→    }),
+   347→  };
+   348→
+   349→  return cloned;
+   350→}
+   351→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

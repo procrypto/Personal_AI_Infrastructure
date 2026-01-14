@@ -1,0 +1,143 @@
+# Codebase Concerns
+
+**Analysis Date:** 2025-01-07
+
+## Tech Debt
+
+**Placeholder system runners:**
+- Issue: PUM3, Frontend, Data-Infra, Infrastructure systems return empty stub reports
+- Files: `src/run-all.ts` (lines 91-94)
+- Why: Systems not yet implemented, placeholders for future work
+- Impact: These systems always report as "passed" (0 failures) even though no tests run
+- Fix approach: Either implement actual tests or remove from run-all until ready
+
+**Allure integration incomplete:**
+- Issue: TODO comment with detailed implementation notes, but not implemented
+- File: `src/core/reporter.ts` (lines 199-226)
+- Why: Planned feature not yet prioritized
+- Impact: No integration with Allure TestOps for test reporting
+- Fix approach: Implement Allure adapter following the inline instructions
+
+**Telegram bot health check duplication:**
+- Issue: Three nearly identical functions for different bot phases
+- File: `src/systems/telegram/scripts/tg-canary-check.ts` (lines 40-104)
+- Why: Quick implementation without abstraction
+- Impact: Code duplication, harder to maintain
+- Fix approach: Extract to factory function `testBotHealth(botName, token)`
+
+## Known Bugs
+
+**None identified** - Codebase appears stable for current functionality.
+
+## Security Considerations
+
+**No secrets in code:**
+- Risk: Secrets could be accidentally committed
+- Current mitigation: All tokens loaded from environment variables, `.env.local` gitignored
+- Recommendations: Continue current pattern, consider adding pre-commit hook to scan for secrets
+
+**Admin token in test config:**
+- Risk: Test tokens stored in config files that may be shared
+- File: `config/systems/web-api.env`
+- Current mitigation: Tokens are for test accounts only
+- Recommendations: Document that these are test-only tokens, not production credentials
+
+## Performance Bottlenecks
+
+**No significant bottlenecks identified.**
+
+**Note:** Tests run sequentially within systems, which is intentional for predictable execution.
+
+## Fragile Areas
+
+**File system operations in CI:**
+- Files: `src/run-all.ts` (lines 163-178), `src/core/reporter.ts` (lines 239-254)
+- Why fragile: `fs.appendFileSync()` calls without try/catch
+- Common failures: Invalid path, permission denied, disk full
+- Safe modification: Add try/catch with error logging
+- Test coverage: Not tested
+
+**WebSocket message parsing:**
+- File: `src/systems/web-api/scripts/websocket-check.ts` (lines 60-62, 113-114)
+- Why fragile: Empty catch blocks silently ignore parse errors
+- Common failures: Malformed JSON from server
+- Safe modification: Log parse errors for debugging
+- Test coverage: Not tested for error cases
+
+## Scaling Limits
+
+**Sequential test execution:**
+- Current capacity: Runs tests sequentially (minutes per full run)
+- Limit: Scales linearly with test count
+- Symptoms at limit: Long CI times as test suite grows
+- Scaling path: Could parallelize independent systems
+
+## Dependencies at Risk
+
+**TypeScript version:**
+- Risk: TypeScript 5.0.4 is from 2023, current is 5.6+
+- Impact: Missing new TypeScript features and bug fixes
+- Migration plan: Update to latest 5.x when convenient (low priority)
+
+**ws package:**
+- Risk: WebSocket library, actively maintained
+- Impact: None currently
+- Status: Current version, no concerns
+
+## Missing Critical Features
+
+**Frontend tests not implemented:**
+- Problem: Frontend system has placeholder runner only
+- File: `src/systems/frontend/run.ts`
+- Current workaround: Manual testing via runbook
+- Blocks: Automated frontend verification in CI
+- Implementation complexity: Medium (depends on frontend test strategy)
+
+**Data infrastructure tests not implemented:**
+- Problem: Data-Infra system has placeholder runner
+- File: `src/systems/data-infra/run.ts`
+- Current workaround: Manual verification
+- Blocks: Automated data pipeline monitoring
+- Implementation complexity: Medium (need to define health endpoints)
+
+**Slack notifications:**
+- Problem: `generateSlackPayload()` exists but not wired up
+- File: `src/core/reporter.ts`
+- Current workaround: Manual notification
+- Blocks: Automated alerting on test failures
+- Implementation complexity: Low (just needs webhook configuration)
+
+## Test Coverage Gaps
+
+**Error handling paths:**
+- What's not tested: File system error handling in reporter
+- Files: `src/run-all.ts`, `src/core/reporter.ts`
+- Risk: CI could fail silently if GitHub Actions paths invalid
+- Priority: Medium
+- Difficulty to test: Would need unit tests for reporter module
+
+**WebSocket error recovery:**
+- What's not tested: Reconnection, malformed message handling
+- File: `src/systems/web-api/scripts/websocket-check.ts`
+- Risk: Flaky tests on network issues
+- Priority: Low
+- Difficulty to test: Need mock WebSocket server
+
+## Documentation Gaps
+
+**Missing JSDoc on utilities:**
+- What's missing: JSDoc comments on assertion functions
+- File: `src/core/utils.ts`
+- Impact: Harder for new contributors to understand API
+- Priority: Low
+
+**WebSocket protocol not documented:**
+- What's missing: Expected message format, subscription protocol
+- File: `src/systems/web-api/scripts/websocket-check.ts`
+- Impact: Harder to understand test expectations
+- Priority: Low
+
+---
+
+*Concerns audit: 2025-01-07*
+*Update as issues are fixed or new ones discovered*

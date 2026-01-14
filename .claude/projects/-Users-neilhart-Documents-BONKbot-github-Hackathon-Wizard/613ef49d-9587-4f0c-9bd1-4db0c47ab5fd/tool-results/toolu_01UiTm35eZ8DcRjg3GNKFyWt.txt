@@ -1,0 +1,191 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   252→      }
+   253→      break;
+   254→    }
+   255→
+   256→    case 'run': {
+   257→      const watchlist = configStore.getWatchlist();
+   258→      const ruleSets = configStore.getRuleSets();
+   259→
+   260→      if (ruleSets.length === 0) {
+   261→        console.error('No active rule sets. Use "use <template>" to add one.');
+   262→        process.exit(1);
+   263→      }
+   264→
+   265→      const config = configStore.get();
+   266→      const trigger = createTrigger(config.trigger);
+   267→      const autoSources = createAutoSourceManager(localApi, config.autoSources);
+   268→
+   269→      // Initial refresh of auto-sources
+   270→      if (config.autoSources.enabled) {
+   271→        console.log('Fetching auto-sources (trending, whales)...');
+   272→        await autoSources.refresh();
+   273→      }
+   274→
+   275→      // Helper to get source label for output
+   276→      const sourceLabel = (source: TokenSource): string => {
+   277→        switch (source) {
+   278→          case 'watchlist': return 'W';
+   279→          case 'trending': return 'T';
+   280→          case 'whales': return '$';
+   281→          default: return '?';
+   282→        }
+   283→      };
+   284→
+   285→      // Combine all token sources: watchlist + auto-sources + open positions
+   286→      const getAllTokens = () => {
+   287→        const tokens = new Map<string, { mint: string; symbol?: string; source: TokenSource }>();
+   288→
+   289→        // Manual watchlist (highest priority)
+   290→        for (const t of watchlist) {
+   291→          tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: 'watchlist' });
+   292→        }
+   293→
+   294→        // Auto-sources (if enabled)
+   295→        if (config.autoSources.enabled) {
+   296→          for (const t of autoSources.getSourcedTokens()) {
+   297→            if (!tokens.has(t.mint)) {
+   298→              tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: t.source });
+   299→            }
+   300→          }
+   301→        }
+   302→
+   303→        // Open positions (always include)
+   304→        for (const trade of paperTracker.getOpenTrades()) {
+   305→          if (!tokens.has(trade.mint)) {
+   306→            // Determine source from auto-sources if available
+   307→            const autoSource = autoSources.getSourceForMint(trade.mint);
+   308→            tokens.set(trade.mint, {
+   309→              mint: trade.mint,
+   310→              symbol: trade.symbol,
+   311→              source: autoSource || 'watchlist',
+   312→            });
+   313→          }
+   314→        }
+   315→
+   316→        return Array.from(tokens.values());
+   317→      };
+   318→
+   319→      const allTokens = getAllTokens();
+   320→      const autoSourceCounts = autoSources.getCounts();
+   321→
+   322→      if (allTokens.length === 0) {
+   323→        console.error('Nothing to watch. Add tokens with "watch <mint>", enable auto-sources, or have open trades.');
+   324→        process.exit(1);
+   325→      }
+   326→
+   327→      const openCount = paperTracker.getOpenTrades().length;
+   328→      console.log('Starting analysis loop... (Ctrl+C to stop)');
+   329→      console.log(`  Watchlist: ${watchlist.length} | Trending: ${autoSourceCounts.trending} | Whales: ${autoSourceCounts.whales}`);
+   330→      console.log(`  Open trades: ${openCount} | Rules: ${ruleSets.length} sets | Mode: ${config.trigger.mode}`);
+   331→      console.log(`  Scan interval: ${config.pollIntervalMs}ms | Source refresh: ${config.autoSources.refreshIntervalMs / 1000}s\n`);
+   332→
+   333→      const engine = new RuleEngine({ api: localApi });
+   334→      for (const ruleSet of ruleSets) {
+   335→        engine.addRulesFromConfig(ruleSet.rules);
+   336→      }
+   337→
+   338→      let scanCount = 0;
+   339→      const runLoop = async () => {
+   340→        scanCount++;
+   341→        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+   342→
+   343→        // Refresh auto-sources if needed (every 15m by default)
+   344→        await autoSources.refreshIfNeeded();
+   345→
+   346→        // Get fresh token list
+   347→        const tokens = getAllTokens();
+   348→        const openTrades = paperTracker.getOpenTrades();
+   349→        const openMints = new Set(openTrades.map(t => t.mint));
+   350→
+   351→        const scanResults: string[] = [];
+   352→        const tradeResults: string[] = [];
+   353→
+   354→        // Process all tokens
+   355→        for (const token of tokens) {
+   356→          const isOpenTrade = openMints.has(token.mint);
+   357→
+   358→          try {
+   359→            const signals = await engine.analyzeToken(token.mint);
+   360→            const result = engine.aggregateSignals(signals);
+   361→            const sym = token.symbol || token.mint.slice(0, 6);
+   362→            const src = sourceLabel(token.source);
+   363→
+   364→            // If this is an open trade, show P&L
+   365→            if (isOpenTrade) {
+   366→              const trade = openTrades.find(t => t.mint === token.mint)!;
+   367→              const marketData = await localApi.getMarketData(token.mint);
+   368→              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   369→              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   370→              const size = trade.positionSizeSol.toFixed(2);
+   371→              const color = pnl.pnlPercent >= 0 ? '\x1b[32m' : '\x1b[31m';
+   372→              const reset = '\x1b[0m';
+   373→              tradeResults.push(`[${src}]${sym} (${size}) ${color}${sign}${pnl.pnlPercent.toFixed(1)}%${reset}`);
+   374→
+   375→              // Check for exit signals
+   376→              if (result.action !== 'hold') {
+   377→                await trigger.trigger({
+   378→                  mint: token.mint,
+   379→                  symbol: trade.symbol,
+   380→                  action: result.action,
+   381→                  priceSol: marketData.price_sol,
+   382→                  priceUsd: marketData.price_usd,
+   383→                  ruleSetId: ruleSets[0].id,
+   384→                  signals: result.signals,
+   385→                  confidence: result.confidence,
+   386→                });
+   387→                await paperTracker.save();
+   388→              }
+   389→            } else {
+   390→              // Scan result (not an open trade)
+   391→              if (result.action === 'hold') {
+   392→                scanResults.push(`[${src}]${sym}:-`);
+   393→              } else {
+   394→                const marketData = await localApi.getMarketData(token.mint);
+   395→                const conf = (result.confidence * 100).toFixed(0);
+   396→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   397→                const reset = '\x1b[0m';
+   398→                scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   399→
+   400→                await trigger.trigger({
+   401→                  mint: token.mint,
+   402→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   403→                  action: result.action,
+   404→                  priceSol: marketData.price_sol,
+   405→                  priceUsd: marketData.price_usd,
+   406→                  ruleSetId: ruleSets[0].id,
+   407→                  signals: result.signals,
+   408→                  confidence: result.confidence,
+   409→                });
+   410→                await paperTracker.save();
+   411→              }
+   412→            }
+   413→          } catch {
+   414→            const sym = token.symbol || token.mint.slice(0, 6);
+   415→            const src = sourceLabel(token.source);
+   416→            if (isOpenTrade) {
+   417→              tradeResults.push(`[${src}]${sym}:ERR`);
+   418→            } else {
+   419→              scanResults.push(`[${src}]${sym}:ERR`);
+   420→            }
+   421→          }
+   422→        }
+   423→
+   424→        // Output
+   425→        let line = `[${time}] #${scanCount}`;
+   426→        if (scanResults.length > 0) line += `  |  Scan: ${scanResults.slice(0, 10).join(' ')}`;
+   427→        if (scanResults.length > 10) line += ` +${scanResults.length - 10}`;
+   428→        if (tradeResults.length > 0) line += `  |  Trades: ${tradeResults.join(' ')}`;
+   429→        if (scanResults.length === 0 && tradeResults.length === 0) line += '  (nothing to scan)';
+   430→        console.log(line);
+   431→      };
+   432→
+   433→      // Run immediately, then on interval
+   434→      await runLoop();
+   435→      setInterval(runLoop, config.pollIntervalMs);
+   436→      break;
+   437→    }
+   438→
+   439→    case 'status': {
+   440→      const openTrades = paperTracker.getOpenTrades();
+   441→      const stats = paperTracker.getStats();

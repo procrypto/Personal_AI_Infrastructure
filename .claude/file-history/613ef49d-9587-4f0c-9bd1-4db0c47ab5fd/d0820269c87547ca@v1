@@ -1,0 +1,366 @@
+/**
+ * Rule Dispatcher
+ *
+ * Mirrors LOIS dispatcher architecture. Responsibilities:
+ * 1. Maintain in-memory store of active rule intents
+ * 2. Receive market data updates
+ * 3. Evaluate rule triggers against market context
+ * 4. Emit evaluation requests when triggers fire
+ *
+ * This separates trigger evaluation (dispatcher) from execution (evaluator),
+ * matching the LOIS architecture for easy porting to Rust.
+ *
+ * Reference: pum3/lois/src/dispatcher/
+ */
+
+import type { TokenMarketData } from '../api/types.js';
+import type { Rule, AnyRuleConfig, Signal, AnalysisContext } from './types.js';
+import type {
+  RuleIntent,
+  RuleMarketContext,
+  TriggerEvaluationResult,
+  RuleEvaluationRequest,
+  RuleStateUpdate,
+} from './lois-types.js';
+import { toRuleMarketContext, toEvaluationRequest } from './lois-types.js';
+import { PriceChangeRule } from './price-change.js';
+import { VolumeSpikeRule } from './volume-spike.js';
+import { BuySellRatioRule } from './buy-sell-ratio.js';
+import { TraderCountRule } from './trader-count.js';
+
+// ============================================================================
+// Dispatcher Events (for observer pattern)
+// ============================================================================
+
+export type DispatcherEvent =
+  | { type: 'evaluation_request'; request: RuleEvaluationRequest }
+  | { type: 'state_update'; update: RuleStateUpdate }
+  | { type: 'intent_added'; intent: RuleIntent }
+  | { type: 'intent_removed'; intentId: string }
+  | { type: 'intent_triggered'; intentId: string };
+
+export type DispatcherEventHandler = (event: DispatcherEvent) => void | Promise<void>;
+
+// ============================================================================
+// Rule Dispatcher
+// ============================================================================
+
+export interface DispatcherConfig {
+  /** Enable/disable the dispatcher */
+  enabled: boolean;
+
+  /** Cooldown between triggers for same mint (ms) */
+  cooldownMs: number;
+
+  /** Maximum intents to track in memory */
+  maxIntents: number;
+}
+
+const DEFAULT_CONFIG: DispatcherConfig = {
+  enabled: true,
+  cooldownMs: 60000, // 1 minute
+  maxIntents: 1000,
+};
+
+export class RuleDispatcher {
+  private config: DispatcherConfig;
+  private intents: Map<string, RuleIntent> = new Map();
+  private intentsByMint: Map<string, Set<string>> = new Map();
+  private rules: Map<string, Rule> = new Map();
+  private lastTriggerTime: Map<string, number> = new Map();
+  private eventHandlers: Set<DispatcherEventHandler> = new Set();
+
+  constructor(config: Partial<DispatcherConfig> = {}) {
+    this.config = { ...DEFAULT_CONFIG, ...config };
+  }
+
+  // ==========================================================================
+  // Intent Management (mirrors LOIS storage layer)
+  // ==========================================================================
+
+  /**
+   * Add or update a rule intent
+   */
+  addIntent(intent: RuleIntent): void {
+    // Create rule instance from config
+    const rule = this.createRuleFromConfig(intent.ruleConfig);
+    if (!rule) {
+      console.warn(`Failed to create rule for intent ${intent.id}`);
+      return;
+    }
+
+    // Store intent and rule
+    this.intents.set(intent.id, intent);
+    this.rules.set(intent.id, rule);
+
+    // Index by mint for fast lookup
+    if (!this.intentsByMint.has(intent.mint)) {
+      this.intentsByMint.set(intent.mint, new Set());
+    }
+    this.intentsByMint.get(intent.mint)!.add(intent.id);
+
+    this.emit({ type: 'intent_added', intent });
+  }
+
+  /**
+   * Remove an intent
+   */
+  removeIntent(intentId: string): void {
+    const intent = this.intents.get(intentId);
+    if (!intent) return;
+
+    // Remove from mint index
+    const mintIntents = this.intentsByMint.get(intent.mint);
+    if (mintIntents) {
+      mintIntents.delete(intentId);
+      if (mintIntents.size === 0) {
+        this.intentsByMint.delete(intent.mint);
+      }
+    }
+
+    // Remove intent and rule
+    this.intents.delete(intentId);
+    this.rules.delete(intentId);
+
+    this.emit({ type: 'intent_removed', intentId });
+  }
+
+  /**
+   * Get all active intents
+   */
+  getIntents(): RuleIntent[] {
+    return Array.from(this.intents.values());
+  }
+
+  /**
+   * Get intents for a specific mint
+   */
+  getIntentsForMint(mint: string): RuleIntent[] {
+    const intentIds = this.intentsByMint.get(mint);
+    if (!intentIds) return [];
+    return Array.from(intentIds)
+      .map(id => this.intents.get(id))
+      .filter((i): i is RuleIntent => i !== undefined);
+  }
+
+  /**
+   * Clear all intents
+   */
+  clearIntents(): void {
+    this.intents.clear();
+    this.intentsByMint.clear();
+    this.rules.clear();
+  }
+
+  // ==========================================================================
+  // Market Data Processing (mirrors LOIS dispatcher dispatch loop)
+  // ==========================================================================
+
+  /**
+   * Process market data update for a single token.
+   * Called when new market data arrives (e.g., from WebSocket or polling).
+   */
+  onMarketData(token: TokenMarketData): TriggerEvaluationResult[] {
+    if (!this.config.enabled) return [];
+
+    const results: TriggerEvaluationResult[] = [];
+    const intentIds = this.intentsByMint.get(token.mint);
+    if (!intentIds || intentIds.size === 0) return results;
+
+    const context = toRuleMarketContext(token);
+
+    for (const intentId of intentIds) {
+      const result = this.evaluateIntent(intentId, context);
+      if (result.action !== 'no_action') {
+        results.push(result);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Process market data for multiple tokens (batch mode).
+   * More efficient when processing many tokens at once.
+   */
+  onMarketDataBatch(tokens: TokenMarketData[]): Map<string, TriggerEvaluationResult[]> {
+    const results = new Map<string, TriggerEvaluationResult[]>();
+
+    for (const token of tokens) {
+      const tokenResults = this.onMarketData(token);
+      if (tokenResults.length > 0) {
+        results.set(token.mint, tokenResults);
+      }
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // Trigger Evaluation (core dispatcher logic)
+  // ==========================================================================
+
+  /**
+   * Evaluate a single intent against market context.
+   * Returns the trigger evaluation result.
+   */
+  private evaluateIntent(intentId: string, context: RuleMarketContext): TriggerEvaluationResult {
+    const intent = this.intents.get(intentId);
+    const rule = this.rules.get(intentId);
+
+    if (!intent || !rule) {
+      return { action: 'no_action', reason: 'Intent or rule not found' };
+    }
+
+    // Check if intent is still active
+    if (intent.status !== 'active') {
+      return { action: 'no_action', reason: `Intent status: ${intent.status}` };
+    }
+
+    // Check cooldown
+    const lastTrigger = this.lastTriggerTime.get(intent.mint) ?? 0;
+    const elapsed = Date.now() - lastTrigger;
+    if (elapsed < this.config.cooldownMs) {
+      return { action: 'no_action', reason: `Cooldown: ${Math.ceil((this.config.cooldownMs - elapsed) / 1000)}s` };
+    }
+
+    // Create analysis context for rule
+    const analysisContext: AnalysisContext = {
+      token: this.contextToMarketData(context, intent.mint, intent.symbol),
+      ohlcv: context.ohlcv ?? [],
+      trades: context.recentTrades ?? [],
+    };
+
+    // Evaluate rule
+    const signal = rule.analyze(analysisContext);
+
+    if (!signal) {
+      return { action: 'no_action' };
+    }
+
+    // Determine direction from signal type
+    const direction = signal.type === 'buy' ? 'buy' : signal.type === 'sell' ? 'sell' : null;
+    if (!direction) {
+      return { action: 'no_action', reason: 'Alert signal, not actionable' };
+    }
+
+    // Create evaluation request and emit
+    const result: TriggerEvaluationResult = {
+      action: 'evaluate_for_swap',
+      direction,
+      confidence: signal.strength,
+      signal,
+    };
+
+    const request = toEvaluationRequest(intent, result, context);
+    this.emit({ type: 'evaluation_request', request });
+    this.emit({ type: 'intent_triggered', intentId: intent.id });
+
+    // Update cooldown
+    this.lastTriggerTime.set(intent.mint, Date.now());
+
+    return result;
+  }
+
+  // ==========================================================================
+  // Event Handling
+  // ==========================================================================
+
+  /**
+   * Subscribe to dispatcher events
+   */
+  on(handler: DispatcherEventHandler): () => void {
+    this.eventHandlers.add(handler);
+    return () => this.eventHandlers.delete(handler);
+  }
+
+  /**
+   * Emit an event to all handlers
+   */
+  private emit(event: DispatcherEvent): void {
+    for (const handler of this.eventHandlers) {
+      try {
+        handler(event);
+      } catch (error) {
+        console.error('Dispatcher event handler error:', error);
+      }
+    }
+  }
+
+  // ==========================================================================
+  // Helpers
+  // ==========================================================================
+
+  /**
+   * Create a Rule instance from config
+   */
+  private createRuleFromConfig(config: AnyRuleConfig): Rule | null {
+    switch (config.ruleType) {
+      case 'price_change':
+        return new PriceChangeRule(config);
+      case 'volume_spike':
+        return new VolumeSpikeRule(config);
+      case 'buy_sell_ratio':
+        return new BuySellRatioRule(config);
+      case 'trader_count':
+        return new TraderCountRule(config);
+      default:
+        console.warn(`Unknown rule type: ${(config as any).ruleType}`);
+        return null;
+    }
+  }
+
+  /**
+   * Convert RuleMarketContext back to TokenMarketData for rule analysis
+   */
+  private contextToMarketData(
+    context: RuleMarketContext,
+    mint: string,
+    symbol?: string
+  ): TokenMarketData {
+    return {
+      mint,
+      symbol: symbol ?? '',
+      name: '',
+      price_sol: context.priceSol,
+      price_usd: context.priceUsd,
+      market_cap_usd: context.usdMarketCap,
+      volume_24h_usd: context.volume24hUsd,
+      volume_change_5m: context.volumeChange5m,
+      volume_change_1h: context.volumeChange1h,
+      price_change_5m: context.priceChange5m,
+      price_change_1h: context.priceChange1h,
+      price_change_24h: context.priceChange24h,
+      buy_count_5m: context.buyCount5m,
+      sell_count_5m: context.sellCount5m,
+      buyers_5m: context.buyers5m,
+      sellers_5m: context.sellers5m,
+      liquidity_usd: context.liquidity,
+    };
+  }
+
+  /**
+   * Get dispatcher statistics
+   */
+  getStats(): {
+    intentCount: number;
+    mintCount: number;
+    ruleCount: number;
+    enabled: boolean;
+  } {
+    return {
+      intentCount: this.intents.size,
+      mintCount: this.intentsByMint.size,
+      ruleCount: this.rules.size,
+      enabled: this.config.enabled,
+    };
+  }
+}
+
+// ============================================================================
+// Factory
+// ============================================================================
+
+export function createDispatcher(config?: Partial<DispatcherConfig>): RuleDispatcher {
+  return new RuleDispatcher(config);
+}

@@ -1,0 +1,160 @@
+---
+phase: 03-ci-cd-pipeline
+plan: 01
+type: execute
+---
+
+<objective>
+Create GitHub Actions workflow for beta deployments on main branch push.
+
+Purpose: Automate beta deployments to bonkbotbeta GCP project when code merges to main.
+Output: Working deploy.yml that builds container and deploys to Cloud Run.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/02-containerization/02-01-SUMMARY.md
+
+# Key source files:
+@Dockerfile
+@src/config.ts
+
+**Established patterns from prior phases:**
+- APP_ENV env var for environment detection
+- CLICKHOUSE_* vars for beta/prod (injected via Secret Manager)
+- PORT=8080 default for Cloud Run
+- Multi-stage Dockerfile with oven/bun:1-slim runtime
+
+**Deployment architecture (from PROJECT.md):**
+- Beta trigger: Push to `main` branch
+- GCP Project: bonkbotbeta
+- Container: GCP Artifact Registry
+- Runtime: GCP Cloud Run
+- Auth: Workload Identity Federation (no service account keys)
+
+**Files to create:**
+- `.github/workflows/deploy.yml`
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create workflows directory and beta deploy.yml</name>
+  <files>.github/workflows/deploy.yml</files>
+  <action>Create GitHub Actions workflow for beta deployment:
+
+**Workflow structure:**
+```yaml
+name: Deploy to Beta
+on:
+  push:
+    branches: [main]
+
+env:
+  PROJECT_ID: bonkbotbeta
+  REGION: us-central1
+  SERVICE: trenchbench-api
+  REPOSITORY: trenchbench-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for WIF
+
+    steps:
+      - Checkout code
+      - Authenticate to GCP (Workload Identity Federation)
+      - Configure Docker for Artifact Registry
+      - Build and push container image
+      - Deploy to Cloud Run with environment variables
+```
+
+**Key configuration:**
+- Use `google-github-actions/auth@v2` with WIF (workload_identity_provider + service_account)
+- Use `google-github-actions/deploy-cloudrun@v2` for deployment
+- Set APP_ENV=beta via Cloud Run env vars
+- Reference secrets from Secret Manager for CLICKHOUSE_* vars
+- Tag images with commit SHA for traceability
+
+**Important:** Use placeholder values for WIF provider and service account that user will fill in:
+- workload_identity_provider: `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID`
+- service_account: `SERVICE_ACCOUNT@PROJECT_ID.iam.gserviceaccount.com`
+
+Add TODO comments where user needs to configure actual values.</action>
+  <verify>cat .github/workflows/deploy.yml shows valid YAML with all required steps</verify>
+  <done>deploy.yml created with beta deployment workflow, WIF auth, and Cloud Run deployment</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Validate workflow syntax</name>
+  <files>N/A</files>
+  <action>Validate the workflow file:
+
+1. Check YAML syntax is valid
+2. Verify all required fields are present
+3. Ensure permissions block includes id-token: write for WIF
+4. Confirm environment variables are properly configured
+
+Use `yq` or manual review to validate structure.</action>
+  <verify>YAML parses without errors, all required GitHub Actions fields present</verify>
+  <done>Workflow syntax validated, ready for actual deployment testing</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] .github/workflows/deploy.yml exists
+- [ ] Workflow triggers on push to main
+- [ ] Uses Workload Identity Federation (not service account keys)
+- [ ] Builds and pushes to Artifact Registry
+- [ ] Deploys to Cloud Run with APP_ENV=beta
+- [ ] Has TODO comments for user-specific configuration
+</verification>
+
+<success_criteria>
+- deploy.yml created with complete workflow structure
+- WIF authentication configured (with placeholders for actual values)
+- Cloud Run deployment action configured
+- Environment variables set for beta environment
+- YAML syntax valid
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-ci-cd-pipeline/03-01-SUMMARY.md`:
+
+# Phase 3 Plan 1: Beta Deployment Workflow Summary
+
+**[One-liner describing the workflow created]**
+
+## Accomplishments
+- Created GitHub Actions workflow for beta deployments
+- Configured WIF authentication pattern
+- Set up Artifact Registry and Cloud Run deployment
+
+## Files Created/Modified
+- `.github/workflows/deploy.yml` - Beta deployment workflow
+
+## Decisions Made
+[Key configuration choices]
+
+## Configuration Required
+[List of TODOs user needs to fill in]
+
+## Issues Encountered
+[Any issues]
+
+## Next Step
+Ready for 03-02-PLAN.md (Production deployment workflow)
+</output>

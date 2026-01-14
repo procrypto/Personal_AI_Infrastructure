@@ -1,0 +1,343 @@
+     1→// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+     2→// © SimpleCryptoLife
+     3→// Refactored to Pine Script v5 with modern best practices
+     4→// Version: 5.1.0 - Added Multi-Timeframe Support
+     5→//@version=5
+     6→
+     7→// ============================== ABOUT THIS SCRIPT ==================================
+     8→
+     9→// == Description ==
+    10→// This indicator finds all Williams high and low fractals and marks them on the chart.
+    11→// You can configure how many bars backwards and forwards should be counted in order to confirm a fractal.
+    12→// You can select which timeframe to use for fractal detection (chart timeframe or higher timeframe).
+    13→// You can also plot a stop line that trails the fractals up and down.
+    14→// You can choose whether the trail flips long-short based on the price being exceeded within a candle or on candle close.
+    15→// Includes alerts for crossing the long and short trailing stops.
+    16→// This indicator displays over the main chart.
+    17→
+    18→// == Usage ==
+    19→// Works on all markets and timeframes, but it doesn't make much sense on really small timeframes or on assets with very low prices for their denominations (like very low-sat cryptos).
+    20→// Set the Fractal Timeframe to a higher timeframe (e.g., 1H on a 15min chart) to see major structure while trading on lower timeframes.
+    21→// Leave Fractal Timeframe empty to use the chart's current timeframe (default behavior from v5.0.0).
+    22→// This indicator is not intended to be used to generate entries and exits on its own. It can quickly show approximate market structure.
+    23→// For example, if you want to go long, but price hasn't broken the short trail yet, it's a reminder to be aware that price is yet to make a higher high.
+    24→
+    25→// == Alerts==
+    26→// Crossed Williams Long Stop: Alerts when the selected price source exceeds an active long trail
+    27→// Crossed Williams Short Stop: Alerts when the selected price source exceeds an active short trail
+    28→
+    29→// == Repainting ==
+    30→// Williams fractals can only be confirmed a number of bars after they form. So this indicator must repaint in the sense of going back to mark them once they're confirmed.
+    31→// After a fractal has been confirmed and marked, nothing is altered in that bar or any of the previous bars.
+    32→
+    33→// == Credits ==
+    34→// Thanks to reading the highest()/lowest() function replacement script by the brilliant Ricardo Santos I finally understood why mine wasn't working.
+    35→// Refactored to v5 by Claude/Anthropic.
+    36→
+    37→// == Disclaimer ==
+    38→// You retain full responsibility for your trading at all times. Before trading with actual money, first make sure your risk management is professional-level.
+    39→
+    40→indicator(title="P: Williams Fractal Trailing Stops", shorttitle="P: W Trail", overlay=true)
+    41→
+    42→// ============================== INPUTS ==================================
+    43→
+    44→// Display Settings
+    45→bool showFractals = input.bool(true, "Show All Williams Fractals", group="Display", 
+    46→  tooltip="Displays little triangles above/below each Williams fractal")
+    47→bool showTrails = input.bool(true, "Show Williams Trailing Stop", group="Display",
+    48→  tooltip="Displays a trailing stop based on the most recent fractal")
+    49→bool showPriceLabel = input.bool(true, "Show Current Price of Williams Trailing Stop", group="Display",
+    50→  tooltip="Displays a price label for the current active stop")
+    51→
+    52→// Fractal Settings
+    53→string fractalTimeframe = input.timeframe("", "Fractal Timeframe", group="Fractal Settings",
+    54→  tooltip="Timeframe to use for fractal detection. Leave empty to use chart timeframe. Higher timeframes will show fewer, more significant fractals.")
+    55→int leftRange = input.int(2, "Williams Fractal Range Back", minval=1, maxval=50, group="Fractal Settings",
+    56→  tooltip="How many bars back to measure for the range. Traditionally, two bars back and two bars forward are used.")
+    57→int rightRange = input.int(2, "Williams Fractal Range Forwards", minval=1, maxval=50, group="Fractal Settings",
+    58→  tooltip="How many bars forwards to measure for the range. Traditionally, an equal number of bars two bars back and two bars forward are used.")
+    59→
+    60→// Advanced Settings
+    61→float bufferPercent = input.float(0, "Buffer for Williams Stops %", minval=0, maxval=20, step=0.5, group="Advanced",
+    62→  tooltip="Adds a buffer between the actual fractal price and the trail, as a percentage of the fractal price")
+    63→string flipOn = input.string("Close", "Flip Trail on:", options=["Close", "Wick"], group="Advanced",
+    64→  tooltip="Defines which measurement of the candle (high/low, or close) must exceed the trail for it to flip.")
+    65→
+    66→// ============================== USER-DEFINED TYPES ==================================
+    67→
+    68→// Type to hold fractal data
+    69→type Fractal
+    70→    bool isConfirmed
+    71→    float price
+    72→
+    73→// Type to hold trailing stop state
+    74→type TrailState
+    75→    float longTrail
+    76→    float shortTrail
+    77→    float longPlot
+    78→    float shortPlot
+    79→    bool isLong
+    80→    bool isShort
+    81→
+    82→// ============================== UTILITY FUNCTIONS ==================================
+    83→
+    84→// @function Adds or subtracts a percentage buffer to a price
+    85→// @param price The base price
+    86→// @param buffer The percentage buffer to add/subtract
+    87→// @param direction "plus" to add, "minus" to subtract
+    88→// @returns The adjusted price
+    89→addBuffer(float price, float buffer, string direction) =>
+    90→    direction == "plus" ? price * (1 + buffer / 100) : 
+    91→      direction == "minus" ? price * (1 - buffer / 100) : na
+    92→
+    93→// @function Persists a value when triggered and resets to new value on next trigger
+    94→// @param trigger Boolean that triggers value capture
+    95→// @param source The value to capture
+    96→// @returns The persisted value
+    97→persistAndReset(bool trigger, float source) =>
+    98→    var float output = na
+    99→    output := trigger ? source : output
+   100→
+   101→// @function Trails a value up or down
+   102→// @param source The source value to trail
+   103→// @param trail The current trail value
+   104→// @param direction "up" to trail upwards, "down" to trail downwards
+   105→// @returns The trailed value
+   106→trail(float source, float trail, string direction) =>
+   107→    direction == "down" and source >= trail ? trail : 
+   108→      direction == "up" and source <= trail ? trail : source
+   109→
+   110→// ============================== FRACTAL DETECTION ==================================
+   111→
+   112→// Determine which timeframe to use (chart timeframe if empty string)
+   113→string useTimeframe = fractalTimeframe == "" ? timeframe.period : fractalTimeframe
+   114→
+   115→// @function Checks if a Williams Fractal has formed
+   116→// @param leftBars Number of bars to check backwards
+   117→// @param rightBars Number of bars to check forwards
+   118→// @param type "high" or "low" to check for fractal high or low
+   119→// @returns Tuple of [isConfirmed, price, fractalTime]
+   120→detectFractal(int leftBars, int rightBars, string type) =>
+   121→    totalBars = leftBars + rightBars + 1
+   122→    highestValue = ta.highest(high, totalBars)
+   123→    lowestValue = ta.lowest(low, totalBars)
+   124→    
+   125→    bool isFractal = type == "high" ? 
+   126→      high[rightBars] >= highestValue :
+   127→      low[rightBars] <= lowestValue
+   128→    
+   129→    float price = na
+   130→    int fractalTime = na
+   131→    if isFractal
+   132→        price := type == "high" ? high[rightBars] : low[rightBars]
+   133→        fractalTime := time[rightBars]  // Timestamp of the fractal bar
+   134→    
+   135→    [isFractal, price, fractalTime]
+   136→
+   137→// Detect fractals on the selected timeframe
+   138→[isHigh, highPrice, highTime] = request.security(syminfo.tickerid, useTimeframe, 
+   139→  detectFractal(leftRange, rightRange, "high"), gaps=barmerge.gaps_on)
+   140→[isLow, lowPrice, lowTime] = request.security(syminfo.tickerid, useTimeframe, 
+   141→  detectFractal(leftRange, rightRange, "low"), gaps=barmerge.gaps_on)
+   142→
+   143→// Suppress consecutive fractals at same level (edge case handling)
+   144→isHigh := isHigh[1] ? false : isHigh
+   145→isLow := isLow[1] ? false : isLow
+   146→
+   147→// Create Fractal objects
+   148→fractalHigh = Fractal.new(isHigh, highPrice)
+   149→fractalLow = Fractal.new(isLow, lowPrice)
+   150→
+   151→// ============================== PLOT FRACTALS ==================================
+   152→
+   153→// Plot fractal markers
+   154→// For chart timeframe: use plotshape with offset
+   155→// For MTF: use labels at the correct timestamps
+   156→
+   157→bool isChartTF = useTimeframe == timeframe.period
+   158→
+   159→// Chart timeframe fractals with plotshape (offset works here)
+   160→plotshape(isChartTF and fractalHigh.isConfirmed and showFractals, "Williams High", 
+   161→  shape.triangledown, location.abovebar, color.new(color.white, 10), size=size.tiny, offset=-rightRange)
+   162→plotshape(isChartTF and fractalLow.isConfirmed and showFractals, "Williams Low", 
+   163→  shape.triangleup, location.belowbar, color.new(color.white, 10), size=size.tiny, offset=-rightRange)
+   164→
+   165→// MTF fractals with labels (placed at fractal timestamp)
+   166→if not isChartTF and fractalHigh.isConfirmed and showFractals and not na(highTime) and time == highTime
+   167→    label.new(bar_index, high, "▼", color=color.new(color.white, 100), 
+   168→      textcolor=color.new(color.white, 10), style=label.style_label_down, 
+   169→      size=size.small, yloc=yloc.abovebar)
+   170→
+   171→if not isChartTF and fractalLow.isConfirmed and showFractals and not na(lowTime) and time == lowTime
+   172→    label.new(bar_index, low, "▲", color=color.new(color.white, 100), 
+   173→      textcolor=color.new(color.white, 10), style=label.style_label_up, 
+   174→      size=size.small, yloc=yloc.belowbar)
+   175→
+   176→// ============================== TRAILING STOPS ==================================
+   177→
+   178→// @function Gets the price to reset long trail to when flipping
+   179→// @param buffer The buffer percentage
+   180→// @param isLow Boolean indicating if a low fractal was confirmed
+   181→// @param rightBars The right range for fractal confirmation
+   182→// @returns The adjusted reset price
+   183→getFlipResetLong(float buffer, bool isLow, int rightBars) =>
+   184→    lastFractalBar = ta.valuewhen(isLow, bar_index, 0)
+   185→    // Handle case where no fractal has been confirmed yet
+   186→    barsSinceLastFractal = na(lastFractalBar) ? bar_index : bar_index - lastFractalBar
+   187→    barsToGoBack = barsSinceLastFractal + rightBars
+   188→    // Ensure we have at least 1 bar to look back
+   189→    lookbackPeriod = math.max(1, barsToGoBack + 1)
+   190→    lowestLow = ta.lowest(low, lookbackPeriod)
+   191→    lowestLow * (1 - buffer / 100)
+   192→
+   193→// @function Gets the price to reset short trail to when flipping
+   194→// @param buffer The buffer percentage
+   195→// @param isHigh Boolean indicating if a high fractal was confirmed
+   196→// @param rightBars The right range for fractal confirmation
+   197→// @returns The adjusted reset price
+   198→getFlipResetShort(float buffer, bool isHigh, int rightBars) =>
+   199→    lastFractalBar = ta.valuewhen(isHigh, bar_index, 0)
+   200→    // Handle case where no fractal has been confirmed yet
+   201→    barsSinceLastFractal = na(lastFractalBar) ? bar_index : bar_index - lastFractalBar
+   202→    barsToGoBack = barsSinceLastFractal + rightBars
+   203→    // Ensure we have at least 1 bar to look back
+   204→    lookbackPeriod = math.max(1, barsToGoBack + 1)
+   205→    highestHigh = ta.highest(high, lookbackPeriod)
+   206→    highestHigh * (1 + buffer / 100)
+   207→
+   208→// Apply buffer to fractal prices
+   209→lowPriceBuffered = addBuffer(fractalLow.price, bufferPercent, "minus")
+   210→highPriceBuffered = addBuffer(fractalHigh.price, bufferPercent, "plus")
+   211→
+   212→// Persist stop prices and update on new fractals
+   213→longStopPrice = persistAndReset(fractalLow.isConfirmed, lowPriceBuffered)
+   214→shortStopPrice = persistAndReset(fractalHigh.isConfirmed, highPriceBuffered)
+   215→
+   216→// Initialize trailing stop variables
+   217→var float longTrail = longStopPrice
+   218→var float shortTrail = shortStopPrice
+   219→
+   220→// Trail the stops
+   221→longTrail := trail(longStopPrice, longTrail, "up")
+   222→shortTrail := trail(shortStopPrice, shortTrail, "down")
+   223→
+   224→// @function Manages trail flipping between long and short
+   225→// @param flipInput How to determine flip ("Close" or "Wick")
+   226→// @param longTrailValue Current long trail value
+   227→// @param shortTrailValue Current short trail value
+   228→// @param longReset Value to reset long trail to
+   229→// @param shortReset Value to reset short trail to
+   230→// @returns TrailState object with all trail information
+   231→flipTrails(string flipInput, float longTrailValue, float shortTrailValue, float longReset, float shortReset) =>
+   232→    // Initialize state variables
+   233→    var bool flipLongNow = false
+   234→    var bool flipShortNow = false
+   235→    var bool isLong = true
+   236→    var bool isShort = true
+   237→    
+   238→    // Determine flip sources based on input
+   239→    float flipLongSource = flipInput == "Close" ? close : high
+   240→    float flipShortSource = flipInput == "Close" ? close : low
+   241→    
+   242→    // Check if flipping this bar
+   243→    flipLongNow := isShort and flipLongSource > shortTrailValue
+   244→    flipShortNow := isLong and flipShortSource < longTrailValue
+   245→    
+   246→    // Handle edge case where both conditions are met (use close as tiebreaker)
+   247→    if flipLongNow and flipShortNow
+   248→        flipLongNow := close > longTrailValue
+   249→        flipShortNow := close < shortTrailValue
+   250→    
+   251→    // Update state
+   252→    isLong := flipLongNow ? true : flipShortNow ? false : isLong
+   253→    isShort := flipShortNow ? true : flipLongNow ? false : isShort
+   254→    
+   255→    // Update trail values (reset when flipping)
+   256→    longTrailOutput = longTrailValue
+   257→    shortTrailOutput = shortTrailValue
+   258→    
+   259→    if isLong and not isLong[1]
+   260→        longTrailOutput := longReset
+   261→    if isShort and not isShort[1]
+   262→        shortTrailOutput := shortReset
+   263→    
+   264→    // Determine what to plot (hide inactive trail)
+   265→    longPlot = isLong ? longTrailOutput : na
+   266→    shortPlot = isShort ? shortTrailOutput : na
+   267→    
+   268→    // Return state object
+   269→    TrailState.new(longTrailOutput, shortTrailOutput, longPlot, shortPlot, isLong, isShort)
+   270→
+   271→// Get reset values for trails
+   272→longReset = getFlipResetLong(bufferPercent, fractalLow.isConfirmed, rightRange)
+   273→shortReset = getFlipResetShort(bufferPercent, fractalHigh.isConfirmed, rightRange)
+   274→
+   275→// Get trail state
+   276→trailState = flipTrails(flipOn, longTrail, shortTrail, longReset, shortReset)
+   277→
+   278→// Update global trail variables
+   279→longTrail := trailState.longTrail
+   280→shortTrail := trailState.shortTrail
+   281→
+   282→// Prepare plots (hide if user disabled)
+   283→longPlot = showTrails ? trailState.longPlot : na
+   284→shortPlot = showTrails ? trailState.shortPlot : na
+   285→
+   286→// Plot the trailing stops with thicker semi-transparent line and thin highlight
+   287→plot(shortPlot, "Williams Short Stop", color.new(color.yellow, 50), 3, plot.style_linebr)
+   288→plot(shortPlot, "Williams Short Stop Highlight", color.yellow, 1, plot.style_linebr)
+   289→plot(longPlot, "Williams Long Stop", color.new(color.orange, 50), 3, plot.style_linebr)
+   290→plot(longPlot, "Williams Long Stop Highlight", color.orange, 1, plot.style_linebr)
+   291→
+   292→// ============================== PRICE LABELS ==================================
+   293→
+   294→// Display current stop price labels
+   295→var label longLabel = na
+   296→var label shortLabel = na
+   297→
+   298→// Show long label only when long trail is active
+   299→if showPriceLabel and not na(longPlot)
+   300→    label.delete(longLabel)
+   301→    longLabel := label.new(x=bar_index, y=na, text='Long stop price: \n' + str.tostring(longPlot), 
+   302→      color=color.gray, textcolor=color.white, style=label.style_label_up, yloc=yloc.belowbar)
+   303→else if na(longPlot)
+   304→    // Delete long label when trail becomes inactive
+   305→    label.delete(longLabel)
+   306→    longLabel := na
+   307→
+   308→// Show short label only when short trail is active
+   309→if showPriceLabel and not na(shortPlot)
+   310→    label.delete(shortLabel)
+   311→    shortLabel := label.new(x=bar_index, y=na, text='Short stop price: \n' + str.tostring(shortPlot), 
+   312→      color=color.gray, textcolor=color.white, style=label.style_label_down, yloc=yloc.abovebar)
+   313→else if na(shortPlot)
+   314→    // Delete short label when trail becomes inactive
+   315→    label.delete(shortLabel)
+   316→    shortLabel := na
+   317→
+   318→// ============================== ALERTS ==================================
+   319→
+   320→// Detect trail crossings
+   321→crossedLongStop = na(longPlot) and not na(longPlot[1])
+   322→crossedShortStop = na(shortPlot) and not na(shortPlot[1])
+   323→
+   324→// Alert conditions
+   325→alertcondition(crossedLongStop, "Crossed Williams Long Stop", 
+   326→  "Alert from Williams Fractal Trailing Stops: \n {{ticker}} price crossed long stop")
+   327→alertcondition(crossedShortStop, "Crossed Williams Short Stop", 
+   328→  "Alert from Williams Fractal Trailing Stops: \n {{ticker}} price crossed short stop")
+   329→alertcondition(fractalHigh.isConfirmed, "High Printed", 
+   330→  "Alert from Williams Fractal Trailing Stops: \n {{ticker}} Williams High has been confirmed")
+   331→alertcondition(fractalLow.isConfirmed, "Low Printed", 
+   332→  "Alert from Williams Fractal Trailing Stops: \n {{ticker}} Williams Low has been confirmed")
+   333→
+   334→// ================================ //
+   335→//                                  //
+   336→//   (╯°□°）╯︵ sʞloɟ `llɐ s,ʇɐɥ┴   //
+   337→//                                  //
+   338→// ================================ //
+   339→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

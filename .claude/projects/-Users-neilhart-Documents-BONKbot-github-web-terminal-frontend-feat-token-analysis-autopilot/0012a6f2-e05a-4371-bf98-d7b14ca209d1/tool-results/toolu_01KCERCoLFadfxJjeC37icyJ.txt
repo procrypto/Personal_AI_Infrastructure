@@ -1,0 +1,64 @@
+   500→            break;
+   501→          case 'get_strategies':
+   502→            // Just broadcast strategies
+   503→            break;
+   504→          case 'toggle_strategy': {
+   505→            const strategyId = cmd.strategyId;
+   506→            const enable = cmd.enabled;
+   507→            if (enable) {
+   508→              // Add strategy from templates
+   509→              const template = getTemplate(strategyId);
+   510→              if (template) {
+   511→                configStore.addRuleSet(template);
+   512→                await configStore.save();
+   513→                // Reload rules in engine
+   514→                engine.clearRules();
+   515→                for (const ruleSet of configStore.getRuleSets()) {
+   516→                  engine.addRulesFromConfig(ruleSet.rules);
+   517→                }
+   518→                console.log(`[WS] Strategy enabled: ${template.name}`);
+   519→              }
+   520→            } else {
+   521→              // Remove strategy
+   522→              if (configStore.removeRuleSet(strategyId)) {
+   523→                await configStore.save();
+   524→                // Reload rules in engine
+   525→                engine.clearRules();
+   526→                for (const ruleSet of configStore.getRuleSets()) {
+   527→                  engine.addRulesFromConfig(ruleSet.rules);
+   528→                }
+   529→                console.log(`[WS] Strategy disabled: ${strategyId}`);
+   530→              }
+   531→            }
+   532→            break;
+   533→          }
+   534→        }
+   535→        // Always broadcast updated config and strategies after any command
+   536→        wsServer.broadcastConfig(getCurrentConfig());
+   537→        wsServer.broadcastStrategies(getStrategiesData());
+   538→      });
+   539→
+   540→      // Send initial state to newly connected clients
+   541→      wsServer.onConnect(() => {
+   542→        wsServer.broadcastConfig(getCurrentConfig());
+   543→        const strategiesData = getStrategiesData();
+   544→        console.log(`[WS] Sending initial state: ${strategiesData.available.length} strategies available, ${strategiesData.active.length} active`);
+   545→        wsServer.broadcastStrategies(strategiesData);
+   546→      });
+   547→
+   548→      console.log('Starting analysis loop... (Ctrl+C to stop)');
+   549→      console.log(`  Watchlist: ${watchlist.length} | Trending: ${autoSourceCounts.trending} | Whales: ${autoSourceCounts.whales}`);
+   550→      console.log(`  Open trades: ${openCount} | Rules: ${ruleSets.length} sets | Mode: ${config.trigger.mode}`);
+   551→      console.log(`  Market Filter: ${mfStatus} (skip@${config.marketFilter.skipEntriesThreshold}% exit@${config.marketFilter.exitAllThreshold}%)`);
+   552→      console.log(`  Scan interval: ${config.pollIntervalMs}ms | Source refresh: ${config.autoSources.refreshIntervalMs / 1000}s`);
+   553→      console.log(`  WebSocket: ws://localhost:8765\n`);
+   554→
+   555→      const engine = new RuleEngine({ api: localApi });
+   556→      for (const ruleSet of ruleSets) {
+   557→        engine.addRulesFromConfig(ruleSet.rules);
+   558→      }
+   559→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

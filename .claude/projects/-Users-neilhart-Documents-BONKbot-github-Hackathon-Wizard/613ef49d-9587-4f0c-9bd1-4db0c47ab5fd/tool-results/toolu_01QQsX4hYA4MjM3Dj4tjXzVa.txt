@@ -1,0 +1,42 @@
+     1→import { DiscoveryTrendingListTokenDataMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+     2→import { discoveryWebsocket } from "./discoveryWebsocketInstance";
+     3→
+     4→export async function connectDiscoveryWebsocket() {
+     5→  try {
+     6→    await discoveryWebsocket.connect();
+     7→    await discoveryWebsocket.ready();
+     8→    const cleanup = discoveryWebsocket.subscribeToData(
+     9→      (data: DiscoveryTrendingListTokenDataMessage) => {
+    10→        if (data && typeof data === "object" && "pong" in data) {
+    11→          return;
+    12→        }
+    13→
+    14→        const store = discoveryWebsocket.store.getState();
+    15→
+    16→        if (data.remove_mints?.length) {
+    17→          data.remove_mints.forEach(mint => {
+    18→            store.websocketMessages.discovery_trending_list.removeItem(mint);
+    19→          });
+    20→        }
+    21→
+    22→        if (data.mint) {
+    23→          const { remove_mints: _rm, ...item } = data;
+    24→          store.websocketMessages.discovery_trending_list.addItem(item);
+    25→        }
+    26→      }
+    27→    );
+    28→
+    29→    return () => {
+    30→      cleanup?.();
+    31→      discoveryWebsocket.disconnect();
+    32→    };
+    33→  } catch (error) {
+    34→    console.error(`[connectDiscoveryWebsocket] Error connecting:`, error);
+    35→    throw error;
+    36→  }
+    37→}
+    38→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

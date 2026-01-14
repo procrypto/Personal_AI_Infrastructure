@@ -1,0 +1,222 @@
+---
+phase: 10-data-flow-fixes
+plan: 01
+type: execute
+---
+
+<objective>
+Fix token prices, stats P&L, and market status using hybrid NATS approach.
+
+Purpose: Make autopilot widget display live, accurate data by enriching backend data with NATS market prices.
+Output: Token list shows live price changes, stats panel shows accurate total P&L, market status shows SOL price movement.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Phase 9 investigation findings:
+@.planning/phases/09-data-flow-investigation/09-01-SUMMARY.md
+@.planning/phases/09-data-flow-investigation/09-INVESTIGATION.md
+
+# Existing patterns to follow:
+@apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+
+**Architecture Decision (from Phase 9):**
+- Frontend enriches display data with NATS (token prices, SOL price)
+- CLI backend keeps signal generation unchanged
+- Follows existing pattern: positions already use NATS for live P&L
+
+**Key Existing Patterns:**
+- `useAutopilotSubscription`: Subscribes to NATS market_data for position mints
+- `useAutopilotPositions`: Combines position entries with NATS prices for P&L
+- `marketDataMap`: Access via `state.websocketMessages.market_data.data`
+- `solanaPrice.usd`: SOL price already tracked via `SolPriceTopic`
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Extend NATS subscriptions for tokenList mints</name>
+  <files>apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts, apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts</files>
+  <action>
+1. Modify `useAutopilotSubscription` to also subscribe to NATS market_data for tokenList mints:
+   - Get tokenList from store: `state.autopilot.tokenList`
+   - Extract unique mints from all token lists (watchlist, trending, whales)
+   - Combine with positionMints for subscription set
+   - Use separate subscriber ID: "autopilot-tokens"
+   - Handle add/remove for tokenList changes like existing position logic
+
+2. Create new `useAutopilotTokensWithPrices` hook (follow `useAutopilotPositions` pattern):
+   - Get tokenList from store
+   - Get marketDataMap for prices
+   - Merge price data into tokens: `priceUsd`, `change1h` (calculate from trading_stats_1h.earliest_price_sol)
+   - Return enriched token lists with live prices
+
+Avoid: Don't create a new store slice - use existing marketDataMap. Don't duplicate subscription logic - extend existing hook.
+  </action>
+  <verify>
+1. Start dev server with autopilot backend running
+2. Open autopilot widget
+3. Check browser console for NATS subscription messages
+4. Verify tokenList mints appear in subscriptions (not just position mints)
+  </verify>
+  <done>
+- useAutopilotSubscription subscribes to both position AND tokenList mints
+- useAutopilotTokensWithPrices returns token lists with enriched price data
+- Token list in widget shows non-zero price changes (when market data available)
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Calculate derived totalPnlSol from positions</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts</files>
+  <action>
+Modify `useAutopilotData` to compute `totalPnlSol` from positions instead of using backend stats:
+
+1. After getting positions from `useAutopilotPositions()`, calculate total P&L:
+   ```typescript
+   const derivedTotalPnlSol = useMemo(() => {
+     return positions.reduce((sum, pos) => sum + (pos.pnlSol ?? 0), 0);
+   }, [positions]);
+   ```
+
+2. Return modified stats object that uses derived value:
+   ```typescript
+   derivedStats: {
+     ...stats,
+     totalPnlSol: derivedTotalPnlSol,
+   }
+   ```
+
+3. Update return value to include `derivedStats` (keep original `stats` for reference if needed)
+
+Keep other stats from CLI (winRate, avgPnlPercent, closedTrades) - those are based on completed trades, not open positions.
+
+Avoid: Don't modify the store - this is a computed/derived value in the hook. Don't recalculate on every render - use useMemo.
+  </action>
+  <verify>
+1. With autopilot running and positions open
+2. Check that stats panel totalPnlSol updates when position prices change
+3. Compare: sum of individual position P&L values should equal totalPnlSol
+  </verify>
+  <done>
+- `useAutopilotData` returns `derivedStats` with computed `totalPnlSol`
+- Stats panel P&L updates in real-time when position prices change
+- Other stats (winRate, closedTrades, etc.) still come from backend
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Track SOL price change for market status</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts</files>
+  <action>
+Add SOL price change tracking to `useAutopilotData`:
+
+1. Get SOL price from existing store: `state.solanaPrice.usd`
+
+2. Track initial price on first non-null value (using useRef):
+   ```typescript
+   const initialSolPriceRef = useRef<number | null>(null);
+
+   useEffect(() => {
+     if (solPriceUsd && initialSolPriceRef.current === null) {
+       initialSolPriceRef.current = solPriceUsd;
+     }
+   }, [solPriceUsd]);
+   ```
+
+3. Calculate percentage change:
+   ```typescript
+   const solPriceChangePercent = useMemo(() => {
+     if (!solPriceUsd || !initialSolPriceRef.current) return 0;
+     return ((solPriceUsd - initialSolPriceRef.current) / initialSolPriceRef.current) * 100;
+   }, [solPriceUsd]);
+   ```
+
+4. Return derived market status:
+   ```typescript
+   derivedMarketStatus: {
+     ...marketStatus,
+     solPriceChangePercent,
+   }
+   ```
+
+Note: This shows "change since widget opened" not "24h change". True 24h change would require historical price data from backend, which is out of scope for this fix.
+
+Avoid: Don't modify the store - this is a derived value. Don't reset the ref on reconnect unless intentional.
+  </action>
+  <verify>
+1. Start dev server, watch SOL price in widget market status
+2. Initially shows 0.00% (no change yet)
+3. As SOL price moves, percentage updates (may take several minutes for visible change)
+4. Can verify logic by temporarily modifying initial price calculation
+  </verify>
+  <done>
+- Market status shows live SOL price change percentage
+- Percentage updates as SOL price changes
+- No console errors related to price calculation
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `bun run typecheck` passes in apps/web-terminal
+- [ ] `bun run test` passes (no regressions in existing tests)
+- [ ] Token list shows live price changes (not all 0.0%)
+- [ ] Stats panel totalPnlSol matches sum of position P&L values
+- [ ] Market status SOL% updates over time (not stuck at 0.00%)
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- Three display issues fixed:
+  1. Token stats show live price changes from NATS
+  2. Stats P&L computed from positions (real-time updates)
+  3. Market status shows SOL price movement
+- No TypeScript errors
+- No regressions in existing functionality
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/10-data-flow-fixes/10-01-SUMMARY.md`:
+
+# Phase 10 Plan 01: Data Flow Fixes Summary
+
+**[Substantive one-liner]**
+
+## Accomplishments
+
+- [Key outcome 1]
+- [Key outcome 2]
+
+## Files Created/Modified
+
+- `path/to/file.ts` - Description
+- `path/to/another.ts` - Description
+
+## Decisions Made
+
+[Key decisions and rationale, or "None"]
+
+## Issues Encountered
+
+[Problems and resolutions, or "None"]
+
+## Next Step
+
+Ready for Phase 11: Design System Alignment
+</output>

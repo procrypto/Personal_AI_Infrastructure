@@ -1,0 +1,110 @@
+     1→---
+     2→phase: 24-data-feed-implementation
+     3→plan: 01
+     4→subsystem: websocket
+     5→tags: [websocket, nats, data-feed, cvd, market-data]
+     6→
+     7→# Dependency graph
+     8→requires:
+     9→  - phase: 23-websocket-client-refactor
+    10→    provides: AutopilotWebsocket with sendFeed method
+    11→provides:
+    12→  - Data feed types matching backend protocol
+    13→  - Feed adapter functions for NATS → backend conversion
+    14→  - Automatic data forwarding hook for market data and CVD
+    15→affects: [25-cli-nats-removal, 26-signal-optimization]
+    16→
+    17→# Tech tracking
+    18→tech-stack:
+    19→  added: []
+    20→  patterns: [feed-adapter-pattern, store-subscription-forwarding]
+    21→
+    22→key-files:
+    23→  created:
+    24→    - apps/web-terminal/src/websocket/autopilot/feedAdapters.ts
+    25→    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts
+    26→  modified:
+    27→    - apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts
+    28→    - apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+    29→
+    30→key-decisions:
+    31→  - "Feed types use 'type' field (not 'feed') per backend protocol"
+    32→  - "CVDData interface matches backend spec exactly"
+    33→  - "Data forwarding only for relevant mints (positions + screener tokens)"
+    34→
+    35→patterns-established:
+    36→  - "Feed adapter pattern: Pure functions convert NATS messages to backend format"
+    37→  - "Store subscription forwarding: Hook subscribes to store and forwards to backend"
+    38→
+    39→issues-created: []
+    40→
+    41→# Metrics
+    42→duration: 3min
+    43→completed: 2026-01-09
+    44→---
+    45→
+    46→# Phase 24 Plan 01: Data Feed Implementation Summary
+    47→
+    48→**Data feed pipeline forwarding NATS market data and CVD to CLI backend via WebSocket**
+    49→
+    50→## Performance
+    51→
+    52→- **Duration:** 3 min
+    53→- **Started:** 2026-01-09T09:13:33Z
+    54→- **Completed:** 2026-01-09T09:17:14Z
+    55→- **Tasks:** 3
+    56→- **Files modified:** 4
+    57→
+    58→## Accomplishments
+    59→
+    60→- Feed types updated to match backend protocol (`type` field, correct type names)
+    61→- CVDData interface created matching backend spec exactly
+    62→- Pure adapter functions for MarketData, OHLCV, Trade, and CVD conversion
+    63→- Data forwarder hook integrated into autopilot subscription
+    64→
+    65→## Task Commits
+    66→
+    67→Each task was committed atomically:
+    68→
+    69→1. **Task 1: Fix feed types to match backend protocol** - `efb9d26ea` (feat)
+    70→2. **Task 2: Create feed adapter functions** - `9a8dbf3a1` (feat)
+    71→3. **Task 3: Create useAutopilotDataForwarder hook** - `98b4ceadf` (feat)
+    72→
+    73→**Plan metadata:** `463eb1dcf` (docs: complete plan)
+    74→
+    75→## Files Created/Modified
+    76→
+    77→- `apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts` - Updated feed types to match backend protocol
+    78→- `apps/web-terminal/src/websocket/autopilot/feedAdapters.ts` - Pure adapter functions for NATS → backend conversion
+    79→- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts` - Hook that subscribes to store and forwards data
+    80→- `apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts` - Integrated data forwarder hook
+    81→
+    82→## Decisions Made
+    83→
+    84→- Feed types use `type` field (not `feed`) per backend engineer specification
+    85→- CVDData interface exactly matches backend requirements: mint, timestamp, cvd, cvdChange, buyVolume, sellVolume, netDelta, periodMs
+    86→- Data forwarding scoped to relevant mints only (positions + screener tokens) for efficiency
+    87→
+    88→## Deviations from Plan
+    89→
+    90→None - plan executed exactly as written.
+    91→
+    92→## Issues Encountered
+    93→
+    94→None.
+    95→
+    96→## Next Phase Readiness
+    97→
+    98→- Data feed pipeline active for market_data and CVD
+    99→- Ready for Phase 25: CLI NATS Removal (backend can now receive all data from frontend)
+   100→- OHLCV and Trade feeds defined but not wired to subscriptions yet (can be added when backend needs them)
+   101→
+   102→---
+   103→
+   104→_Phase: 24-data-feed-implementation_
+   105→_Completed: 2026-01-09_
+   106→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

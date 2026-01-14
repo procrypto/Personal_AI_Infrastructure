@@ -1,0 +1,101 @@
+/**
+ * Slack Events API Route
+ *
+ * Vercel Function handler for Slack events.
+ * Handles URL verification and Linear message capture.
+ */
+
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import {
+  extractLinearIssueId,
+  extractIssueIdFromAttachments,
+} from '../../src/coordination/slack/listener.js';
+import { storeLinearMessage } from '../../src/coordination/store/linear-message-store.js';
+
+// Linear bot ID - filter to only process Linear's messages
+const LINEAR_BOT_ID = process.env.LINEAR_BOT_ID;
+
+interface SlackMessageEvent {
+  type: string;
+  subtype?: string;
+  bot_id?: string;
+  text?: string;
+  ts: string;
+  channel: string;
+  attachments?: Array<{ title_link?: string; text?: string }>;
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Only accept POST
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const body = req.body;
+
+  // Handle Slack URL verification challenge
+  if (body?.type === 'url_verification') {
+    return res.status(200).json({ challenge: body.challenge });
+  }
+
+  // Handle event callbacks
+  if (body?.type === 'event_callback') {
+    const event = body.event as SlackMessageEvent;
+    console.log('[slack-events] Received event:', event?.type, event?.subtype);
+
+    // Process bot messages (potential Linear messages)
+    if (event?.type === 'message' && event?.subtype === 'bot_message') {
+      await processLinearBotMessage(event);
+    }
+
+    return res.status(200).json({ ok: true });
+  }
+
+  // Unknown request type
+  console.log('[slack-events] Unknown request type:', body?.type);
+  return res.status(200).json({ ok: true });
+}
+
+/**
+ * Process a potential Linear bot message.
+ * Extracts issue ID and stores the message mapping for thread replies.
+ */
+async function processLinearBotMessage(event: SlackMessageEvent): Promise<void> {
+  // Filter by bot ID if configured
+  if (LINEAR_BOT_ID && event.bot_id !== LINEAR_BOT_ID) {
+    console.log('[slack-events] Skipping non-Linear bot message:', event.bot_id);
+    return;
+  }
+
+  // Extract issue ID from text
+  const text = event.text || '';
+  let issueId = extractLinearIssueId(text);
+
+  // Fallback: Try attachments
+  if (!issueId && event.attachments) {
+    issueId = extractIssueIdFromAttachments(event.attachments);
+  }
+
+  if (!issueId) {
+    console.log('[slack-events] No Linear issue ID found in message');
+    return;
+  }
+
+  // Store the mapping
+  try {
+    await storeLinearMessage({
+      slackMessageTs: event.ts,
+      slackChannelId: event.channel,
+      linearIssueId: issueId,
+      capturedAt: new Date().toISOString(),
+    });
+
+    console.log('[slack-events] Captured Linear message:', {
+      issueId,
+      channel: event.channel,
+      ts: event.ts,
+    });
+  } catch (error) {
+    console.error('[slack-events] Failed to store message mapping:', error);
+  }
+}

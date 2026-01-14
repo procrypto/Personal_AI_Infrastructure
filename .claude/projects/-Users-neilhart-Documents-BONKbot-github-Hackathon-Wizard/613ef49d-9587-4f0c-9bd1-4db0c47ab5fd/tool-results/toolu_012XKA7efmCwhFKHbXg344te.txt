@@ -1,0 +1,70 @@
+     1→import { useEffect, useId } from "react";
+     2→import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+     3→import { BaseWebsocket } from "@/websocket/base/BaseWebsocket";
+     4→import baseConnectionManager, {
+     5→  BaseConnectionCallbacks,
+     6→  defaultRefetchKey,
+     7→} from "@/websocket/base/BaseSubscriptionManager";
+     8→
+     9→export const useBaseSubscription = <T extends BaseWebsocket>({
+    10→  connectionId,
+    11→  refetchKey = defaultRefetchKey,
+    12→  callbacks,
+    13→  websocket,
+    14→  isEnabled: isEnabledRaw = true,
+    15→}: {
+    16→  connectionId: string;
+    17→  refetchKey?: string;
+    18→  callbacks: BaseConnectionCallbacks;
+    19→  websocket?: T;
+    20→  isEnabled?: boolean;
+    21→}) => {
+    22→  const componentId = useId();
+    23→  const { isOffline } = useGlobalStore(
+    24→    useShallow(state => ({
+    25→      isOffline: state.connectionManager.isOffline,
+    26→    }))
+    27→  );
+    28→
+    29→  const isEnabled = isEnabledRaw && !isOffline;
+    30→
+    31→  useEffect(() => {
+    32→    baseConnectionManager.addSubscribedComponent(connectionId, componentId);
+    33→    baseConnectionManager.queueConnectionCheck({
+    34→      connectionId,
+    35→      callbacks,
+    36→      refetchKey,
+    37→      isEnabled,
+    38→    });
+    39→
+    40→    return () => {
+    41→      baseConnectionManager.removeSubscribedComponent(
+    42→        connectionId,
+    43→        componentId
+    44→      );
+    45→      baseConnectionManager.queueConnectionCheck({
+    46→        connectionId,
+    47→        callbacks,
+    48→        refetchKey,
+    49→        isEnabled,
+    50→      });
+    51→    };
+    52→  }, [connectionId, refetchKey, isEnabled]);
+    53→  // Don't change deps here, componentId is constant by design and callbacks change shouldn't trigger additional check
+    54→
+    55→  useEffect(() => {
+    56→    if (!websocket) return;
+    57→
+    58→    const off = websocket.on("disconnected", () => {
+    59→      baseConnectionManager.queueReconnect(connectionId);
+    60→    });
+    61→
+    62→    return off;
+    63→  }, [connectionId, refetchKey, isEnabled]);
+    64→  // Don't change deps here, componentId is constant by design and callbacks change shouldn't trigger additional check
+    65→};
+    66→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

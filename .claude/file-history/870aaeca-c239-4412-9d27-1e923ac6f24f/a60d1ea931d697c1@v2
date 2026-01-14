@@ -1,0 +1,419 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { useMemo, useState, useCallback, useEffect } from "react";
+import {
+  createColumnHelper,
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  flexRender,
+  type SortingState,
+  type Row,
+} from "@tanstack/react-table";
+import { useNavigate } from "@tanstack/react-router";
+import { cn } from "@/lib/utils";
+import { TokenImage } from "@/components/token-image";
+import { getBonkbotImageUrl } from "@/utils/asset-mappers";
+import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+import { WatchlistToggle } from "@/components/watchlist-toggle/watchlist-toggle";
+import { TableSort } from "@/components/table/table-sort";
+import type {
+  AutopilotTokenWithPrices,
+  SignalStrength,
+} from "@/hooks/useAutopilot";
+import type { VzScore } from "@/hooks/useAutopilot/useVolumeVz";
+import { HideTokenButton } from "./hide-token-button";
+import { VzCell } from "./vz-cell";
+
+// Flash duration - bright flash when new confluence hits (Wall St terminal style)
+const FLASH_DURATION_MS = 100;
+
+// Map confluence count to background opacity (using brand palette)
+// Subtle tiers - one level down for softer appearance
+function getSignalOpacity(
+  confluenceCount: number,
+  isFlashing: boolean
+): number {
+  if (isFlashing) return 0.7; // Bright flash - Wall St style
+  if (confluenceCount >= 6) return 0.4;
+  if (confluenceCount === 5) return 0.35;
+  if (confluenceCount === 4) return 0.3;
+  if (confluenceCount === 3) return 0.2;
+  if (confluenceCount === 2) return 0.1;
+  if (confluenceCount === 1) return 0.05;
+  return 0;
+}
+
+// Get signal background style based on confluence
+function getSignalStyle(
+  signalStrength?: SignalStrength,
+  isFlashing = false
+): React.CSSProperties | undefined {
+  if (!signalStrength || signalStrength.type === "none") {
+    return undefined;
+  }
+
+  const opacity = getSignalOpacity(signalStrength.confluenceCount, isFlashing);
+
+  if (signalStrength.type === "buy") {
+    return { backgroundColor: `rgba(180, 229, 89, ${opacity})` };
+  } else {
+    return { backgroundColor: `rgba(239, 68, 68, ${opacity})` };
+  }
+}
+
+// Table row component with flash animation support
+type ScreenerTableRowProps = {
+  row: Row<AutopilotTokenWithPrices>;
+  index: number;
+  signalStrength?: SignalStrength;
+  onRowClick: (row: Row<AutopilotTokenWithPrices>) => void;
+};
+
+const ScreenerTableRow = ({
+  row,
+  index,
+  signalStrength,
+  onRowClick,
+}: ScreenerTableRowProps) => {
+  const [isFlashing, setIsFlashing] = useState(false);
+
+  // Trigger flash when new signal arrives
+  useEffect(() => {
+    if (signalStrength?.isNew && signalStrength.type !== "none") {
+      setIsFlashing(true);
+      const timer = setTimeout(() => {
+        setIsFlashing(false);
+      }, FLASH_DURATION_MS);
+      return () => clearTimeout(timer);
+    }
+  }, [
+    signalStrength?.isNew,
+    signalStrength?.latestTimestamp,
+    signalStrength?.type,
+  ]);
+
+  const hasSignal = signalStrength && signalStrength.type !== "none";
+  const signalStyle = getSignalStyle(signalStrength, isFlashing);
+
+  // Hover style: use flash color for signal rows
+  const hoverStyle =
+    hasSignal && signalStrength
+      ? {
+          backgroundColor:
+            signalStrength.type === "buy"
+              ? "rgba(180, 229, 89, 0.5)"
+              : "rgba(239, 68, 68, 0.5)",
+        }
+      : undefined;
+
+  return (
+    <tr
+      key={row.id}
+      onClick={() => onRowClick(row)}
+      className={cn(
+        "group cursor-pointer transition-colors",
+        !hasSignal && "hover:bg-bg-quartiary",
+        !hasSignal &&
+          (index % 2 === 0 ? "bg-bg-tertiary" : "bg-bg-primary-hover")
+      )}
+      style={hasSignal ? signalStyle : undefined}
+      onMouseEnter={e => {
+        if (hoverStyle) {
+          e.currentTarget.style.backgroundColor = hoverStyle.backgroundColor;
+        }
+      }}
+      onMouseLeave={e => {
+        if (hasSignal && signalStyle) {
+          e.currentTarget.style.backgroundColor =
+            signalStyle.backgroundColor || "";
+        }
+      }}
+    >
+      {row.getVisibleCells().map((cell, cellIndex) => (
+        <td
+          key={cell.id}
+          className={cn(
+            "px-2 py-2 text-sm",
+            cellIndex === 0 && "rounded-l",
+            cellIndex === row.getVisibleCells().length - 1 && "rounded-r",
+            "bg-inherit"
+          )}
+          style={{ width: cell.column.getSize() }}
+        >
+          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+        </td>
+      ))}
+    </tr>
+  );
+};
+
+// Get sort priority for confluence-based default sorting
+// Green (buy) signals first (sorted by count desc), then red (sell), then none
+function getConfluenceSortPriority(signal?: SignalStrength): number {
+  if (!signal || signal.type === "none") return 1000; // No signal = lowest priority
+  if (signal.type === "buy") return -signal.confluenceCount; // Negative = higher priority, higher count = even higher
+  return 100 - signal.confluenceCount; // Sell signals after buy, higher count = higher within sell
+}
+
+const columnHelper = createColumnHelper<AutopilotTokenWithPrices>();
+
+type ScreenerTableProps = {
+  tokens: AutopilotTokenWithPrices[];
+  columnType: "watchlist" | "trending" | "whales";
+  signalStrengthMap: Map<string, SignalStrength>;
+  vzMap: Map<string, VzScore>;
+  title: string;
+  icon: React.ElementType;
+};
+
+export const ScreenerTable = ({
+  tokens,
+  columnType,
+  signalStrengthMap,
+  vzMap,
+  title,
+  icon: Icon,
+}: ScreenerTableProps) => {
+  const navigate = useNavigate();
+  const [sorting, setSorting] = useState<SortingState>([]);
+
+  // Navigate to trading page on row click
+  const handleRowClick = useCallback(
+    (row: Row<AutopilotTokenWithPrices>) => {
+      navigate({ to: "/trading/$mint", params: { mint: row.original.mint } });
+    },
+    [navigate]
+  );
+
+  // Default sort: green confluence high → red confluence → rest
+  // Applied when no user sort is active
+  const sortedTokens = useMemo(() => {
+    if (sorting.length > 0) {
+      // User has applied sorting, let TanStack handle it
+      return tokens;
+    }
+
+    // Default confluence-based sort
+    return [...tokens].sort((a, b) => {
+      const sigA = signalStrengthMap.get(a.mint);
+      const sigB = signalStrengthMap.get(b.mint);
+
+      const priorityA = getConfluenceSortPriority(sigA);
+      const priorityB = getConfluenceSortPriority(sigB);
+
+      return priorityA - priorityB;
+    });
+  }, [tokens, signalStrengthMap, sorting.length]);
+
+  // Define columns - Action first, then Signal, then data columns
+  const columns = useMemo(
+    () => [
+      // Action column (first - star/hide on left)
+      columnHelper.display({
+        id: "action",
+        header: "",
+        cell: ({ row }) => {
+          const token = row.original;
+
+          if (columnType === "watchlist") {
+            return (
+              <WatchlistToggle
+                mint={token.mint}
+                ticker={token.symbol}
+                disableTooltip
+              />
+            );
+          }
+
+          return (
+            <HideTokenButton
+              mint={token.mint}
+              symbol={token.symbol}
+            />
+          );
+        },
+        size: 32,
+        enableSorting: false,
+      }),
+      // Signal column - shows confluence arrow + count
+      columnHelper.display({
+        id: "signal",
+        header: "",
+        cell: ({ row }) => {
+          const signal = signalStrengthMap.get(row.original.mint);
+
+          if (!signal || signal.type === "none") {
+            return null;
+          }
+
+          return (
+            <span
+              className={cn(
+                "flex items-center gap-0.5 text-xs font-semibold",
+                signal.type === "buy" ? "text-text-success" : "text-text-error"
+              )}
+            >
+              {signal.type === "buy" ? "▲" : "▼"}
+              {signal.confluenceCount}
+            </span>
+          );
+        },
+        size: 36,
+        enableSorting: false,
+      }),
+      // Token column
+      columnHelper.accessor(row => row.symbol, {
+        id: "symbol",
+        header: "Token",
+        cell: ({ row }) => {
+          const token = row.original;
+          const { imgSrc, isCrossOrigin } = getBonkbotImageUrl(token.mint);
+
+          return (
+            <div className="flex items-center gap-2 overflow-hidden">
+              <TokenImage
+                symbol={token.symbol}
+                imgSrc={imgSrc}
+                isCrossOrigin={isCrossOrigin}
+                alt=""
+                className="size-4 min-w-4 rounded"
+              />
+              <span className="text-text-primary truncate text-sm font-medium">
+                ${token.symbol}
+              </span>
+            </div>
+          );
+        },
+        size: 110,
+        enableSorting: true,
+      }),
+      // MCap column
+      columnHelper.accessor(row => row.marketCapUsd ?? 0, {
+        id: "mcap",
+        header: "MCap",
+        cell: ({ getValue }) => (
+          <FormattedNumber
+            preset="usd"
+            value={getValue()}
+          />
+        ),
+        size: 80,
+        enableSorting: true,
+      }),
+      // 1h % column
+      columnHelper.accessor(row => row.change1h ?? 0, {
+        id: "change1h",
+        header: "1h %",
+        cell: ({ getValue }) => (
+          <FormattedNumber
+            value={getValue()}
+            showPositiveSign
+            preset="percentage"
+            showColor
+          />
+        ),
+        size: 70,
+        enableSorting: true,
+      }),
+      // Vz column - Volume Delta indicator
+      columnHelper.display({
+        id: "vz",
+        header: "Vz",
+        cell: ({ row }) => <VzCell vz={vzMap.get(row.original.mint)} />,
+        size: 45,
+        enableSorting: false,
+      }),
+    ],
+    [columnType, signalStrengthMap, vzMap]
+  );
+
+  const table = useReactTable({
+    data: sortedTokens,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getRowId: row => row.mint,
+  });
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Column header - Discovery style: larger, light colored */}
+      <div className="text-text-secondary mb-2 flex items-center gap-2 text-sm font-medium">
+        <Icon className="size-4" />
+        {title}
+        <span className="text-text-tertiary text-xs">({tokens.length})</span>
+      </div>
+
+      {tokens.length === 0 ? (
+        <div className="text-text-tertiary border-border-primary/30 rounded border border-dashed p-2 text-center text-[10px]">
+          No tokens
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full border-separate border-spacing-y-1">
+            {/* Table header */}
+            <thead className="sticky top-0 z-10">
+              {table.getHeaderGroups().map(headerGroup => (
+                <tr
+                  key={headerGroup.id}
+                  className="bg-bg-secondary border-border-primary/30 border-b"
+                >
+                  {headerGroup.headers.map(header => {
+                    const canSort = header.column.getCanSort();
+                    const sortDirection = header.column.getIsSorted();
+
+                    return (
+                      <th
+                        key={header.id}
+                        className={cn(
+                          "text-text-tertiary px-2 py-2 text-left text-xs font-semibold",
+                          canSort && "cursor-pointer select-none"
+                        )}
+                        style={{ width: header.getSize() }}
+                        onClick={
+                          canSort
+                            ? header.column.getToggleSortingHandler()
+                            : undefined
+                        }
+                      >
+                        <div className="flex items-center gap-1">
+                          {flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                          {canSort && (
+                            <TableSort
+                              sortDirection={sortDirection}
+                              className="size-3"
+                            />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              ))}
+            </thead>
+
+            {/* Table body */}
+            <tbody>
+              {table.getRowModel().rows.map((row, index) => (
+                <ScreenerTableRow
+                  key={row.id}
+                  row={row}
+                  index={index}
+                  signalStrength={signalStrengthMap.get(row.original.mint)}
+                  onRowClick={handleRowClick}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ScreenerTable;

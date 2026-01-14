@@ -1,0 +1,257 @@
+# Context for Web Terminal Frontend
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Web Terminal Frontend is the user-facing React application for the BONKbot trading platform. It provides a comprehensive Solana trading and portfolio management interface, consuming real-time market data from web-terminal (Rust) and user operations from bonkbot (TypeScript API).
+
+This is a Turborepo monorepo using Bun, Vite, React 19, TypeScript, and TanStack Router. The app features real-time WebSocket data streaming, multi-wallet portfolio management, and advanced trading capabilities.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Package Manager | Bun 1.3+ | Fast package management |
+| Build | Vite (rolldown) | Fast dev/prod builds |
+| Framework | React 19 | UI framework |
+| Language | TypeScript 5.9 | Type safety |
+| Routing | TanStack Router | File-based routing |
+| State | Zustand | Client state (24 slices) |
+| Server State | React Query | API caching/fetching |
+| Styling | Tailwind CSS 4 | Utility CSS |
+| Components | Radix UI | Accessible primitives |
+| i18n | Lingui | Internationalization |
+| API Client | Orval (OpenAPI) | Type-safe API calls |
+
+### Monorepo Structure
+
+```
+web-terminal-frontend/
+├── apps/
+│   └── web-terminal/        # Main React app
+│       ├── src/
+│       │   ├── api/         # 39 API endpoint modules
+│       │   ├── websocket/   # Real-time data (NATS, Socket.IO)
+│       │   ├── pages/       # 23 page components
+│       │   ├── routes/      # TanStack file-based routes
+│       │   ├── components/  # 72+ reusable components
+│       │   ├── store/       # Zustand (24 memory + persistent)
+│       │   ├── hooks/       # 80+ custom hooks
+│       │   └── providers/   # React context providers
+├── packages/
+│   ├── ui/                  # Shared Radix component library
+│   ├── pvp/                 # PvP features
+│   └── xray-bubbles/        # XRay visualization
+└── turbo.json               # Turborepo config
+```
+
+### Key Directories (apps/web-terminal/src/)
+
+| Directory | Purpose |
+|-----------|---------|
+| `api/` | REST API integrations (auth, swap, orders, etc.) |
+| `websocket/` | Real-time subscriptions (NATS topics, standalone WS) |
+| `pages/` | Page-level components with business logic |
+| `routes/` | TanStack Router file-based route definitions |
+| `store/memoryStore/` | 24 Zustand slices for UI state |
+| `components/` | Reusable UI components |
+| `hooks/` | Custom React hooks |
+| `ui/` | UI-specific hooks and components |
+
+## Capabilities
+
+### User Features
+
+| Feature | Location | Description |
+|---------|----------|-------------|
+| Trading | `pages/TradingPage/` | Swaps, limit orders, charts |
+| Portfolio | `pages/PortfolioPage/` | Holdings, PnL, positions |
+| Discovery | `pages/DiscoveryPage/` | Trending tokens, filters |
+| XRay | `pages/XRayPage/` | Deep token analysis |
+| Wallet | `pages/WalletPage/` | Multi-wallet management |
+| AutoStrat | `api/autostrat/` | DCA/automated strategies |
+| Sentinel | `pages/SentinelPage/` | Custom alerts |
+| Warzone | `pages/WarzonePage/` | Risk monitoring |
+
+### API Integrations
+
+#### bonkbot API (`/v1`)
+| Domain | Endpoints | Purpose |
+|--------|-----------|---------|
+| Auth | 9 | Login, wallet verification |
+| User | 17 | Profile, settings, portfolio |
+| Swap | 4 | Trade execution |
+| Orders | 3 | Limit orders |
+| AutoStrat | 9 | Automated strategies |
+| Wallets | 9 | Signer wallet ops |
+| Watchlist | 4 | Token watchlist |
+| Tracking | 8 | Wallet tracking |
+
+#### web-terminal Data API (`/data`)
+| Endpoint | Purpose |
+|----------|---------|
+| `/discovery/*` | Trending, volume, whale moves |
+| `/market_data/*` | Token market data |
+| `/pnl_v2` | Portfolio PnL |
+| `/sentinel/*` | Alert filters |
+| `/search` | Token search |
+
+### WebSocket Topics (NATS)
+
+**Token Topics:**
+- `market_data.{mint}` - Price, mcap, volume
+- `trades_2.{mint}.*` - Live trades
+- `token_ohlcv.{mint}.{res}` - Candles
+- `holders_stats.{mint}` - Holder data
+
+**User Topics** (prefixed `prod.` or `beta.`):
+- `swap.{telemetryId}` - Swap updates
+- `pnl_v2.{telemetryId}.{wallet}` - PnL
+- `limit_order.{telemetryId}` - Order updates
+
+**Global:**
+- `sol_price` - SOL/USD price
+- `sol_balance.{address}` - Wallet balance
+
+### Standalone WebSockets
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/data/discovery/trending_ws` | Trending tokens |
+| `/data/active_positions_ws` | User positions |
+| `/data/watchlist_ws` | Watchlist updates |
+| `/data/topbar_ws` | Ticker tape |
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- **File-based routing**: Routes in `routes/` mirror URL structure
+- **Zustand slices**: Each feature has dedicated store slice in `store/memoryStore/`
+- **React Query**: All API calls through hooks with caching
+- **Orval**: API client auto-generated from OpenAPI spec
+- **Test IDs**: Follow `TEST_ID_POLICY.md` for testable components
+- **i18n**: Use Lingui macros (`t`, `Trans`) for all user-facing text
+
+### Common Tasks
+
+#### Local Development
+
+```bash
+# Install dependencies
+bun install
+
+# Start dev server
+bun run dev
+
+# Build for production
+bun run build
+
+# Run tests
+bun run test
+
+# Lint & format
+bun run lint
+bun run format
+```
+
+#### Finding Code
+
+| Task | Location |
+|------|----------|
+| Add page | `apps/web-terminal/src/pages/` + `routes/` |
+| Add API endpoint | `apps/web-terminal/src/api/` |
+| Add WebSocket topic | `apps/web-terminal/src/websocket/` |
+| Add component | `apps/web-terminal/src/components/` |
+| Add store slice | `apps/web-terminal/src/store/memoryStore/` |
+| Add hook | `apps/web-terminal/src/hooks/` |
+| Shared UI component | `packages/ui/` |
+
+#### API Client Regeneration
+
+```bash
+cd apps/web-terminal
+bun run build:openapi  # Regenerate from openapi.json
+```
+
+### Things to Avoid
+
+- Don't bypass React Query for API calls
+- Don't add global state without a Zustand slice
+- Don't hardcode text (use Lingui)
+- Don't skip test IDs on interactive elements
+- Avoid direct WebSocket manipulation (use topic system)
+
+## Related Documentation
+
+- [docs/README.md](docs/README.md) - Monorepo setup & commands
+- [docs/API_AND_WEBSOCKETS.md](docs/API_AND_WEBSOCKETS.md) - Complete API/WS reference
+- [docs/TESTING.md](docs/TESTING.md) - Testing strategies
+- [docs/TEST_ID_POLICY.md](docs/TEST_ID_POLICY.md) - Test ID conventions
+- [.cursorrules](.cursorrules) - Editor AI rules
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get | Interface |
+|--------|-------------|-----------|
+| bonkbot | User ops (auth, swap, orders) | REST `/v1` |
+| web-terminal | Market data (prices, trades) | REST `/data` + WebSocket |
+| Solana | Wallet signatures | @solana/web3.js |
+
+### Data Flow
+
+```
+User Action
+    │
+    ▼
+React Component
+    │
+    ├──▶ React Query (API calls)
+    │         │
+    │         ├──▶ bonkbot API (/v1) → User operations
+    │         └──▶ web-terminal API (/data) → Market data
+    │
+    └──▶ WebSocket Subscription
+              │
+              ├──▶ NATS topics → Real-time updates
+              └──▶ Standalone WS → Specialized streams
+                        │
+                        ▼
+              Zustand Store → UI Re-render
+```
+
+### Environment Configuration
+
+| Variable | Purpose |
+|----------|---------|
+| `VITE_API_URL` | bonkbot API base |
+| `VITE_DATA_API_URL` | web-terminal data API |
+| `VITE_APP_ENV` | prod/staging/local |
+| `VITE_SENTRY_DSN` | Error tracking |
+
+## State Architecture
+
+### Zustand Slices (24 total)
+
+| Slice | Purpose |
+|-------|---------|
+| `discovery-store` | Discovery page filters/state |
+| `trading-chart-store` | Chart data and settings |
+| `portfolio-optimistic-store` | Optimistic UI for trades |
+| `websocket-messages-store` | Batched WS message handling |
+| `auto-strat-store` | AutoStrategy state |
+| `watchlist-store` | Watchlist management |
+| `wallet-tracking-store` | Tracked wallets |
+| `notifications-store` | Toast notifications |
+
+### React Query Patterns
+
+- **Loaders**: Route-level data prefetching
+- **Mutations**: Optimistic updates with rollback
+- **Invalidation**: Automatic refetch on mutations
+- **Subscriptions**: WebSocket → query cache sync

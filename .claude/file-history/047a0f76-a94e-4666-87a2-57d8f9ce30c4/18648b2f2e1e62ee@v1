@@ -1,0 +1,274 @@
+/**
+ * OHLCV Endpoints
+ *
+ * Fetches candlestick (OHLCV) data for pools and tokens.
+ *
+ * ⚠️  This fetches PRODUCTION data. Strict limits are enforced.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, escapeString, isSolanaPubkey, clamp } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants — Strict Limits
+// =============================================================================
+
+const MAX_COUNTBACK = 1000;
+const DEFAULT_COUNTBACK = 100;
+
+// Valid resolutions
+const VALID_RESOLUTIONS = ["1s", "5s", "15s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type OHLCVRequest = {
+    start_date: string;
+    countback?: string;
+};
+
+type PoolOHLCVRow = {
+    o_sol: string;
+    h_sol: string;
+    l_sol: string;
+    c_sol: string;
+    o_usd: string;
+    h_usd: string;
+    l_usd: string;
+    c_usd: string;
+    o_mc_sol: string;
+    h_mc_sol: string;
+    l_mc_sol: string;
+    c_mc_sol: string;
+    o_mc_usd: string;
+    h_mc_usd: string;
+    l_mc_usd: string;
+    c_mc_usd: string;
+    v_sol: string;
+    v_usd: string;
+    pool: string;
+    resolution: string;
+    timestamp_secs: number;
+};
+
+type TokenOHLCVRow = {
+    o_sol: string;
+    h_sol: string;
+    l_sol: string;
+    c_sol: string;
+    o_usd: string;
+    h_usd: string;
+    l_usd: string;
+    c_usd: string;
+    o_mc_sol: string;
+    h_mc_sol: string;
+    l_mc_sol: string;
+    c_mc_sol: string;
+    o_mc_usd: string;
+    h_mc_usd: string;
+    l_mc_usd: string;
+    c_mc_usd: string;
+    v_sol: string;
+    v_usd: string;
+    mint: string;
+    resolution: string;
+    timestamp_secs: number;
+};
+
+type PoolOHLCVResponse =
+    | { ok: true; ohlcv: PoolOHLCVRow[]; count: number }
+    | { ok: false; error: string };
+
+type TokenOHLCVResponse =
+    | { ok: true; ohlcv: TokenOHLCVRow[]; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerOHLCVRoutes = (app: Elysia) => {
+    // -------------------------------------------------------------------------
+    // GET /local-api/ohlcv/pool/:pool/:range
+    // -------------------------------------------------------------------------
+    app.get("/ohlcv/pool/:pool/:range", async ({ params, query }) => {
+        const { pool, range } = params;
+        const req = query as OHLCVRequest;
+
+        const validation = validatePoolOHLCV(pool, range, req);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildPoolOHLCVSql({
+            pool: validation.pool,
+            range: validation.range,
+            startDate: validation.startDate,
+            countback: validation.countback,
+        });
+
+        console.log(
+            `[ohlcv/pool] Querying pool=${pool}, resolution=${range}, countback=${validation.countback}`
+        );
+
+        const result = await clickhouseQuery<PoolOHLCVRow>(sql);
+
+        return formatOhlcvResponse(result);
+    });
+
+    // -------------------------------------------------------------------------
+    // GET /local-api/ohlcv/token/:mint/:range
+    // -------------------------------------------------------------------------
+    app.get("/local-api/ohlcv/token/:mint/:range", async ({ params, query }) => {
+        const { mint, range } = params;
+        const req = query as OHLCVRequest;
+
+        const validation = validateTokenOHLCV(mint, range, req);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildTokenOHLCVSql({
+            mint: validation.mint,
+            range: validation.range,
+            startDate: validation.startDate,
+            countback: validation.countback,
+        });
+
+        console.log(
+            `[ohlcv/token] Querying mint=${mint}, resolution=${range}, countback=${validation.countback}`
+        );
+
+        const result = await clickhouseQuery<TokenOHLCVRow>(sql);
+
+        return formatOhlcvResponse(result);
+    });
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+export const validatePoolOHLCV = (
+    pool: string,
+    range: string,
+    req: OHLCVRequest
+):
+    | { ok: true; pool: string; range: string; startDate: number; countback: number }
+    | { ok: false; error: string } => {
+    if (!isSolanaPubkey(pool)) {
+        return { ok: false, error: "Invalid pool address" };
+    }
+    if (!VALID_RESOLUTIONS.includes(range)) {
+        return { ok: false, error: `Invalid resolution. Valid options: ${VALID_RESOLUTIONS.join(", ")}` };
+    }
+    if (!req.start_date) {
+        return { ok: false, error: "Missing 'start_date' parameter (unix seconds)" };
+    }
+    const startDate = parseInt(req.start_date, 10);
+    if (isNaN(startDate)) {
+        return { ok: false, error: "Invalid 'start_date' parameter" };
+    }
+    const countback = clamp(
+        req.countback ? parseInt(req.countback, 10) : DEFAULT_COUNTBACK,
+        1,
+        MAX_COUNTBACK
+    );
+    return { ok: true, pool, range, startDate, countback };
+};
+
+export const buildPoolOHLCVSql = (params: {
+    pool: string;
+    range: string;
+    startDate: number;
+    countback: number;
+}): string => {
+    return `
+        SELECT
+            o_sol, h_sol, l_sol, c_sol,
+            o_usd, h_usd, l_usd, c_usd,
+            o_mc_sol, h_mc_sol, l_mc_sol, c_mc_sol,
+            o_mc_usd, h_mc_usd, l_mc_usd, c_mc_usd,
+            v_sol, v_usd,
+            pool, resolution, timestamp_secs
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY timestamp_secs ORDER BY timestamp_secs DESC) as rn
+            FROM materializer_pool_ohlcv
+            WHERE (pool, resolution) = ('${escapeString(params.pool)}', '${escapeString(params.range)}')
+            AND timestamp_secs <= ${params.startDate}
+            ORDER BY timestamp_secs DESC
+            LIMIT ${params.countback}
+        )
+        WHERE rn = 1
+    `;
+};
+
+export const validateTokenOHLCV = (
+    mint: string,
+    range: string,
+    req: OHLCVRequest
+):
+    | { ok: true; mint: string; range: string; startDate: number; countback: number }
+    | { ok: false; error: string } => {
+    if (!isSolanaPubkey(mint)) {
+        return { ok: false, error: "Invalid mint address" };
+    }
+    if (!VALID_RESOLUTIONS.includes(range)) {
+        return { ok: false, error: `Invalid resolution. Valid options: ${VALID_RESOLUTIONS.join(", ")}` };
+    }
+    if (!req.start_date) {
+        return { ok: false, error: "Missing 'start_date' parameter (unix seconds)" };
+    }
+    const startDate = parseInt(req.start_date, 10);
+    if (isNaN(startDate)) {
+        return { ok: false, error: "Invalid 'start_date' parameter" };
+    }
+    const countback = clamp(
+        req.countback ? parseInt(req.countback, 10) : DEFAULT_COUNTBACK,
+        1,
+        MAX_COUNTBACK
+    );
+    return { ok: true, mint, range, startDate, countback };
+};
+
+export const buildTokenOHLCVSql = (params: {
+    mint: string;
+    range: string;
+    startDate: number;
+    countback: number;
+}): string => {
+    return `
+        SELECT
+            o_sol, h_sol, l_sol, c_sol,
+            o_usd, h_usd, l_usd, c_usd,
+            o_mc_sol, h_mc_sol, l_mc_sol, c_mc_sol,
+            o_mc_usd, h_mc_usd, l_mc_usd, c_mc_usd,
+            v_sol, v_usd,
+            mint, resolution, timestamp_secs
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY timestamp_secs ORDER BY timestamp_secs DESC) as rn
+            FROM materializer_token_ohlcv
+            WHERE (mint, resolution) = ('${escapeString(params.mint)}', '${escapeString(params.range)}')
+            AND timestamp_secs <= ${params.startDate}
+            ORDER BY timestamp_secs DESC
+            LIMIT ${params.countback}
+        )
+        WHERE rn = 1
+    `;
+};
+
+export const formatOhlcvResponse = <T>(
+    result: Awaited<ReturnType<typeof clickhouseQuery<T>>>
+): { ok: true; ohlcv: T[]; count: number } | { ok: false; error: string } => {
+    if (!result.success) {
+        return { ok: false, error: result.error };
+    }
+    return {
+        ok: true,
+        ohlcv: result.data,
+        count: result.data.length,
+    };
+};
+
+

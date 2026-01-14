@@ -1,0 +1,80 @@
+# Phase 1: Foundation - Discovery
+
+**Research Date:** 2025-01-08
+**Discovery Level:** Level 2 (Standard Research)
+
+## Research Topics
+
+### Vercel KV (Serverless Redis)
+
+**Package:** `@vercel/kv`
+
+**Key API Methods:**
+- `kv.hset(key, {field: value})` - Store hash fields
+- `kv.hget(key, field)` - Get single hash field
+- `kv.hgetall(key)` - Get all hash fields
+- `kv.set(key, value)` - Store string
+- `kv.get(key)` - Get string
+- `kv.sadd(key, ...members)` - Add to set
+- `kv.smembers(key)` - Get set members
+- `kv.srem(key, member)` - Remove from set
+- `kv.scanIterator({match: pattern})` - Iterate keys
+
+**Environment Variables:**
+- `KV_REST_API_URL` - Auto-injected in Vercel
+- `KV_REST_API_TOKEN` - Auto-injected in Vercel
+
+**Pattern Decision:** Store entities as JSON in Redis hashes, keyed by entity type + ID. Use sets for indexes (tickets by status, tickets by tester).
+
+**Storage Schema:**
+```
+tickets:{id}                      → QATicket hash
+testers:{id}                      → TesterProfile hash
+linear-messages:{slackMessageTs}  → LinearMessage hash
+sessions:{id}                     → QASession hash
+indexes:tickets-by-status:{status} → Set of ticket IDs
+indexes:tickets-by-tester:{testerId} → Set of ticket IDs
+indexes:pending-tickets           → Set of pending ticket IDs
+```
+
+**Sources:**
+- [Vercel KV npm package](https://www.npmjs.com/package/@vercel/kv)
+- [Vercel KV Reference](https://vercel.com/docs/storage/vercel-kv/kv-reference)
+- [Redis on Vercel](https://vercel.com/docs/redis)
+
+### Event Bus Pattern
+
+**Pattern:** In-process pub/sub for decoupling core from notification surfaces
+
+**Implementation:**
+- Singleton pattern with `getInstance()`
+- TypeScript generics for type-safe payloads
+- `subscribe(event, callback)` → returns `{ unsubscribe }`
+- `dispatch(event, payload)` → notifies all subscribers
+- Clean up empty event entries to prevent memory leaks
+
+**Decision:** Simple in-process event bus (not AWS EventBridge or external message queue). Sufficient for Vercel serverless where each request is isolated. If we need cross-request events, we'd use Vercel KV pub/sub or external queue.
+
+**Sources:**
+- [Event Bus in TypeScript](https://www.thisdot.co/blog/how-to-implement-an-event-bus-in-typescript)
+- [Event-Driven Architecture Handbook](https://www.freecodecamp.org/news/event-based-architectures-in-javascript-a-handbook-for-devs/)
+
+## Decisions Made
+
+| Decision | Options Considered | Choice | Rationale |
+|----------|-------------------|--------|-----------|
+| Storage | Vercel KV vs Postgres vs Supabase | Vercel KV | Serverless-native, Redis patterns fit key-value lookups, PROJECT.md constraint |
+| Event bus | In-process vs AWS EventBridge vs external queue | In-process | Simpler for v1, serverless isolation means cross-request isn't needed yet |
+| Entity storage | JSON strings vs Redis hashes | Redis hashes | Better for partial updates, native Redis pattern |
+| Type unions | TypeScript enums vs union types | Union types | Better tree-shaking, JSON serialization |
+
+## Don't Hand-Roll
+
+- Redis connection management (use @vercel/kv)
+- UUID generation (use crypto.randomUUID())
+
+## Implementation Notes
+
+- Use `.js` extensions in TypeScript imports for ESM compatibility
+- Follow existing camelCase convention from CONVENTIONS.md
+- Store timestamps as ISO strings for JSON compatibility

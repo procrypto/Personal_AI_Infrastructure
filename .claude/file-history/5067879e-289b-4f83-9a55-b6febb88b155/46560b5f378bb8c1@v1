@@ -1,0 +1,241 @@
+# Context for web-terminal-frontend-tests
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Comprehensive E2E test automation framework for the Telemetry.io (web-terminal-frontend) application. Uses Playwright with TypeScript, featuring AI-powered assertions via Claude, WebAuthn/passkey automation, and Mailosaur email testing.
+
+This is a TypeScript/Playwright project with advanced testing patterns including visual AI verification.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Framework | Playwright 1.56 | E2E browser automation |
+| Language | TypeScript | Type-safe test code |
+| AI Assertions | @anthropic-ai/sdk | Screenshot analysis via Claude |
+| Email Testing | Mailosaur | Cloud email verification |
+| Reporting | Allure + HTML | Test reports |
+| CI/CD | GitHub Actions | Automated runs |
+| Notifications | Slack | Test result alerts |
+
+### Project Structure
+
+```
+web-terminal-frontend-tests/
+├── .github/workflows/         # CI/CD automation
+│   ├── on-demand.yml          # Manual/API triggered runs
+│   ├── schedule.yml           # Daily regression (05:00 UTC)
+│   └── reusable-*.yml         # Shared workflow components
+├── credentials/               # WebAuthn passkey storage
+│   ├── passkey-credentials-prod.json
+│   └── passkey-credentials-beta.json
+├── fixtures/                  # Playwright fixtures
+│   ├── auth.fixture.ts        # Complete auth flow (email + passkey)
+│   ├── mailosaur.fixture.ts   # Email client
+│   ├── webauthn.fixture.ts    # Passkey management
+│   └── ai.fixture.ts          # AI assertion helpers
+├── pages/                     # Page Object Model
+│   ├── BasePage.ts            # Common methods (14KB)
+│   ├── DiscoveryPage.ts       # Main app page (52KB - largest)
+│   ├── LoginPage.ts           # Login flow
+│   ├── ManageWalletsPage.ts   # Wallet management
+│   ├── RewardsPage.ts         # Rewards/referrals
+│   ├── SecurityPage.ts        # Security settings
+│   ├── SettingsPage.ts        # User settings
+│   ├── SignerPage.ts          # Transaction signing
+│   └── SignupPage.ts          # Registration flow
+├── tests/
+│   └── smoke/                 # Smoke test suite
+│       ├── discovery.spec.ts
+│       ├── discovery-filters.spec.ts
+│       ├── referral-flow.spec.ts
+│       ├── security.spec.ts
+│       ├── seed-phrase-validation.spec.ts
+│       ├── settings.spec.ts
+│       ├── trading-presets.spec.ts
+│       ├── walletTracker.spec.ts
+│       └── ai-assertion-demo.spec.ts
+├── utils/
+│   ├── ai/                    # AI assertion system
+│   │   ├── assertAI.ts        # Main assertion function
+│   │   ├── claude.ts          # Claude API client
+│   │   └── types.ts           # TypeScript types
+│   ├── helpers/               # Test utilities
+│   │   ├── tableHelpers.ts
+│   │   ├── sortingHelpers.ts
+│   │   └── ...
+│   ├── config.ts              # Environment configuration
+│   ├── mailosaur.ts           # Email API client
+│   ├── selectors.ts           # Centralized selectors
+│   ├── solana.ts              # Blockchain utilities
+│   ├── testData.ts            # Test data constants
+│   └── webauthn.ts            # WebAuthn credential management
+├── scripts/
+│   └── create-account.ts      # Account provisioning tool
+└── playwright.config.ts       # Playwright configuration
+```
+
+## Capabilities
+
+### Test Coverage
+
+| Area | Tests | Key Scenarios |
+|------|-------|---------------|
+| Discovery | discovery.spec.ts | Token listings, search, filters |
+| Security | security.spec.ts | Seed phrase, auth flows |
+| Referrals | referral-flow.spec.ts | Referral code, rewards |
+| Settings | settings.spec.ts | User preferences |
+| Trading | trading-presets.spec.ts | Preset configurations |
+| Wallets | walletTracker.spec.ts | Multi-wallet management |
+
+### AI-Powered Assertions
+
+```typescript
+// Screenshot-based AI verification
+const result = await assertAI(page, 'The discovery page shows a table of tokens');
+expect(result.passed).toBe(true);
+expect(result.confidence).toBeGreaterThan(0.8);
+```
+
+Uses Claude to analyze screenshots with confidence scoring. Threshold default: 0.8.
+
+### Authentication Flow
+
+1. Email entry → Mailosaur receives verification code
+2. Code entry → WebAuthn passkey creation/login
+3. Credentials stored per environment (prod vs beta API)
+
+### Environment Matrix
+
+| Environment | URL | API Backend | Credentials File |
+|-------------|-----|-------------|------------------|
+| Production | app.telemetry.io | api.bonkbot.io | passkey-credentials-prod.json |
+| Staging | staging.telemetry.io | api.bonkbot.io | passkey-credentials-prod.json |
+| Develop | guild-navigator.bonkbot.io | beta-api.bonkbot.io | passkey-credentials-beta.json |
+| Preview | PR-specific URL | beta-api.bonkbot.io | passkey-credentials-beta.json |
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- Page Object Model for all page interactions
+- Fixtures for shared setup (auth, email, webauthn)
+- Selectors centralized in `utils/selectors.ts`
+- Test data in `utils/testData.ts`
+- AI assertions for visual verification
+
+### Common Tasks
+
+#### Running Tests
+
+```bash
+# Install
+npm install
+npx playwright install chromium
+
+# Run tests
+npm test                    # Production
+npm run test:staging        # Staging
+npm run test:develop        # Develop
+npm run test:smoke          # Smoke only
+npm run test:regression     # Full regression
+
+# With Allure reports
+npm run test:staging:allure
+
+# Debug mode
+npm run test:debug
+npm run test:headed
+```
+
+#### Creating Test Accounts
+
+```bash
+# Create on both prod and beta APIs
+npm run create-account testuser@bx3gmdhp.mailosaur.net
+
+# Specific environment
+npm run create-account testuser@bx3gmdhp.mailosaur.net --only staging
+```
+
+#### Finding Code
+
+| Task | Location |
+|------|----------|
+| Add new page object | `pages/NewPage.ts` (extend BasePage) |
+| Add new test | `tests/smoke/feature.spec.ts` |
+| Add selector | `utils/selectors.ts` |
+| Modify auth flow | `fixtures/auth.fixture.ts` |
+| Add AI assertion | `utils/ai/assertAI.ts` |
+| Update environment | `utils/config.ts` |
+
+### Things to Avoid
+
+- Don't hardcode credentials in tests (use fixtures)
+- Don't use fixed waits - use Playwright's auto-waiting
+- Don't skip WebAuthn setup for auth tests
+- Don't commit passkey credential files
+- Avoid flaky selectors - use data-testid when possible
+
+## Related Documentation
+
+- [README.md](README.md) - Comprehensive setup and usage guide
+- [Playwright Docs](https://playwright.dev)
+- [Mailosaur Docs](https://docs.mailosaur.com)
+
+## Cross-System Context
+
+### System Under Test
+
+| System | What We Test | Interface |
+|--------|--------------|-----------|
+| web-terminal-frontend | UI functionality | Browser automation |
+| bonkbot | Auth, user ops | Via frontend |
+| web-terminal | Market data | Via frontend |
+
+### API Dependencies
+
+| API | Usage in Tests |
+|-----|----------------|
+| api.bonkbot.io | User auth, trading (prod) |
+| beta-api.bonkbot.io | User auth, trading (dev) |
+| data.bonkbot.io | Market data (prod) |
+| beta-data.bonkbot.io | Market data (dev) |
+| mailosaur.com | Email verification |
+| anthropic.com | AI assertions |
+
+### CI/CD Integration
+
+```
+web-terminal-frontend PR → triggers → on-demand.yml (preview tests)
+                                    ↓
+                              Slack notification
+```
+
+- Tests triggered on PR deployments via `workflow_call`
+- Results posted to `#automation-fe-team-alerts`
+- Allure reports generated and uploaded
+
+## Configuration
+
+### Key Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ENV` | Target environment (staging/production/develop/preview) |
+| `PREVIEW_URL` | Custom preview URL for PR branches |
+| `MAILOSAUR_API_KEY` | Email testing API key |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | Bypass Vercel auth |
+| `ANTHROPIC_API_KEY` | AI assertions |
+
+### Timeouts
+
+| Type | Value | Location |
+|------|-------|----------|
+| Test timeout | 120s | playwright.config.ts |
+| Action timeout | 60s | playwright.config.ts |
+| Navigation timeout | 60s | playwright.config.ts |

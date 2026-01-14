@@ -1,0 +1,186 @@
+/**
+ * API Client for web-terminal data
+ *
+ * Supports both:
+ * - Local API (localhost:8787) - for development with prod ClickHouse data
+ * - Beta Data API (beta-data.bonkbot.io) - for beta environment
+ */
+
+import type { TokenMarketData, OHLCV, Trade, Resolution, DiscoveryTrendingItem, WhaleMovesItem, WhaleMovesResponse } from './types.js';
+
+export interface ApiClientConfig {
+  baseUrl: string;
+  timeout?: number;
+}
+
+export class ApiClient {
+  private baseUrl: string;
+  private timeout: number;
+
+  constructor(config: ApiClientConfig) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.timeout = config.timeout ?? 30000;
+  }
+
+  private async fetch<T>(path: string, options?: RequestInit): Promise<T> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
+
+      return response.json() as Promise<T>;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Get market data for a single token
+   */
+  async getMarketData(mint: string): Promise<TokenMarketData> {
+    const response = await this.fetch<{ ok: boolean; token: TokenMarketData }>(`/local-api/market_data/${mint}`);
+    return response.token;
+  }
+
+  /**
+   * Get market data for multiple tokens (batched for efficiency)
+   */
+  async getMarketDataBatch(mints: string[]): Promise<Map<string, TokenMarketData>> {
+    if (mints.length === 0) return new Map();
+
+    const query = mints.map(m => `mint=${m}`).join('&');
+    try {
+      const response = await this.fetch<{ ok: boolean; tokens: TokenMarketData[] }>(`/local-api/market_data_batch?${query}`);
+      console.log(`[DEBUG] market_data_batch response: ok=${response.ok}, tokens=${response.tokens?.length ?? 0}`);
+
+      const map = new Map<string, TokenMarketData>();
+      for (const token of response.tokens ?? []) {
+        map.set(token.mint, token);
+      }
+      return map;
+    } catch (error) {
+      console.error(`[DEBUG] market_data_batch error:`, error);
+      return new Map();
+    }
+  }
+
+  /**
+   * Get OHLCV candlestick data for a token
+   */
+  async getOHLCV(mint: string, resolution: Resolution, options?: {
+    startDate?: number;
+    countback?: number;
+  }): Promise<OHLCV[]> {
+    let path = `/local-api/ohlcv/token/${mint}/${resolution}`;
+    const params = new URLSearchParams();
+
+    // API requires start_date - calculate from countback if not provided
+    if (options?.startDate) {
+      params.set('start_date', options.startDate.toString());
+    } else if (options?.countback) {
+      // Calculate start_date based on resolution and countback
+      const resolutionSeconds: Record<string, number> = {
+        '1s': 1, '5s': 5, '15s': 15, '30s': 30,
+        '1m': 60, '5m': 300, '15m': 900, '30m': 1800,
+        '1h': 3600, '4h': 14400, '6h': 21600, '12h': 43200,
+        '1d': 86400, '1w': 604800,
+      };
+      const seconds = resolutionSeconds[resolution] ?? 300; // default 5m
+      const startDate = Math.floor(Date.now() / 1000) - (options.countback * seconds);
+      params.set('start_date', startDate.toString());
+    } else {
+      // Default: last hour
+      const startDate = Math.floor(Date.now() / 1000) - 3600;
+      params.set('start_date', startDate.toString());
+    }
+
+    if (options?.countback) params.set('countback', options.countback.toString());
+
+    if (params.toString()) path += `?${params}`;
+
+    const response = await this.fetch<{ ok: boolean; ohlcv: OHLCV[]; count: number }>(path);
+    return response.ohlcv ?? [];
+  }
+
+  /**
+   * Get recent trades for a token
+   */
+  async getTrades(mint: string, limit = 100): Promise<Trade[]> {
+    return this.fetch<Trade[]>(`/local-api/trades/${mint}?limit=${limit}`);
+  }
+
+  /**
+   * Get holder statistics for a token
+   */
+  async getHoldersStats(mint: string): Promise<any> {
+    return this.fetch(`/local-api/holders_stats/${mint}`);
+  }
+
+  /**
+   * Get whale moves - tokens being traded by whale wallets
+   */
+  async getWhaleMoves(): Promise<WhaleMovesItem[]> {
+    const response = await this.fetch<WhaleMovesResponse>('/local-api/discovery/whale_moves');
+    return response.data ?? [];
+  }
+
+  /**
+   * Get trending tokens
+   */
+  async getTrending(limit = 20): Promise<DiscoveryTrendingItem[]> {
+    const response = await this.fetch<{ data?: DiscoveryTrendingItem[]; tokens?: DiscoveryTrendingItem[] } | DiscoveryTrendingItem[]>(`/local-api/discovery/trending?limit=${limit}`);
+
+    // Handle wrapped response formats
+    if (Array.isArray(response)) {
+      return response;
+    }
+    if (response && typeof response === 'object') {
+      // Try common wrapper keys
+      if ('data' in response && Array.isArray(response.data)) {
+        return response.data;
+      }
+      if ('tokens' in response && Array.isArray(response.tokens)) {
+        return response.tokens;
+      }
+      // Log structure for debugging
+      console.log('[API] Trending response keys:', Object.keys(response));
+    }
+    return [];
+  }
+
+  /**
+   * Search for tokens by text
+   */
+  async searchTokens(query: string): Promise<any[]> {
+    return this.fetch(`/local-api/search?text=${encodeURIComponent(query)}`);
+  }
+
+  /**
+   * Health check
+   */
+  async healthCheck(): Promise<{ ok: boolean }> {
+    return this.fetch('/health');
+  }
+}
+
+// Default client pointing to local-api
+export const localApi = new ApiClient({
+  baseUrl: 'http://localhost:8787',
+});
+
+// Beta data API client
+export const betaApi = new ApiClient({
+  baseUrl: 'https://beta-data.bonkbot.io/data',
+});

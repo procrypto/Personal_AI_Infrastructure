@@ -1,0 +1,165 @@
+---
+phase: 03-slack-listener-threads
+plan: 01
+type: execute
+---
+
+<objective>
+Create Slack client singleton and event listener to capture Linear's native Slack messages.
+
+Purpose: When Linear posts to #qa-mods, capture the message and extract the Linear issue ID for later thread replies.
+Output: Slack client singleton, message event listener, integration with existing linear-message-store.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/03-slack-listener-threads/DISCOVERY.md
+
+# Prior phase context (from frontmatter):
+# - Phase 01-02 provides: Vercel KV store with linear-message-store
+# - Phase 01-03 provides: Event bus singleton pattern
+# - Phase 02-01 provides: LinearClient singleton pattern to follow
+
+@src/coordination/index.ts
+@src/coordination/store/linear-message-store.ts
+@src/coordination/linear/client.ts
+
+**Tech stack available:** @vercel/kv, @linear/sdk
+**Established patterns:** Singleton pattern, Union types, Type guards
+**Constraining decisions:**
+- [01-03]: Singleton pattern for shared instances
+- [02-01]: LinearClient singleton serves as pattern reference
+
+**Environment variables needed:**
+- SLACK_BOT_TOKEN (Bot User OAuth Token)
+- SLACK_SIGNING_SECRET (Signing Secret)
+- LINEAR_BOT_ID (Linear's Slack app bot ID)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Install @slack/bolt and create client singleton</name>
+  <files>package.json, bun.lock, src/coordination/slack/client.ts</files>
+  <action>
+    1. Install @slack/bolt: `bun add @slack/bolt`
+    2. Create src/coordination/slack/client.ts following the singleton pattern from linear/client.ts:
+       - Export `getSlackApp()` that returns a Bolt App instance
+       - Use environment variables: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
+       - Set logLevel based on NODE_ENV (DEBUG for dev, INFO for prod)
+       - Export `resetSlackApp()` for testing
+
+    Do NOT use Socket Mode (requires app token) - we'll use HTTP receiver via Vercel Functions.
+    Do NOT start the app in this file - just create and export the singleton.
+  </action>
+  <verify>
+    - File exists at src/coordination/slack/client.ts
+    - TypeScript compiles: `bun run build` succeeds
+    - Package.json includes @slack/bolt dependency
+  </verify>
+  <done>
+    - @slack/bolt installed
+    - Slack client singleton created following established pattern
+    - TypeScript types working
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create message event listener for Linear bot messages</name>
+  <files>src/coordination/slack/listener.ts, src/coordination/slack/types.ts</files>
+  <action>
+    1. Create src/coordination/slack/types.ts with:
+       - LinearBotConfig interface (botId, channels to watch)
+       - CapturedLinearMessage interface (extends what we extract from Slack event)
+
+    2. Create src/coordination/slack/listener.ts:
+       - Export `setupLinearMessageListener(app: App): void`
+       - Listen for 'message' events using `app.event('message', ...)`
+       - Filter for: subtype === 'bot_message' AND bot_id matches LINEAR_BOT_ID env var
+       - Extract Linear issue ID from message text using regex: `/linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)/`
+       - Also try to extract from unfurled links/attachments if text doesn't have URL
+       - Log captured messages (actual storage in next task)
+
+    The listener should be defensive:
+    - Return early if not a bot message
+    - Return early if bot_id doesn't match
+    - Return early if no issue ID found (log debug message)
+  </action>
+  <verify>
+    - File exists at src/coordination/slack/listener.ts
+    - File exists at src/coordination/slack/types.ts
+    - TypeScript compiles: `bun run build` succeeds
+  </verify>
+  <done>
+    - Message listener created
+    - Filters for Linear bot messages
+    - Extracts Linear issue ID from URLs
+    - Type definitions in place
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Wire up listener to linear-message-store and create barrel export</name>
+  <files>src/coordination/slack/listener.ts, src/coordination/slack/index.ts, src/coordination/index.ts</files>
+  <action>
+    1. Update src/coordination/slack/listener.ts:
+       - Import storeLinearMessage from '../store/linear-message-store.js'
+       - After extracting issue ID, call storeLinearMessage with:
+         - slackMessageTs: event.ts
+         - slackChannelId: event.channel
+         - linearIssueId: extracted ID
+         - capturedAt: new Date().toISOString()
+       - Wrap in try/catch, log errors but don't throw
+
+    2. Create src/coordination/slack/index.ts barrel:
+       - Export * from './client.js'
+       - Export * from './listener.js'
+       - Export * from './types.js'
+
+    3. Update src/coordination/index.ts:
+       - Add: export * from './slack/index.js'
+
+    This completes the capture flow: Slack message → listener → linear-message-store.
+  </action>
+  <verify>
+    - TypeScript compiles: `bun run build` succeeds
+    - Barrel exports work: imports from '@/coordination' include slack exports
+  </verify>
+  <done>
+    - Listener stores captured messages in KV
+    - Barrel exports created for slack module
+    - Main coordination barrel updated
+    - Full capture flow wired: message → extract → store
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run build` succeeds without errors
+- [ ] @slack/bolt in package.json dependencies
+- [ ] src/coordination/slack/ directory exists with client.ts, listener.ts, types.ts, index.ts
+- [ ] Slack module exported from src/coordination/index.ts
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Slack client singleton created
+- Linear message listener implemented
+- Integration with existing linear-message-store
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-slack-listener-threads/03-01-SUMMARY.md`
+</output>

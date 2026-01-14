@@ -1,0 +1,1660 @@
+     1→<purpose>
+     2→Execute a phase prompt (PLAN.md) and create the outcome summary (SUMMARY.md).
+     3→</purpose>
+     4→
+     5→<required_reading>
+     6→Read STATE.md before any operation to load project context.
+     7→</required_reading>
+     8→
+     9→<process>
+    10→
+    11→<step name="load_project_state" priority="first">
+    12→Before any operation, read project state:
+    13→
+    14→```bash
+    15→cat .planning/STATE.md 2>/dev/null
+    16→```
+    17→
+    18→**If file exists:** Parse and internalize:
+    19→
+    20→- Current position (phase, plan, status)
+    21→- Accumulated decisions (constraints on this execution)
+    22→- Deferred issues (context for deviations)
+    23→- Blockers/concerns (things to watch for)
+    24→- Brief alignment status
+    25→
+    26→**If file missing but .planning/ exists:**
+    27→
+    28→```
+    29→STATE.md missing but planning artifacts exist.
+    30→Options:
+    31→1. Reconstruct from existing artifacts
+    32→2. Continue without project state (may lose accumulated context)
+    33→```
+    34→
+    35→**If .planning/ doesn't exist:** Error - project not initialized.
+    36→
+    37→This ensures every execution has full project context.
+    38→</step>
+    39→
+    40→<step name="identify_plan">
+    41→Find the next plan to execute:
+    42→- Check roadmap for "In progress" phase
+    43→- Find plans in that phase directory
+    44→- Identify first plan without corresponding SUMMARY
+    45→
+    46→```bash
+    47→cat .planning/ROADMAP.md
+    48→# Look for phase with "In progress" status
+    49→# Then find plans in that phase
+    50→ls .planning/phases/XX-name/*-PLAN.md 2>/dev/null | sort
+    51→ls .planning/phases/XX-name/*-SUMMARY.md 2>/dev/null | sort
+    52→```
+    53→
+    54→**Logic:**
+    55→
+    56→- If `01-01-PLAN.md` exists but `01-01-SUMMARY.md` doesn't → execute 01-01
+    57→- If `01-01-SUMMARY.md` exists but `01-02-SUMMARY.md` doesn't → execute 01-02
+    58→- Pattern: Find first PLAN file without matching SUMMARY file
+    59→
+    60→**Decimal phase handling:**
+    61→
+    62→Phase directories can be integer or decimal format:
+    63→
+    64→- Integer: `.planning/phases/01-foundation/01-01-PLAN.md`
+    65→- Decimal: `.planning/phases/01.1-hotfix/01.1-01-PLAN.md`
+    66→
+    67→Parse phase number from path (handles both formats):
+    68→
+    69→```bash
+    70→# Extract phase number (handles XX or XX.Y format)
+    71→PHASE=$(echo "$PLAN_PATH" | grep -oE '[0-9]+(\.[0-9]+)?-[0-9]+')
+    72→```
+    73→
+    74→SUMMARY naming follows same pattern:
+    75→
+    76→- Integer: `01-01-SUMMARY.md`
+    77→- Decimal: `01.1-01-SUMMARY.md`
+    78→
+    79→Confirm with user if ambiguous.
+    80→
+    81→<config-check>
+    82→```bash
+    83→cat .planning/config.json 2>/dev/null
+    84→```
+    85→</config-check>
+    86→
+    87→<if mode="yolo">
+    88→```
+    89→⚡ Auto-approved: Execute {phase}-{plan}-PLAN.md
+    90→[Plan X of Y for Phase Z]
+    91→
+    92→Starting execution...
+    93→```
+    94→
+    95→Proceed directly to parse_segments step.
+    96→</if>
+    97→
+    98→<if mode="interactive" OR="custom with gates.execute_next_plan true">
+    99→Present:
+   100→
+   101→```
+   102→Found plan to execute: {phase}-{plan}-PLAN.md
+   103→[Plan X of Y for Phase Z]
+   104→
+   105→Proceed with execution?
+   106→```
+   107→
+   108→Wait for confirmation before proceeding.
+   109→</if>
+   110→</step>
+   111→
+   112→<step name="record_start_time">
+   113→Record execution start time for performance tracking:
+   114→
+   115→```bash
+   116→PLAN_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+   117→PLAN_START_EPOCH=$(date +%s)
+   118→```
+   119→
+   120→Store in shell variables for duration calculation at completion.
+   121→</step>
+   122→
+   123→<step name="parse_segments">
+   124→**Intelligent segmentation: Parse plan into execution segments.**
+   125→
+   126→Plans are divided into segments by checkpoints. Each segment is routed to optimal execution context (subagent or main).
+   127→
+   128→**1. Check for checkpoints:**
+   129→
+   130→```bash
+   131→# Find all checkpoints and their types
+   132→grep -n "type=\"checkpoint" .planning/phases/XX-name/{phase}-{plan}-PLAN.md
+   133→```
+   134→
+   135→**2. Analyze execution strategy:**
+   136→
+   137→**If NO checkpoints found:**
+   138→
+   139→- **Fully autonomous plan** - spawn single subagent for entire plan
+   140→- Subagent gets fresh 200k context, executes all tasks, creates SUMMARY, commits
+   141→- Main context: Just orchestration (~5% usage)
+   142→
+   143→**If checkpoints found, parse into segments:**
+   144→
+   145→Segment = tasks between checkpoints (or start→first checkpoint, or last checkpoint→end)
+   146→
+   147→**For each segment, determine routing:**
+   148→
+   149→```
+   150→Segment routing rules:
+   151→
+   152→IF segment has no prior checkpoint:
+   153→  → SUBAGENT (first segment, nothing to depend on)
+   154→
+   155→IF segment follows checkpoint:human-verify:
+   156→  → SUBAGENT (verification is just confirmation, doesn't affect next work)
+   157→
+   158→IF segment follows checkpoint:decision OR checkpoint:human-action:
+   159→  → MAIN CONTEXT (next tasks need the decision/result)
+   160→```
+   161→
+   162→**3. Execution pattern:**
+   163→
+   164→**Pattern A: Fully autonomous (no checkpoints)**
+   165→
+   166→```
+   167→Spawn subagent → execute all tasks → SUMMARY → commit → report back
+   168→```
+   169→
+   170→**Pattern B: Segmented with verify-only checkpoints**
+   171→
+   172→```
+   173→Segment 1 (tasks 1-3): Spawn subagent → execute → report back
+   174→Checkpoint 4 (human-verify): Main context → you verify → continue
+   175→Segment 2 (tasks 5-6): Spawn NEW subagent → execute → report back
+   176→Checkpoint 7 (human-verify): Main context → you verify → continue
+   177→Aggregate results → SUMMARY → commit
+   178→```
+   179→
+   180→**Pattern C: Decision-dependent (must stay in main)**
+   181→
+   182→```
+   183→Checkpoint 1 (decision): Main context → you decide → continue in main
+   184→Tasks 2-5: Main context (need decision from checkpoint 1)
+   185→No segmentation benefit - execute entirely in main
+   186→```
+   187→
+   188→**4. Why this works:**
+   189→
+   190→**Segmentation benefits:**
+   191→
+   192→- Fresh context for each autonomous segment (0% start every time)
+   193→- Main context only for checkpoints (~10-20% total)
+   194→- Can handle 10+ task plans if properly segmented
+   195→- Quality impossible to degrade in autonomous segments
+   196→
+   197→**When segmentation provides no benefit:**
+   198→
+   199→- Checkpoint is decision/human-action and following tasks depend on outcome
+   200→- Better to execute sequentially in main than break flow
+   201→
+   202→**5. Implementation:**
+   203→
+   204→**For fully autonomous plans:**
+   205→
+   206→```
+   207→Use Task tool with subagent_type="general-purpose":
+   208→
+   209→Prompt: "Execute plan at .planning/phases/{phase}-{plan}-PLAN.md
+   210→
+   211→This is an autonomous plan (no checkpoints). Execute all tasks, create SUMMARY.md in phase directory, commit with message following plan's commit guidance.
+   212→
+   213→Follow all deviation rules and authentication gate protocols from the plan.
+   214→
+   215→When complete, report: plan name, tasks completed, SUMMARY path, commit hash."
+   216→```
+   217→
+   218→**For segmented plans (has verify-only checkpoints):**
+   219→
+   220→```
+   221→Execute segment-by-segment:
+   222→
+   223→For each autonomous segment:
+   224→  Spawn subagent with prompt: "Execute tasks [X-Y] from plan at .planning/phases/{phase}-{plan}-PLAN.md. Read the plan for full context and deviation rules. Do NOT create SUMMARY or commit - just execute these tasks and report results."
+   225→
+   226→  Wait for subagent completion
+   227→
+   228→For each checkpoint:
+   229→  Execute in main context
+   230→  Wait for user interaction
+   231→  Continue to next segment
+   232→
+   233→After all segments complete:
+   234→  Aggregate all results
+   235→  Create SUMMARY.md
+   236→  Commit with all changes
+   237→```
+   238→
+   239→**For decision-dependent plans:**
+   240→
+   241→```
+   242→Execute in main context (standard flow below)
+   243→No subagent routing
+   244→Quality maintained through small scope (2-3 tasks per plan)
+   245→```
+   246→
+   247→See step name="segment_execution" for detailed segment execution loop.
+   248→</step>
+   249→
+   250→<step name="segment_execution">
+   251→**Detailed segment execution loop for segmented plans.**
+   252→
+   253→**This step applies ONLY to segmented plans (Pattern B: has checkpoints, but they're verify-only).**
+   254→
+   255→For Pattern A (fully autonomous) and Pattern C (decision-dependent), skip this step.
+   256→
+   257→**Execution flow:**
+   258→
+   259→````
+   260→1. Parse plan to identify segments:
+   261→   - Read plan file
+   262→   - Find checkpoint locations: grep -n "type=\"checkpoint" PLAN.md
+   263→   - Identify checkpoint types: grep "type=\"checkpoint" PLAN.md | grep -o 'checkpoint:[^"]*'
+   264→   - Build segment map:
+   265→     * Segment 1: Start → first checkpoint (tasks 1-X)
+   266→     * Checkpoint 1: Type and location
+   267→     * Segment 2: After checkpoint 1 → next checkpoint (tasks X+1 to Y)
+   268→     * Checkpoint 2: Type and location
+   269→     * ... continue for all segments
+   270→
+   271→2. For each segment in order:
+   272→
+   273→   A. Determine routing (apply rules from parse_segments):
+   274→      - No prior checkpoint? → Subagent
+   275→      - Prior checkpoint was human-verify? → Subagent
+   276→      - Prior checkpoint was decision/human-action? → Main context
+   277→
+   278→   B. If routing = Subagent:
+   279→      ```
+   280→      Spawn Task tool with subagent_type="general-purpose":
+   281→
+   282→      Prompt: "Execute tasks [task numbers/names] from plan at [plan path].
+   283→
+   284→      **Context:**
+   285→      - Read the full plan for objective, context files, and deviation rules
+   286→      - You are executing a SEGMENT of this plan (not the full plan)
+   287→      - Other segments will be executed separately
+   288→
+   289→      **Your responsibilities:**
+   290→      - Execute only the tasks assigned to you
+   291→      - Follow all deviation rules and authentication gate protocols
+   292→      - Track deviations for later Summary
+   293→      - DO NOT create SUMMARY.md (will be created after all segments complete)
+   294→      - DO NOT commit (will be done after all segments complete)
+   295→
+   296→      **Report back:**
+   297→      - Tasks completed
+   298→      - Files created/modified
+   299→      - Deviations encountered
+   300→      - Any issues or blockers"
+   301→
+   302→      Wait for subagent to complete
+   303→      Capture results (files changed, deviations, etc.)
+   304→      ```
+   305→
+   306→   C. If routing = Main context:
+   307→      Execute tasks in main using standard execution flow (step name="execute")
+   308→      Track results locally
+   309→
+   310→   D. After segment completes (whether subagent or main):
+   311→      Continue to next checkpoint/segment
+   312→
+   313→3. After ALL segments complete:
+   314→
+   315→   A. Aggregate results from all segments:
+   316→      - Collect files created/modified from all segments
+   317→      - Collect deviations from all segments
+   318→      - Collect decisions from all checkpoints
+   319→      - Merge into complete picture
+   320→
+   321→   B. Create SUMMARY.md:
+   322→      - Use aggregated results
+   323→      - Document all work from all segments
+   324→      - Include deviations from all segments
+   325→      - Note which segments were subagented
+   326→
+   327→   C. Commit:
+   328→      - Stage all files from all segments
+   329→      - Stage SUMMARY.md
+   330→      - Commit with message following plan guidance
+   331→      - Include note about segmented execution if relevant
+   332→
+   333→   D. Report completion
+   334→
+   335→**Example execution trace:**
+   336→
+   337→````
+   338→
+   339→Plan: 01-02-PLAN.md (8 tasks, 2 verify checkpoints)
+   340→
+   341→Parsing segments...
+   342→
+   343→- Segment 1: Tasks 1-3 (autonomous)
+   344→- Checkpoint 4: human-verify
+   345→- Segment 2: Tasks 5-6 (autonomous)
+   346→- Checkpoint 7: human-verify
+   347→- Segment 3: Task 8 (autonomous)
+   348→
+   349→Routing analysis:
+   350→
+   351→- Segment 1: No prior checkpoint → SUBAGENT ✓
+   352→- Checkpoint 4: Verify only → MAIN (required)
+   353→- Segment 2: After verify → SUBAGENT ✓
+   354→- Checkpoint 7: Verify only → MAIN (required)
+   355→- Segment 3: After verify → SUBAGENT ✓
+   356→
+   357→Execution:
+   358→[1] Spawning subagent for tasks 1-3...
+   359→→ Subagent completes: 3 files modified, 0 deviations
+   360→[2] Executing checkpoint 4 (human-verify)...
+   361→════════════════════════════════════════
+   362→CHECKPOINT: Verification Required
+   363→Task 4 of 8: Verify database schema
+   364→I built: User and Session tables with relations
+   365→How to verify: Check src/db/schema.ts for correct types
+   366→════════════════════════════════════════
+   367→User: "approved"
+   368→[3] Spawning subagent for tasks 5-6...
+   369→→ Subagent completes: 2 files modified, 1 deviation (added error handling)
+   370→[4] Executing checkpoint 7 (human-verify)...
+   371→User: "approved"
+   372→[5] Spawning subagent for task 8...
+   373→→ Subagent completes: 1 file modified, 0 deviations
+   374→
+   375→Aggregating results...
+   376→
+   377→- Total files: 6 modified
+   378→- Total deviations: 1
+   379→- Segmented execution: 3 subagents, 2 checkpoints
+   380→
+   381→Creating SUMMARY.md...
+   382→Committing...
+   383→✓ Complete
+   384→
+   385→````
+   386→
+   387→**Benefits of this pattern:**
+   388→- Main context usage: ~20% (just orchestration + checkpoints)
+   389→- Subagent 1: Fresh 0-30% (tasks 1-3)
+   390→- Subagent 2: Fresh 0-30% (tasks 5-6)
+   391→- Subagent 3: Fresh 0-20% (task 8)
+   392→- All autonomous work: Peak quality
+   393→- Can handle large plans with many tasks if properly segmented
+   394→
+   395→**When NOT to use segmentation:**
+   396→- Plan has decision/human-action checkpoints that affect following tasks
+   397→- Following tasks depend on checkpoint outcome
+   398→- Better to execute in main sequentially in those cases
+   399→</step>
+   400→
+   401→<step name="load_prompt">
+   402→Read the plan prompt:
+   403→```bash
+   404→cat .planning/phases/XX-name/{phase}-{plan}-PLAN.md
+   405→````
+   406→
+   407→This IS the execution instructions. Follow it exactly.
+   408→
+   409→**If plan references CONTEXT.md:**
+   410→The CONTEXT.md file provides the user's vision for this phase — how they imagine it working, what's essential, and what's out of scope. Honor this context throughout execution.
+   411→</step>
+   412→
+   413→<step name="previous_phase_check">
+   414→Before executing, check if previous phase had issues:
+   415→
+   416→```bash
+   417→# Find previous phase summary
+   418→ls .planning/phases/*/SUMMARY.md 2>/dev/null | sort -r | head -2 | tail -1
+   419→```
+   420→
+   421→If previous phase SUMMARY.md has "Issues Encountered" != "None" or "Next Phase Readiness" mentions blockers:
+   422→
+   423→Use AskUserQuestion:
+   424→
+   425→- header: "Previous Issues"
+   426→- question: "Previous phase had unresolved items: [summary]. How to proceed?"
+   427→- options:
+   428→  - "Proceed anyway" - Issues won't block this phase
+   429→  - "Address first" - Let's resolve before continuing
+   430→  - "Review previous" - Show me the full summary
+   431→    </step>
+   432→
+   433→<step name="execute">
+   434→Execute each task in the prompt. **Deviations are normal** - handle them automatically using embedded rules below.
+   435→
+   436→1. Read the @context files listed in the prompt
+   437→
+   438→2. For each task:
+   439→
+   440→   **If `type="auto"`:**
+   441→
+   442→   **Before executing:** Check if task has `tdd="true"` attribute:
+   443→   - If yes: Follow TDD execution flow (see `<tdd_execution>`) - RED → GREEN → REFACTOR cycle with atomic commits per stage
+   444→   - If no: Standard implementation
+   445→
+   446→   - Work toward task completion
+   447→   - **If CLI/API returns authentication error:** Handle as authentication gate (see below)
+   448→   - **When you discover additional work not in plan:** Apply deviation rules (see below) automatically
+   449→   - Continue implementing, applying rules as needed
+   450→   - Run the verification
+   451→   - Confirm done criteria met
+   452→   - **Commit the task** (see `<task_commit>` below)
+   453→   - Track task completion and commit hash for Summary documentation
+   454→   - Continue to next task
+   455→
+   456→   **If `type="checkpoint:*"`:**
+   457→
+   458→   - STOP immediately (do not continue to next task)
+   459→   - Execute checkpoint_protocol (see below)
+   460→   - Wait for user response
+   461→   - Verify if possible (check files, env vars, etc.)
+   462→   - Only after user confirmation: continue to next task
+   463→
+   464→3. Run overall verification checks from `<verification>` section
+   465→4. Confirm all success criteria from `<success_criteria>` section met
+   466→5. Document all deviations in Summary (automatic - see deviation_documentation below)
+   467→   </step>
+   468→
+   469→<authentication_gates>
+   470→
+   471→## Handling Authentication Errors During Execution
+   472→
+   473→**When you encounter authentication errors during `type="auto"` task execution:**
+   474→
+   475→This is NOT a failure. Authentication gates are expected and normal. Handle them dynamically:
+   476→
+   477→**Authentication error indicators:**
+   478→
+   479→- CLI returns: "Error: Not authenticated", "Not logged in", "Unauthorized", "401", "403"
+   480→- API returns: "Authentication required", "Invalid API key", "Missing credentials"
+   481→- Command fails with: "Please run {tool} login" or "Set {ENV_VAR} environment variable"
+   482→
+   483→**Authentication gate protocol:**
+   484→
+   485→1. **Recognize it's an auth gate** - Not a bug, just needs credentials
+   486→2. **STOP current task execution** - Don't retry repeatedly
+   487→3. **Create dynamic checkpoint:human-action** - Present it to user immediately
+   488→4. **Provide exact authentication steps** - CLI commands, where to get keys
+   489→5. **Wait for user to authenticate** - Let them complete auth flow
+   490→6. **Verify authentication works** - Test that credentials are valid
+   491→7. **Retry the original task** - Resume automation where you left off
+   492→8. **Continue normally** - Don't treat this as an error in Summary
+   493→
+   494→**Example: Vercel deployment hits auth error**
+   495→
+   496→```
+   497→Task 3: Deploy to Vercel
+   498→Running: vercel --yes
+   499→
+   500→Error: Not authenticated. Please run 'vercel login'
+   501→
+   502→[Create checkpoint dynamically]
+   503→
+   504→════════════════════════════════════════
+   505→CHECKPOINT: Authentication Required
+   506→════════════════════════════════════════
+   507→
+   508→Task 3 of 8: Authenticate Vercel CLI
+   509→
+   510→I tried to deploy but got authentication error.
+   511→
+   512→What you need to do:
+   513→Run: vercel login
+   514→
+   515→This will open your browser - complete the authentication flow.
+   516→
+   517→I'll verify after: vercel whoami returns your account
+   518→
+   519→Type "done" when authenticated
+   520→════════════════════════════════════════
+   521→
+   522→[Wait for user response]
+   523→
+   524→[User types "done"]
+   525→
+   526→Verifying authentication...
+   527→Running: vercel whoami
+   528→✓ Authenticated as: user@example.com
+   529→
+   530→Retrying deployment...
+   531→Running: vercel --yes
+   532→✓ Deployed to: https://myapp-abc123.vercel.app
+   533→
+   534→Task 3 complete. Continuing to task 4...
+   535→```
+   536→
+   537→**In Summary documentation:**
+   538→
+   539→Document authentication gates as normal flow, not deviations:
+   540→
+   541→```markdown
+   542→## Authentication Gates
+   543→
+   544→During execution, I encountered authentication requirements:
+   545→
+   546→1. Task 3: Vercel CLI required authentication
+   547→   - Paused for `vercel login`
+   548→   - Resumed after authentication
+   549→   - Deployed successfully
+   550→
+   551→These are normal gates, not errors.
+   552→```
+   553→
+   554→**Key principles:**
+   555→
+   556→- Authentication gates are NOT failures or bugs
+   557→- They're expected interaction points during first-time setup
+   558→- Handle them gracefully and continue automation after unblocked
+   559→- Don't mark tasks as "failed" or "incomplete" due to auth gates
+   560→- Document them as normal flow, separate from deviations
+   561→  </authentication_gates>
+   562→
+   563→<deviation_rules>
+   564→
+   565→## Automatic Deviation Handling
+   566→
+   567→**While executing tasks, you WILL discover work not in the plan.** This is normal.
+   568→
+   569→Apply these rules automatically. Track all deviations for Summary documentation.
+   570→
+   571→---
+   572→
+   573→**RULE 1: Auto-fix bugs**
+   574→
+   575→**Trigger:** Code doesn't work as intended (broken behavior, incorrect output, errors)
+   576→
+   577→**Action:** Fix immediately, track for Summary
+   578→
+   579→**Examples:**
+   580→
+   581→- Wrong SQL query returning incorrect data
+   582→- Logic errors (inverted condition, off-by-one, infinite loop)
+   583→- Type errors, null pointer exceptions, undefined references
+   584→- Broken validation (accepts invalid input, rejects valid input)
+   585→- Security vulnerabilities (SQL injection, XSS, CSRF, insecure auth)
+   586→- Race conditions, deadlocks
+   587→- Memory leaks, resource leaks
+   588→
+   589→**Process:**
+   590→
+   591→1. Fix the bug inline
+   592→2. Add/update tests to prevent regression
+   593→3. Verify fix works
+   594→4. Continue task
+   595→5. Track in deviations list: `[Rule 1 - Bug] [description]`
+   596→
+   597→**No user permission needed.** Bugs must be fixed for correct operation.
+   598→
+   599→---
+   600→
+   601→**RULE 2: Auto-add missing critical functionality**
+   602→
+   603→**Trigger:** Code is missing essential features for correctness, security, or basic operation
+   604→
+   605→**Action:** Add immediately, track for Summary
+   606→
+   607→**Examples:**
+   608→
+   609→- Missing error handling (no try/catch, unhandled promise rejections)
+   610→- No input validation (accepts malicious data, type coercion issues)
+   611→- Missing null/undefined checks (crashes on edge cases)
+   612→- No authentication on protected routes
+   613→- Missing authorization checks (users can access others' data)
+   614→- No CSRF protection, missing CORS configuration
+   615→- No rate limiting on public APIs
+   616→- Missing required database indexes (causes timeouts)
+   617→- No logging for errors (can't debug production)
+   618→
+   619→**Process:**
+   620→
+   621→1. Add the missing functionality inline
+   622→2. Add tests for the new functionality
+   623→3. Verify it works
+   624→4. Continue task
+   625→5. Track in deviations list: `[Rule 2 - Missing Critical] [description]`
+   626→
+   627→**Critical = required for correct/secure/performant operation**
+   628→**No user permission needed.** These are not "features" - they're requirements for basic correctness.
+   629→
+   630→---
+   631→
+   632→**RULE 3: Auto-fix blocking issues**
+   633→
+   634→**Trigger:** Something prevents you from completing current task
+   635→
+   636→**Action:** Fix immediately to unblock, track for Summary
+   637→
+   638→**Examples:**
+   639→
+   640→- Missing dependency (package not installed, import fails)
+   641→- Wrong types blocking compilation
+   642→- Broken import paths (file moved, wrong relative path)
+   643→- Missing environment variable (app won't start)
+   644→- Database connection config error
+   645→- Build configuration error (webpack, tsconfig, etc.)
+   646→- Missing file referenced in code
+   647→- Circular dependency blocking module resolution
+   648→
+   649→**Process:**
+   650→
+   651→1. Fix the blocking issue
+   652→2. Verify task can now proceed
+   653→3. Continue task
+   654→4. Track in deviations list: `[Rule 3 - Blocking] [description]`
+   655→
+   656→**No user permission needed.** Can't complete task without fixing blocker.
+   657→
+   658→---
+   659→
+   660→**RULE 4: Ask about architectural changes**
+   661→
+   662→**Trigger:** Fix/addition requires significant structural modification
+   663→
+   664→**Action:** STOP, present to user, wait for decision
+   665→
+   666→**Examples:**
+   667→
+   668→- Adding new database table (not just column)
+   669→- Major schema changes (changing primary key, splitting tables)
+   670→- Introducing new service layer or architectural pattern
+   671→- Switching libraries/frameworks (React → Vue, REST → GraphQL)
+   672→- Changing authentication approach (sessions → JWT)
+   673→- Adding new infrastructure (message queue, cache layer, CDN)
+   674→- Changing API contracts (breaking changes to endpoints)
+   675→- Adding new deployment environment
+   676→
+   677→**Process:**
+   678→
+   679→1. STOP current task
+   680→2. Present clearly:
+   681→
+   682→```
+   683→⚠️ Architectural Decision Needed
+   684→
+   685→Current task: [task name]
+   686→Discovery: [what you found that prompted this]
+   687→Proposed change: [architectural modification]
+   688→Why needed: [rationale]
+   689→Impact: [what this affects - APIs, deployment, dependencies, etc.]
+   690→Alternatives: [other approaches, or "none apparent"]
+   691→
+   692→Proceed with proposed change? (yes / different approach / defer)
+   693→```
+   694→
+   695→3. WAIT for user response
+   696→4. If approved: implement, track as `[Rule 4 - Architectural] [description]`
+   697→5. If different approach: discuss and implement
+   698→6. If deferred: log to ISSUES.md, continue without change
+   699→
+   700→**User decision required.** These changes affect system design.
+   701→
+   702→---
+   703→
+   704→**RULE 5: Log non-critical enhancements**
+   705→
+   706→**Trigger:** Improvement that would enhance code but isn't essential now
+   707→
+   708→**Action:** Add to .planning/ISSUES.md automatically, continue task
+   709→
+   710→**Examples:**
+   711→
+   712→- Performance optimization (works correctly, just slower than ideal)
+   713→- Code refactoring (works, but could be cleaner/DRY-er)
+   714→- Better naming (works, but variables could be clearer)
+   715→- Organizational improvements (works, but file structure could be better)
+   716→- Nice-to-have UX improvements (works, but could be smoother)
+   717→- Additional test coverage beyond basics (basics exist, could be more thorough)
+   718→- Documentation improvements (code works, docs could be better)
+   719→- Accessibility enhancements beyond minimum
+   720→
+   721→**Process:**
+   722→
+   723→1. Create .planning/ISSUES.md if doesn't exist (use `~/.claude/get-shit-done/templates/issues.md`)
+   724→2. Add entry with ISS-XXX number (auto-increment)
+   725→3. Brief notification: `📋 Logged enhancement: [brief] (ISS-XXX)`
+   726→4. Continue task without implementing
+   727→
+   728→**No user permission needed.** Logging for future consideration.
+   729→
+   730→---
+   731→
+   732→**RULE PRIORITY (when multiple could apply):**
+   733→
+   734→1. **If Rule 4 applies** → STOP and ask (architectural decision)
+   735→2. **If Rules 1-3 apply** → Fix automatically, track for Summary
+   736→3. **If Rule 5 applies** → Log to ISSUES.md, continue
+   737→4. **If genuinely unsure which rule** → Apply Rule 4 (ask user)
+   738→
+   739→**Edge case guidance:**
+   740→
+   741→- "This validation is missing" → Rule 2 (critical for security)
+   742→- "This validation could be better" → Rule 5 (enhancement)
+   743→- "This crashes on null" → Rule 1 (bug)
+   744→- "This could be faster" → Rule 5 (enhancement) UNLESS actually timing out → Rule 2 (critical)
+   745→- "Need to add table" → Rule 4 (architectural)
+   746→- "Need to add column" → Rule 1 or 2 (depends: fixing bug or adding critical field)
+   747→
+   748→**When in doubt:** Ask yourself "Does this affect correctness, security, or ability to complete task?"
+   749→
+   750→- YES → Rules 1-3 (fix automatically)
+   751→- NO → Rule 5 (log it)
+   752→- MAYBE → Rule 4 (ask user)
+   753→
+   754→</deviation_rules>
+   755→
+   756→<deviation_documentation>
+   757→
+   758→## Documenting Deviations in Summary
+   759→
+   760→After all tasks complete, Summary MUST include deviations section.
+   761→
+   762→**If no deviations:**
+   763→
+   764→```markdown
+   765→## Deviations from Plan
+   766→
+   767→None - plan executed exactly as written.
+   768→```
+   769→
+   770→**If deviations occurred:**
+   771→
+   772→```markdown
+   773→## Deviations from Plan
+   774→
+   775→### Auto-fixed Issues
+   776→
+   777→**1. [Rule 1 - Bug] Fixed case-sensitive email uniqueness constraint**
+   778→
+   779→- **Found during:** Task 4 (Follow/unfollow API implementation)
+   780→- **Issue:** User.email unique constraint was case-sensitive - Test@example.com and test@example.com were both allowed, causing duplicate accounts
+   781→- **Fix:** Changed to `CREATE UNIQUE INDEX users_email_unique ON users (LOWER(email))`
+   782→- **Files modified:** src/models/User.ts, migrations/003_fix_email_unique.sql
+   783→- **Verification:** Unique constraint test passes - duplicate emails properly rejected
+   784→- **Commit:** abc123f
+   785→
+   786→**2. [Rule 2 - Missing Critical] Added JWT expiry validation to auth middleware**
+   787→
+   788→- **Found during:** Task 3 (Protected route implementation)
+   789→- **Issue:** Auth middleware wasn't checking token expiry - expired tokens were being accepted
+   790→- **Fix:** Added exp claim validation in middleware, reject with 401 if expired
+   791→- **Files modified:** src/middleware/auth.ts, src/middleware/auth.test.ts
+   792→- **Verification:** Expired token test passes - properly rejects with 401
+   793→- **Commit:** def456g
+   794→
+   795→### Deferred Enhancements
+   796→
+   797→Logged to .planning/ISSUES.md for future consideration:
+   798→
+   799→- ISS-001: Refactor UserService into smaller modules (discovered in Task 3)
+   800→- ISS-002: Add connection pooling for Redis (discovered in Task 6)
+   801→
+   802→---
+   803→
+   804→**Total deviations:** 4 auto-fixed (1 bug, 1 missing critical, 1 blocking, 1 architectural with approval), 3 deferred
+   805→**Impact on plan:** All auto-fixes necessary for correctness/security/performance. No scope creep.
+   806→```
+   807→
+   808→**This provides complete transparency:**
+   809→
+   810→- Every deviation documented
+   811→- Why it was needed
+   812→- What rule applied
+   813→- What was done
+   814→- User can see exactly what happened beyond the plan
+   815→
+   816→</deviation_documentation>
+   817→
+   818→<tdd_plan_execution>
+   819→## TDD Plan Execution
+   820→
+   821→When executing a plan with `type: tdd` in frontmatter, follow the RED-GREEN-REFACTOR cycle for the single feature defined in the plan.
+   822→
+   823→**1. Check test infrastructure (if first TDD plan):**
+   824→If no test framework configured:
+   825→- Detect project type from package.json/requirements.txt/etc.
+   826→- Install minimal test framework (Jest, pytest, Go testing, etc.)
+   827→- Create test config file
+   828→- Verify: run empty test suite
+   829→- This is part of the RED phase, not a separate task
+   830→
+   831→**2. RED - Write failing test:**
+   832→- Read `<behavior>` element for test specification
+   833→- Create test file if doesn't exist (follow project conventions)
+   834→- Write test(s) that describe expected behavior
+   835→- Run tests - MUST fail (if passes, test is wrong or feature exists)
+   836→- Commit: `test({phase}-{plan}): add failing test for [feature]`
+   837→
+   838→**3. GREEN - Implement to pass:**
+   839→- Read `<implementation>` element for guidance
+   840→- Write minimal code to make test pass
+   841→- Run tests - MUST pass
+   842→- Commit: `feat({phase}-{plan}): implement [feature]`
+   843→
+   844→**4. REFACTOR (if needed):**
+   845→- Clean up code if obvious improvements
+   846→- Run tests - MUST still pass
+   847→- Commit only if changes made: `refactor({phase}-{plan}): clean up [feature]`
+   848→
+   849→**Commit pattern for TDD plans:**
+   850→Each TDD plan produces 2-3 atomic commits:
+   851→1. `test({phase}-{plan}): add failing test for X`
+   852→2. `feat({phase}-{plan}): implement X`
+   853→3. `refactor({phase}-{plan}): clean up X` (optional)
+   854→
+   855→**Error handling:**
+   856→- If test doesn't fail in RED phase: Test is wrong or feature already exists. Investigate before proceeding.
+   857→- If test doesn't pass in GREEN phase: Debug implementation, keep iterating until green.
+   858→- If tests fail in REFACTOR phase: Undo refactor, commit was premature.
+   859→
+   860→**Verification:**
+   861→After TDD plan completion, ensure:
+   862→- All tests pass
+   863→- Test coverage for the new behavior exists
+   864→- No unrelated tests broken
+   865→
+   866→**Why TDD uses dedicated plans:** TDD requires 2-3 execution cycles (RED → GREEN → REFACTOR), each with file reads, test runs, and potential debugging. This consumes 40-50% of context for a single feature. Dedicated plans ensure full quality throughout the cycle.
+   867→
+   868→**Comparison:**
+   869→- Standard plans: Multiple tasks, 1 commit per task, 2-4 commits total
+   870→- TDD plans: Single feature, 2-3 commits for RED/GREEN/REFACTOR cycle
+   871→
+   872→See `~/.claude/get-shit-done/references/tdd.md` for TDD plan structure.
+   873→</tdd_plan_execution>
+   874→
+   875→<task_commit>
+   876→## Task Commit Protocol
+   877→
+   878→After each task completes (verification passed, done criteria met), commit immediately:
+   879→
+   880→**1. Identify modified files:**
+   881→
+   882→Track files changed during this specific task (not the entire plan):
+   883→
+   884→```bash
+   885→git status --short
+   886→```
+   887→
+   888→**2. Stage only task-related files:**
+   889→
+   890→Stage each file individually (NEVER use `git add .` or `git add -A`):
+   891→
+   892→```bash
+   893→# Example - adjust to actual files modified by this task
+   894→git add src/api/auth.ts
+   895→git add src/types/user.ts
+   896→```
+   897→
+   898→**3. Determine commit type:**
+   899→
+   900→| Type | When to Use | Example |
+   901→|------|-------------|---------|
+   902→| `feat` | New feature, endpoint, component, functionality | feat(08-02): create user registration endpoint |
+   903→| `fix` | Bug fix, error correction | fix(08-02): correct email validation regex |
+   904→| `test` | Test-only changes (TDD RED phase) | test(08-02): add failing test for password hashing |
+   905→| `refactor` | Code cleanup, no behavior change (TDD REFACTOR phase) | refactor(08-02): extract validation to helper |
+   906→| `perf` | Performance improvement | perf(08-02): add database index for user lookups |
+   907→| `docs` | Documentation changes | docs(08-02): add API endpoint documentation |
+   908→| `style` | Formatting, linting fixes | style(08-02): format auth module |
+   909→| `chore` | Config, tooling, dependencies | chore(08-02): add bcrypt dependency |
+   910→
+   911→**4. Craft commit message:**
+   912→
+   913→Format: `{type}({phase}-{plan}): {task-name-or-description}`
+   914→
+   915→```bash
+   916→git commit -m "{type}({phase}-{plan}): {concise task description}
+   917→
+   918→- {key change 1}
+   919→- {key change 2}
+   920→- {key change 3}
+   921→"
+   922→```
+   923→
+   924→**Examples:**
+   925→
+   926→```bash
+   927→# Standard plan task
+   928→git commit -m "feat(08-02): create user registration endpoint
+   929→
+   930→- POST /auth/register validates email and password
+   931→- Checks for duplicate users
+   932→- Returns JWT token on success
+   933→"
+   934→
+   935→# Another standard task
+   936→git commit -m "fix(08-02): correct email validation regex
+   937→
+   938→- Fixed regex to accept plus-addressing
+   939→- Added tests for edge cases
+   940→"
+   941→```
+   942→
+   943→**Note:** TDD plans have their own commit pattern (test/feat/refactor for RED/GREEN/REFACTOR phases). See `<tdd_plan_execution>` section above.
+   944→
+   945→**5. Record commit hash:**
+   946→
+   947→After committing, capture hash for SUMMARY.md:
+   948→
+   949→```bash
+   950→TASK_COMMIT=$(git rev-parse --short HEAD)
+   951→echo "Task ${TASK_NUM} committed: ${TASK_COMMIT}"
+   952→```
+   953→
+   954→Store in array or list for SUMMARY generation:
+   955→```bash
+   956→TASK_COMMITS+=("Task ${TASK_NUM}: ${TASK_COMMIT}")
+   957→```
+   958→
+   959→**Atomic commit benefits:**
+   960→- Each task independently revertable
+   961→- Git bisect finds exact failing task
+   962→- Git blame traces line to specific task context
+   963→- Clear history for Claude in future sessions
+   964→- Better observability for AI-automated workflow
+   965→
+   966→</task_commit>
+   967→
+   968→<step name="checkpoint_protocol">
+   969→When encountering `type="checkpoint:*"`:
+   970→
+   971→**Critical: Claude automates everything with CLI/API before checkpoints.** Checkpoints are for verification and decisions, not manual work.
+   972→
+   973→**Display checkpoint clearly:**
+   974→
+   975→```
+   976→════════════════════════════════════════
+   977→CHECKPOINT: [Type]
+   978→════════════════════════════════════════
+   979→
+   980→Task [X] of [Y]: [Action/What-Built/Decision]
+   981→
+   982→[Display task-specific content based on type]
+   983→
+   984→[Resume signal instruction]
+   985→════════════════════════════════════════
+   986→```
+   987→
+   988→**For checkpoint:human-verify (90% of checkpoints):**
+   989→
+   990→```
+   991→I automated: [what was automated - deployed, built, configured]
+   992→
+   993→How to verify:
+   994→1. [Step 1 - exact command/URL]
+   995→2. [Step 2 - what to check]
+   996→3. [Step 3 - expected behavior]
+   997→
+   998→[Resume signal - e.g., "Type 'approved' or describe issues"]
+   999→```
+  1000→
+  1001→**For checkpoint:decision (9% of checkpoints):**
+  1002→
+  1003→```
+  1004→Decision needed: [decision]
+  1005→
+  1006→Context: [why this matters]
+  1007→
+  1008→Options:
+  1009→1. [option-id]: [name]
+  1010→   Pros: [pros]
+  1011→   Cons: [cons]
+  1012→
+  1013→2. [option-id]: [name]
+  1014→   Pros: [pros]
+  1015→   Cons: [cons]
+  1016→
+  1017→[Resume signal - e.g., "Select: option-id"]
+  1018→```
+  1019→
+  1020→**For checkpoint:human-action (1% - rare, only for truly unavoidable manual steps):**
+  1021→
+  1022→```
+  1023→I automated: [what Claude already did via CLI/API]
+  1024→
+  1025→Need your help with: [the ONE thing with no CLI/API - email link, 2FA code]
+  1026→
+  1027→Instructions:
+  1028→[Single unavoidable step]
+  1029→
+  1030→I'll verify after: [verification]
+  1031→
+  1032→[Resume signal - e.g., "Type 'done' when complete"]
+  1033→```
+  1034→
+  1035→**After displaying:** WAIT for user response. Do NOT hallucinate completion. Do NOT continue to next task.
+  1036→
+  1037→**After user responds:**
+  1038→
+  1039→- Run verification if specified (file exists, env var set, tests pass, etc.)
+  1040→- If verification passes or N/A: continue to next task
+  1041→- If verification fails: inform user, wait for resolution
+  1042→
+  1043→See ~/.claude/get-shit-done/references/checkpoints.md for complete checkpoint guidance.
+  1044→</step>
+  1045→
+  1046→<step name="verification_failure_gate">
+  1047→If any task verification fails:
+  1048→
+  1049→STOP. Do not continue to next task.
+  1050→
+  1051→Present inline:
+  1052→"Verification failed for Task [X]: [task name]
+  1053→
+  1054→Expected: [verification criteria]
+  1055→Actual: [what happened]
+  1056→
+  1057→How to proceed?
+  1058→
+  1059→1. Retry - Try the task again
+  1060→2. Skip - Mark as incomplete, continue
+  1061→3. Stop - Pause execution, investigate"
+  1062→
+  1063→Wait for user decision.
+  1064→
+  1065→If user chose "Skip", note it in SUMMARY.md under "Issues Encountered".
+  1066→</step>
+  1067→
+  1068→<step name="record_completion_time">
+  1069→Record execution end time and calculate duration:
+  1070→
+  1071→```bash
+  1072→PLAN_END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  1073→PLAN_END_EPOCH=$(date +%s)
+  1074→
+  1075→DURATION_SEC=$(( PLAN_END_EPOCH - PLAN_START_EPOCH ))
+  1076→DURATION_MIN=$(( DURATION_SEC / 60 ))
+  1077→
+  1078→if [[ $DURATION_MIN -ge 60 ]]; then
+  1079→  HRS=$(( DURATION_MIN / 60 ))
+  1080→  MIN=$(( DURATION_MIN % 60 ))
+  1081→  DURATION="${HRS}h ${MIN}m"
+  1082→else
+  1083→  DURATION="${DURATION_MIN} min"
+  1084→fi
+  1085→```
+  1086→
+  1087→Pass timing data to SUMMARY.md creation.
+  1088→</step>
+  1089→
+  1090→<step name="quality_gate">
+  1091→**PAI Judge Integration: Evaluate output quality before SUMMARY creation.**
+  1092→
+  1093→Reference: `~/.claude/Skills/CORE/workflows/GSDQualityGate.md`
+  1094→
+  1095→**This gate combines GSD deviation rules (already applied during execution) with PAI judge evaluation.**
+  1096→
+  1097→**1. Quick assessment:**
+  1098→- Did all tasks complete successfully?
+  1099→- Were deviations handled appropriately (auto-fix vs ask)?
+  1100→- Do commits exist for each task?
+  1101→
+  1102→**2. Output quality check (FM2, FM4, FM7):**
+  1103→
+  1104→- **FM2 (Assertion without demonstration):** Are accomplishments backed by evidence (commits, tests)?
+  1105→- **FM4 (Confidence-calibration):** Are uncertain outcomes stated with appropriate hedging?
+  1106→- **FM7 (Confidence games):** Any claims that can't be traced to primary source?
+  1107→
+  1108→**3. Verdict:**
+  1109→
+  1110→**PASS:** Continue to create_summary
+  1111→- Implementation matches plan intent
+  1112→- Evidence trail complete (commits for each task)
+  1113→- No unsubstantiated claims
+  1114→
+  1115→**REVISE:** Re-execute specific failing tasks (max 2 cycles)
+  1116→- Specific weaknesses identified
+  1117→- Return to execute step for targeted fixes
+  1118→- Then re-evaluate
+  1119→
+  1120→**REJECT:** Escalate to user (equivalent to architectural deviation)
+  1121→- Fundamental approach issue discovered
+  1122→- Present to user:
+  1123→  ```
+  1124→  ⚠️ Quality Gate: Plan Requires Rework
+  1125→
+  1126→  Issue: [what failed the check]
+  1127→  Why: [fundamental problem with approach]
+  1128→
+  1129→  Options:
+  1130→  1. Reformulate plan with different approach
+  1131→  2. Override gate and accept as-is
+  1132→  3. Pause and investigate
+  1133→  ```
+  1134→- Wait for user decision
+  1135→
+  1136→**4. Gate bypass conditions:**
+  1137→- config.json mode is "yolo" AND plan has `skip-quality-gate: true` in frontmatter
+  1138→- User previously said "skip judge" or "no gate" this session
+  1139→- Plan is purely mechanical (config changes, dependency updates)
+  1140→
+  1141→**5. Document gate result:**
+  1142→Store verdict for SUMMARY.md:
+  1143→```
+  1144→QUALITY_VERDICT="PASS"  # or "PASS after revision" or "Overridden by user"
+  1145→```
+  1146→
+  1147→</step>
+  1148→
+  1149→<step name="create_summary">
+  1150→Create `{phase}-{plan}-SUMMARY.md` as specified in the prompt's `<output>` section.
+  1151→Use ~/.claude/get-shit-done/templates/summary.md for structure.
+  1152→
+  1153→**File location:** `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md`
+  1154→
+  1155→**Frontmatter population:**
+  1156→
+  1157→Before writing summary content, populate frontmatter fields from execution context:
+  1158→
+  1159→1. **Basic identification:**
+  1160→   - phase: From PLAN.md frontmatter
+  1161→   - plan: From PLAN.md frontmatter
+  1162→   - subsystem: Categorize based on phase focus (auth, payments, ui, api, database, infra, testing, etc.)
+  1163→   - tags: Extract tech keywords (libraries, frameworks, tools used)
+  1164→
+  1165→2. **Dependency graph:**
+  1166→   - requires: List prior phases this built upon (check PLAN.md context section for referenced prior summaries)
+  1167→   - provides: Extract from accomplishments - what was delivered
+  1168→   - affects: Infer from phase description/goal what future phases might need this
+  1169→
+  1170→3. **Tech tracking:**
+  1171→   - tech-stack.added: New libraries from package.json changes or requirements
+  1172→   - tech-stack.patterns: Architectural patterns established (from decisions/accomplishments)
+  1173→
+  1174→4. **File tracking:**
+  1175→   - key-files.created: From "Files Created/Modified" section
+  1176→   - key-files.modified: From "Files Created/Modified" section
+  1177→
+  1178→5. **Decisions:**
+  1179→   - key-decisions: Extract from "Decisions Made" section
+  1180→
+  1181→6. **Issues:**
+  1182→   - issues-created: Check if ISSUES.md was updated during execution
+  1183→
+  1184→7. **Metrics:**
+  1185→   - duration: From $DURATION variable
+  1186→   - completed: From $PLAN_END_TIME (date only, format YYYY-MM-DD)
+  1187→
+  1188→Note: If subsystem/affects are unclear, use best judgment based on phase name and accomplishments. Can be refined later.
+  1189→
+  1190→**Title format:** `# Phase [X] Plan [Y]: [Name] Summary`
+  1191→
+  1192→The one-liner must be SUBSTANTIVE:
+  1193→
+  1194→- Good: "JWT auth with refresh rotation using jose library"
+  1195→- Bad: "Authentication implemented"
+  1196→
+  1197→**Include performance data:**
+  1198→
+  1199→- Duration: `$DURATION`
+  1200→- Started: `$PLAN_START_TIME`
+  1201→- Completed: `$PLAN_END_TIME`
+  1202→- Tasks completed: (count from execution)
+  1203→- Files modified: (count from execution)
+  1204→
+  1205→**Next Step section:**
+  1206→
+  1207→- If more plans exist in this phase: "Ready for {phase}-{next-plan}-PLAN.md"
+  1208→- If this is the last plan: "Phase complete, ready for transition"
+  1209→  </step>
+  1210→
+  1211→<step name="update_current_position">
+  1212→Update Current Position section in STATE.md to reflect plan completion.
+  1213→
+  1214→**Format:**
+  1215→
+  1216→```markdown
+  1217→Phase: [current] of [total] ([phase name])
+  1218→Plan: [just completed] of [total in phase]
+  1219→Status: [In progress / Phase complete]
+  1220→Last activity: [today] - Completed {phase}-{plan}-PLAN.md
+  1221→
+  1222→Progress: [progress bar]
+  1223→```
+  1224→
+  1225→**Calculate progress bar:**
+  1226→
+  1227→- Count total plans across all phases (from ROADMAP.md or ROADMAP.md)
+  1228→- Count completed plans (count SUMMARY.md files that exist)
+  1229→- Progress = (completed / total) × 100%
+  1230→- Render: ░ for incomplete, █ for complete
+  1231→
+  1232→**Example - completing 02-01-PLAN.md (plan 5 of 10 total):**
+  1233→
+  1234→Before:
+  1235→
+  1236→```markdown
+  1237→## Current Position
+  1238→
+  1239→Phase: 2 of 4 (Authentication)
+  1240→Plan: Not started
+  1241→Status: Ready to execute
+  1242→Last activity: 2025-01-18 - Phase 1 complete
+  1243→
+  1244→Progress: ██████░░░░ 40%
+  1245→```
+  1246→
+  1247→After:
+  1248→
+  1249→```markdown
+  1250→## Current Position
+  1251→
+  1252→Phase: 2 of 4 (Authentication)
+  1253→Plan: 1 of 2 in current phase
+  1254→Status: In progress
+  1255→Last activity: 2025-01-19 - Completed 02-01-PLAN.md
+  1256→
+  1257→Progress: ███████░░░ 50%
+  1258→```
+  1259→
+  1260→**Step complete when:**
+  1261→
+  1262→- [ ] Phase number shows current phase (X of total)
+  1263→- [ ] Plan number shows plans complete in current phase (N of total-in-phase)
+  1264→- [ ] Status reflects current state (In progress / Phase complete)
+  1265→- [ ] Last activity shows today's date and the plan just completed
+  1266→- [ ] Progress bar calculated correctly from total completed plans
+  1267→      </step>
+  1268→
+  1269→<step name="extract_decisions_and_issues">
+  1270→Extract decisions, issues, and concerns from SUMMARY.md into STATE.md accumulated context.
+  1271→
+  1272→**Decisions Made:**
+  1273→
+  1274→- Read SUMMARY.md "## Decisions Made" section
+  1275→- If content exists (not "None"):
+  1276→  - Add each decision to STATE.md Decisions table
+  1277→  - Format: `| [phase number] | [decision summary] | [rationale] |`
+  1278→
+  1279→**Deferred Issues:**
+  1280→
+  1281→- Read SUMMARY.md to check if new issues were logged to ISSUES.md
+  1282→- If new ISS-XXX entries created:
+  1283→  - Update STATE.md "Deferred Issues" section
+  1284→
+  1285→**Blockers/Concerns:**
+  1286→
+  1287→- Read SUMMARY.md "## Next Phase Readiness" section
+  1288→- If contains blockers or concerns:
+  1289→  - Add to STATE.md "Blockers/Concerns Carried Forward"
+  1290→    </step>
+  1291→
+  1292→<step name="update_session_continuity">
+  1293→Update Session Continuity section in STATE.md to enable resumption in future sessions.
+  1294→
+  1295→**Format:**
+  1296→
+  1297→```markdown
+  1298→Last session: [current date and time]
+  1299→Stopped at: Completed {phase}-{plan}-PLAN.md
+  1300→Resume file: [path to .continue-here if exists, else "None"]
+  1301→```
+  1302→
+  1303→**Size constraint note:** Keep STATE.md under 150 lines total.
+  1304→</step>
+  1305→
+  1306→<step name="issues_review_gate">
+  1307→Before proceeding, check SUMMARY.md content.
+  1308→
+  1309→If "Issues Encountered" is NOT "None":
+  1310→
+  1311→<if mode="yolo">
+  1312→```
+  1313→⚡ Auto-approved: Issues acknowledgment
+  1314→⚠️ Note: Issues were encountered during execution:
+  1315→- [Issue 1]
+  1316→- [Issue 2]
+  1317→(Logged - continuing in yolo mode)
+  1318→```
+  1319→
+  1320→Continue without waiting.
+  1321→</if>
+  1322→
+  1323→<if mode="interactive" OR="custom with gates.issues_review true">
+  1324→Present issues and wait for acknowledgment before proceeding.
+  1325→</if>
+  1326→</step>
+  1327→
+  1328→<step name="update_roadmap">
+  1329→Update the roadmap file:
+  1330→
+  1331→```bash
+  1332→ROADMAP_FILE=".planning/ROADMAP.md"
+  1333→```
+  1334→
+  1335→**If more plans remain in this phase:**
+  1336→
+  1337→- Update plan count: "2/3 plans complete"
+  1338→- Keep phase status as "In progress"
+  1339→
+  1340→**If this was the last plan in the phase:**
+  1341→
+  1342→- Mark phase complete: status → "Complete"
+  1343→- Add completion date
+  1344→  </step>
+  1345→
+  1346→<step name="git_commit_metadata">
+  1347→Commit execution metadata (SUMMARY + STATE + ROADMAP):
+  1348→
+  1349→**Note:** All task code has already been committed during execution (one commit per task).
+  1350→PLAN.md was already committed during plan-phase. This final commit captures execution results only.
+  1351→
+  1352→**1. Stage execution artifacts:**
+  1353→
+  1354→```bash
+  1355→git add .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
+  1356→git add .planning/STATE.md
+  1357→```
+  1358→
+  1359→**2. Stage roadmap file:**
+  1360→
+  1361→```bash
+  1362→git add .planning/ROADMAP.md
+  1363→```
+  1364→
+  1365→**3. Verify staging:**
+  1366→
+  1367→```bash
+  1368→git status
+  1369→# Should show only execution artifacts (SUMMARY, STATE, ROADMAP), no code files
+  1370→```
+  1371→
+  1372→**4. Commit metadata:**
+  1373→
+  1374→```bash
+  1375→git commit -m "$(cat <<'EOF'
+  1376→docs({phase}-{plan}): complete [plan-name] plan
+  1377→
+  1378→Tasks completed: [N]/[N]
+  1379→- [Task 1 name]
+  1380→- [Task 2 name]
+  1381→- [Task 3 name]
+  1382→
+  1383→SUMMARY: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
+  1384→EOF
+  1385→)"
+  1386→```
+  1387→
+  1388→**Example:**
+  1389→
+  1390→```bash
+  1391→git commit -m "$(cat <<'EOF'
+  1392→docs(08-02): complete user registration plan
+  1393→
+  1394→Tasks completed: 3/3
+  1395→- User registration endpoint
+  1396→- Password hashing with bcrypt
+  1397→- Email confirmation flow
+  1398→
+  1399→SUMMARY: .planning/phases/08-user-auth/08-02-registration-SUMMARY.md
+  1400→EOF
+  1401→)"
+  1402→```
+  1403→
+  1404→**Git log after plan execution:**
+  1405→
+  1406→```
+  1407→abc123f docs(08-02): complete user registration plan
+  1408→def456g feat(08-02): add email confirmation flow
+  1409→hij789k feat(08-02): implement password hashing with bcrypt
+  1410→lmn012o feat(08-02): create user registration endpoint
+  1411→```
+  1412→
+  1413→Each task has its own commit, followed by one metadata commit documenting plan completion.
+  1414→
+  1415→For commit message conventions, see ~/.claude/get-shit-done/references/git-integration.md
+  1416→</step>
+  1417→
+  1418→<step name="update_codebase_map">
+  1419→**If .planning/codebase/ exists:**
+  1420→
+  1421→Check what changed across all task commits in this plan:
+  1422→
+  1423→```bash
+  1424→# Find first task commit (right after previous plan's docs commit)
+  1425→FIRST_TASK=$(git log --oneline --grep="feat({phase}-{plan}):" --grep="fix({phase}-{plan}):" --grep="test({phase}-{plan}):" --reverse | head -1 | cut -d' ' -f1)
+  1426→
+  1427→# Get all changes from first task through now
+  1428→git diff --name-only ${FIRST_TASK}^..HEAD 2>/dev/null
+  1429→```
+  1430→
+  1431→**Update only if structural changes occurred:**
+  1432→
+  1433→| Change Detected | Update Action |
+  1434→|-----------------|---------------|
+  1435→| New directory in src/ | STRUCTURE.md: Add to directory layout |
+  1436→| package.json deps changed | STACK.md: Add/remove from dependencies list |
+  1437→| New file pattern (e.g., first .test.ts) | CONVENTIONS.md: Note new pattern |
+  1438→| New external API client | INTEGRATIONS.md: Add service entry with file path |
+  1439→| Config file added/changed | STACK.md: Update configuration section |
+  1440→| File renamed/moved | Update paths in relevant docs |
+  1441→
+  1442→**Skip update if only:**
+  1443→- Code changes within existing files
+  1444→- Bug fixes
+  1445→- Content changes (no structural impact)
+  1446→
+  1447→**Update format:**
+  1448→Make single targeted edits - add a bullet point, update a path, or remove a stale entry. Don't rewrite sections.
+  1449→
+  1450→```bash
+  1451→git add .planning/codebase/*.md
+  1452→git commit --amend --no-edit  # Include in metadata commit
+  1453→```
+  1454→
+  1455→**If .planning/codebase/ doesn't exist:**
+  1456→Skip this step.
+  1457→</step>
+  1458→
+  1459→<step name="check_phase_issues">
+  1460→**Check if issues were created during this phase:**
+  1461→
+  1462→```bash
+  1463→# Check if ISSUES.md exists and has issues from current phase
+  1464→if [ -f .planning/ISSUES.md ]; then
+  1465→  grep -E "Phase ${PHASE}.*Task" .planning/ISSUES.md | grep -v "^#" || echo "NO_ISSUES_THIS_PHASE"
+  1466→fi
+  1467→```
+  1468→
+  1469→**If issues were created during this phase:**
+  1470→
+  1471→```
+  1472→📋 Issues logged during this phase:
+  1473→- ISS-XXX: [brief description]
+  1474→- ISS-YYY: [brief description]
+  1475→
+  1476→Review these now?
+  1477→```
+  1478→
+  1479→Use AskUserQuestion:
+  1480→- header: "Phase Issues"
+  1481→- question: "[N] issues were logged during this phase. Review now?"
+  1482→- options:
+  1483→  - "Review issues" - Analyze with /gsd:consider-issues
+  1484→  - "Continue" - Address later, proceed to next work
+  1485→
+  1486→**If "Review issues" selected:**
+  1487→- Invoke: `SlashCommand("/gsd:consider-issues")`
+  1488→- After consider-issues completes, return to offer_next
+  1489→
+  1490→**If "Continue" selected or no issues found:**
+  1491→- Proceed to offer_next step
+  1492→
+  1493→**In YOLO mode:**
+  1494→- Note issues were logged but don't prompt: `📋 [N] issues logged this phase (review later with /gsd:consider-issues)`
+  1495→- Continue to offer_next automatically
+  1496→</step>
+  1497→
+  1498→<step name="offer_next">
+  1499→**First, determine if more plans exist in this phase:**
+  1500→
+  1501→```bash
+  1502→# Get current phase directory from the plan we just executed
+  1503→PHASE_DIR=$(dirname "$PLAN_PATH")
+  1504→
+  1505→# Count PLAN files vs SUMMARY files
+  1506→PLAN_COUNT=$(ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null | wc -l | tr -d ' ')
+  1507→SUMMARY_COUNT=$(ls "$PHASE_DIR"/*-SUMMARY.md 2>/dev/null | wc -l | tr -d ' ')
+  1508→
+  1509→echo "Plans: $PLAN_COUNT, Summaries: $SUMMARY_COUNT"
+  1510→
+  1511→if [[ $SUMMARY_COUNT -lt $PLAN_COUNT ]]; then
+  1512→  echo "MORE_PLANS_EXIST"
+  1513→else
+  1514→  echo "PHASE_COMPLETE"
+  1515→fi
+  1516→```
+  1517→
+  1518→**If MORE_PLANS_EXIST (more plans in this phase):**
+  1519→
+  1520→<if mode="yolo">
+  1521→```
+  1522→Plan {phase}-{plan} complete.
+  1523→Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
+  1524→
+  1525→[X] of [Y] plans complete for Phase Z.
+  1526→
+  1527→⚡ Auto-continuing: Execute next plan ({phase}-{next-plan})
+  1528→```
+  1529→
+  1530→Loop back to identify_plan step automatically.
+  1531→</if>
+  1532→
+  1533→<if mode="interactive" OR="custom with gates.execute_next_plan true">
+  1534→```
+  1535→Plan {phase}-{plan} complete.
+  1536→Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
+  1537→
+  1538→[X] of [Y] plans complete for Phase Z.
+  1539→
+  1540→---
+  1541→
+  1542→## ▶ Next Up
+  1543→
+  1544→**{phase}-{next-plan}: [Plan Name]** — [objective from next PLAN.md]
+  1545→
+  1546→`/gsd:execute-plan .planning/phases/XX-name/{phase}-{next-plan}-PLAN.md`
+  1547→
+  1548→<sub>`/clear` first → fresh context window</sub>
+  1549→
+  1550→---
+  1551→
+  1552→**Also available:**
+  1553→- Review what was built before continuing
+  1554→
+  1555→---
+  1556→```
+  1557→
+  1558→Wait for user to clear and run next command.
+  1559→</if>
+  1560→
+  1561→**If phase complete (last plan done):**
+  1562→
+  1563→First, check if this is also the last phase in the milestone (milestone complete):
+  1564→
+  1565→```bash
+  1566→# Count total phases in ROADMAP.md
+  1567→TOTAL_PHASES=$(grep -c "^### Phase [0-9]" .planning/ROADMAP.md)
+  1568→
+  1569→# Get current phase number from the just-completed plan
+  1570→CURRENT_PHASE=$(echo "{phase}" | grep -oE '^[0-9]+')
+  1571→
+  1572→# Check if current phase == total phases
+  1573→if [[ "$CURRENT_PHASE" -eq "$TOTAL_PHASES" ]]; then
+  1574→  # Milestone complete
+  1575→  MILESTONE_COMPLETE=true
+  1576→fi
+  1577→```
+  1578→
+  1579→**If milestone complete (final phase of roadmap done):**
+  1580→
+  1581→```
+  1582→🎉 MILESTONE COMPLETE!
+  1583→
+  1584→Plan {phase}-{plan} complete.
+  1585→Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
+  1586→
+  1587→Phase [Z]: [Name] COMPLETE - all [Y] plans finished.
+  1588→
+  1589→════════════════════════════════════════
+  1590→All [N] phases complete!
+  1591→This milestone is 100% done.
+  1592→════════════════════════════════════════
+  1593→
+  1594→---
+  1595→
+  1596→## ▶ Next Up
+  1597→
+  1598→**Complete Milestone** — archive and prepare for next
+  1599→
+  1600→`/gsd:complete-milestone`
+  1601→
+  1602→<sub>`/clear` first → fresh context window</sub>
+  1603→
+  1604→---
+  1605→
+  1606→**Also available:**
+  1607→- `/gsd:add-phase <description>` — add another phase
+  1608→- Review accomplishments before archiving
+  1609→
+  1610→---
+  1611→```
+  1612→
+  1613→**If phase complete but more phases remain:**
+  1614→
+  1615→```
+  1616→Plan {phase}-{plan} complete.
+  1617→Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
+  1618→
+  1619→## ✓ Phase [Z] Complete
+  1620→
+  1621→All [Y] plans finished.
+  1622→
+  1623→---
+  1624→
+  1625→## ▶ Next Up
+  1626→
+  1627→**Phase [X+1]: [Name]** — [Goal from ROADMAP.md]
+  1628→
+  1629→`/gsd:plan-phase [X+1]`
+  1630→
+  1631→<sub>`/clear` first → fresh context window</sub>
+  1632→
+  1633→---
+  1634→
+  1635→**Also available:**
+  1636→- `/gsd:discuss-phase [X+1]` — gather context first
+  1637→- `/gsd:research-phase [X+1]` — investigate unknowns
+  1638→- Review phase accomplishments before continuing
+  1639→
+  1640→---
+  1641→```
+  1642→
+  1643→</step>
+  1644→
+  1645→</process>
+  1646→
+  1647→<success_criteria>
+  1648→
+  1649→- All tasks from PLAN.md completed
+  1650→- All verifications pass
+  1651→- SUMMARY.md created with substantive content
+  1652→- STATE.md updated (position, decisions, issues, session)
+  1653→- ROADMAP.md updated
+  1654→- If codebase map exists: map updated with execution changes (or skipped if no significant changes)
+  1655→  </success_criteria>
+  1656→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,176 @@
+/**
+ * Twitter Community Proxy Endpoint
+ *
+ * Proxies requests to api.twitterapi.io for Twitter Community data.
+ * Supports 'info' and 'tweets' endpoints.
+ */
+
+import type { Elysia } from "elysia";
+import { config } from "../../config";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type TwitterProxyResponse =
+    | { ok: true; data: unknown }
+    | { ok: false; error: string };
+
+type TwitterApiResponse = {
+    status: string;
+    tweets?: unknown[];
+    has_next?: boolean;
+    next_cursor?: string;
+    [key: string]: unknown;
+};
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const TWITTER_API_BASE = "https://api.twitterapi.io/twitter/community";
+const MAX_PAGES = 5; // 5 pages * 20 tweets = 100 max
+const PAGE_DELAY_MS = 100; // Delay between pagination requests
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Fetch a single page from Twitter API.
+ */
+const fetchTwitterApi = async (
+    url: string,
+    apiKey: string
+): Promise<{ ok: true; data: TwitterApiResponse } | { ok: false; error: string }> => {
+    try {
+        const response = await fetch(url, {
+            method: "GET",
+            headers: {
+                "x-api-key": apiKey,
+                "Content-Type": "application/json",
+                "User-Agent": "LocalAPI/1.0",
+            },
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            return { ok: false, error: `Twitter API error ${response.status}: ${text.slice(0, 200)}` };
+        }
+
+        const data = (await response.json()) as TwitterApiResponse;
+        return { ok: true, data };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: `Fetch error: ${message}` };
+    }
+};
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerTwitterProxyRoutes = (app: Elysia) => {
+    app.get("/twitter-proxy", async ({ query }) => {
+        const endpoint = query.endpoint as string | undefined;
+        const communityId = query.community_id as string | undefined;
+
+        // ---------------------------------------------------------------------
+        // 1. Validate inputs
+        // ---------------------------------------------------------------------
+        if (!endpoint || !communityId) {
+            return {
+                ok: false,
+                error: "Missing required params: endpoint and community_id",
+            } satisfies TwitterProxyResponse;
+        }
+
+        if (endpoint !== "info" && endpoint !== "tweets") {
+            return {
+                ok: false,
+                error: "Invalid endpoint: must be 'info' or 'tweets'",
+            } satisfies TwitterProxyResponse;
+        }
+
+        // ---------------------------------------------------------------------
+        // 2. Check API key
+        // ---------------------------------------------------------------------
+        const apiKey = config.twitterApiKey;
+        if (!apiKey) {
+            return {
+                ok: false,
+                error: "Twitter API key not configured",
+            } satisfies TwitterProxyResponse;
+        }
+
+        // ---------------------------------------------------------------------
+        // 3. Handle 'info' endpoint (single request)
+        // ---------------------------------------------------------------------
+        if (endpoint === "info") {
+            const url = `${TWITTER_API_BASE}/info?community_id=${encodeURIComponent(communityId)}`;
+            const result = await fetchTwitterApi(url, apiKey);
+
+            if (!result.ok) {
+                return { ok: false, error: result.error } satisfies TwitterProxyResponse;
+            }
+
+            return { ok: true, data: result.data } satisfies TwitterProxyResponse;
+        }
+
+        // ---------------------------------------------------------------------
+        // 4. Handle 'tweets' endpoint (paginated, up to 5 pages)
+        // ---------------------------------------------------------------------
+        const allTweets: unknown[] = [];
+        let cursor: string | null = null;
+        let pageCount = 0;
+
+        while (pageCount < MAX_PAGES) {
+            let url = `${TWITTER_API_BASE}/tweets?community_id=${encodeURIComponent(communityId)}`;
+            if (cursor) {
+                url += `&cursor=${encodeURIComponent(cursor)}`;
+            }
+
+            const result = await fetchTwitterApi(url, apiKey);
+
+            if (!result.ok) {
+                // If we already have some tweets, return what we have
+                if (allTweets.length > 0) {
+                    console.warn(`[twitter-proxy] Pagination stopped early: ${result.error}`);
+                    break;
+                }
+                return { ok: false, error: result.error } satisfies TwitterProxyResponse;
+            }
+
+            const data = result.data;
+
+            // Add tweets to collection
+            if (data.tweets && Array.isArray(data.tweets)) {
+                allTweets.push(...data.tweets);
+            }
+
+            // Check if there are more pages
+            if (!data.has_next || !data.next_cursor) {
+                break;
+            }
+
+            cursor = data.next_cursor;
+            pageCount++;
+
+            // Small delay to avoid rate limiting
+            if (pageCount < MAX_PAGES) {
+                await sleep(PAGE_DELAY_MS);
+            }
+        }
+
+        return {
+            ok: true,
+            data: {
+                status: "success",
+                tweets: allTweets,
+                msg: "success",
+            },
+        } satisfies TwitterProxyResponse;
+    });
+};

@@ -1,0 +1,50 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   289→      for (const ruleSet of ruleSets) {
+   290→        engine.addRulesFromConfig(ruleSet.rules);
+   291→      }
+   292→
+   293→      let scanCount = 0;
+   294→      const runLoop = async () => {
+   295→        scanCount++;
+   296→        const tokens = getTokensToWatch();
+   297→        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+   298→        const results: string[] = [];
+   299→
+   300→        for (const token of tokens) {
+   301→          try {
+   302→            const signals = await engine.analyzeToken(token.mint);
+   303→            const result = engine.aggregateSignals(signals);
+   304→            const sym = token.symbol || token.mint.slice(0, 6);
+   305→
+   306→            if (result.action === 'hold') {
+   307→              results.push(`${sym}:-`);
+   308→            } else {
+   309→              const marketData = await localApi.getMarketData(token.mint);
+   310→              const conf = (result.confidence * 100).toFixed(0);
+   311→              results.push(`${sym}:${result.action.toUpperCase()}(${conf}%)`);
+   312→
+   313→              await trigger.trigger({
+   314→                mint: token.mint,
+   315→                symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   316→                action: result.action,
+   317→                priceSol: marketData.price_sol,
+   318→                priceUsd: marketData.price_usd,
+   319→                ruleSetId: ruleSets[0].id,
+   320→                signals: result.signals,
+   321→                confidence: result.confidence,
+   322→              });
+   323→
+   324→              await paperTracker.save();
+   325→            }
+   326→          } catch (error) {
+   327→            const sym = token.symbol || token.mint.slice(0, 6);
+   328→            results.push(`${sym}:ERR`);
+   329→          }
+   330→        }
+   331→
+   332→        console.log(`[${time}] #${scanCount}  ${results.join('  ')}`);
+   333→      };
+   334→
+   335→      // Run immediately, then on interval
+   336→      await runLoop();
+   337→      setInterval(runLoop, config.pollIntervalMs);

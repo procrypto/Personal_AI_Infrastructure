@@ -1,0 +1,83 @@
+# nanochat-data-pipeline - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2026-01-10
+- **Last updated**: 2026-01-10
+- **Discovery depth**: Standard
+- **Documentation quality**: Excellent (comprehensive CLAUDE.md)
+
+---
+
+## System Identity
+
+**What it is**: Data pipeline for NanoChat LLM training data generation.
+
+**What it does**:
+- Extracts Q&A pairs from SQL databases, code repos, Slack, Notion
+- Uses Claude API to generate training examples
+- Produces JSONL files for NanoChat SFT training
+- Uploads datasets to HuggingFace Hub
+
+**Key insight**: Victor's ML tooling - bridges data sources to custom LLM training.
+
+---
+
+## Architecture Highlights
+
+### Stack
+- Python 3.10+ with uv
+- Claude API (anthropic)
+- ClickHouse, BigQuery, PostgreSQL
+- HuggingFace Hub, GCS
+
+### Structure
+```
+extractors/       # Data source extractors
+samplers/         # Domain-specific samplers
+generators/       # Synthetic Q&A generation
+scripts/          # CLI tools
+output/           # Generated JSONL (gitignored)
+```
+
+---
+
+## Current Data Quantities (2,770 examples)
+
+| Source | Count |
+|--------|-------|
+| SQL Q&A | 938 |
+| Code Q&A | 1,099 |
+| Docs Q&A | 102 |
+| Slack Q&A | 609 |
+| Other | 109 |
+
+**Target**: ~40,000 examples
+
+---
+
+## Key Commands
+
+```bash
+# Extract from code
+uv run python -m samplers.codebase_training_generator /path/to/repo rust
+
+# Validate output
+uv run python -m scripts.validate_data output/*.jsonl --fix
+
+# Upload to HuggingFace
+uv run python -m scripts.upload_to_huggingface
+```
+
+---
+
+## Data Storage
+
+- **HuggingFace**: `victoremnm/bonkbot-training-data` (private)
+- **GCS Backup**: `gs://nanochat-training-data/v1/`
+
+---
+
+## Team & Ownership
+
+**Lead**: Victor (@vem)
+**Project**: bonkbotbeta

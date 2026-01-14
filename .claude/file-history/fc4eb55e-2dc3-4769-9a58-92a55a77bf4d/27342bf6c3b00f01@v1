@@ -1,0 +1,126 @@
+---
+phase: 02-linear-integration
+plan: 01
+type: execute
+---
+
+<objective>
+Set up Linear SDK client and webhook handler for receiving Issue events.
+
+Purpose: Establish the Linear integration foundation with proper authentication, webhook signature verification, and typed payload handling. This enables tracking issue updates after Linear's Slack app posts the initial view-add notification.
+Output: Working webhook endpoint that verifies signatures and dispatches Issue events to the event bus.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/02-linear-integration/02-RESEARCH.md
+
+# Prior phase context (from frontmatter)
+@.planning/phases/01-foundation/01-01-SUMMARY.md
+@.planning/phases/01-foundation/01-03-SUMMARY.md
+
+# Relevant source files
+@src/coordination/types.ts
+@src/coordination/events/event-bus.ts
+@src/coordination/store/ticket-store.ts
+
+**Tech stack available:** @vercel/kv, TypeScript, event bus pattern
+**Established patterns:** Singleton pattern, barrel exports, type guards
+**Constraining decisions:**
+- [01-01]: Union types over enums
+- [01-03]: Singleton pattern for shared instances
+- [01-03]: Emitter functions for clean event API
+
+**Critical finding from research:** Linear webhooks do NOT have "view-add" events. They fire on Issue create/update/remove. The "view-add" trigger comes from Linear's native Slack notifications (Phase 3 captures those). This phase handles subsequent issue updates.
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Install @linear/sdk and create LinearClient singleton</name>
+  <files>package.json, src/coordination/linear/client.ts</files>
+  <action>
+1. Install Linear SDK: `bun add @linear/sdk`
+2. Create src/coordination/linear/client.ts with:
+   - LinearClient singleton using getLinearClient() pattern (matches event bus pattern from 01-03)
+   - Read LINEAR_API_KEY from environment
+   - Export resetLinearClient() for testing (matches event bus reset pattern)
+   - Throw clear error if API key missing
+
+Follow singleton pattern from 01-03 (event-bus.ts). Do NOT create client per request.
+  </action>
+  <verify>bun run build compiles without errors</verify>
+  <done>LinearClient singleton created, exports getLinearClient() and resetLinearClient()</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create webhook handler with signature verification</name>
+  <files>src/coordination/linear/webhook-handler.ts</files>
+  <action>
+1. Create webhook-handler.ts with:
+   - Import LinearWebhooks from @linear/sdk
+   - Create verifyLinearWebhook(rawBody: string, signature: string, timestamp: number) function
+   - Create handleLinearWebhook(payload: LinearWebhookPayload) function that:
+     - Checks payload.type === "Issue"
+     - Dispatches appropriate events via event bus emitters (emitTicketCreated, emitTicketStatusChanged)
+     - Maps Issue actions (create/update/remove) to our ticket events
+
+CRITICAL from research:
+- Use rawBody string for verification, NOT parsed JSON re-serialized
+- LinearWebhooks.verify() handles timestamp replay protection
+- Read LINEAR_WEBHOOK_SECRET from environment
+- Webhook payloads have IDs only (teamId, assigneeId), not full objects
+  </action>
+  <verify>bun run build compiles without errors, types resolve correctly</verify>
+  <done>Webhook handler verifies signatures using LinearWebhooks class and dispatches events</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Add webhook payload TypeScript types</name>
+  <files>src/coordination/linear/types.ts</files>
+  <action>
+1. Create src/coordination/linear/types.ts with webhook payload types from RESEARCH.md:
+   - LinearWebhookPayload interface (action, type, webhookId, webhookTimestamp, etc.)
+   - IssueWebhookData interface (id, number, title, priority, stateId, assigneeId, teamId, labelIds)
+   - LinearWebhookAction type union: "create" | "update" | "remove"
+   - LinearResourceType type union: "Issue" | "Comment" | "Project" | "Cycle" | "IssueLabel" | "Reaction"
+
+Use union types (not enums) per 01-01 decision.
+  </action>
+  <verify>bun run build compiles without errors, types are exported</verify>
+  <done>Linear webhook types defined matching actual payload structure</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run build` succeeds without errors
+- [ ] @linear/sdk appears in package.json dependencies
+- [ ] LinearClient singleton follows same pattern as EventBus singleton
+- [ ] Webhook handler uses LinearWebhooks.verify() (not custom HMAC)
+- [ ] Types use union types (not enums)
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Linear module follows established patterns from Phase 1
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-linear-integration/02-01-SUMMARY.md` using summary template with frontmatter including:
+- subsystem: linear
+- tags: [linear-sdk, webhooks, singleton]
+- provides: LinearClient singleton, webhook verification, Linear types
+- affects: [02-02, 03, 04]
+</output>

@@ -1,0 +1,215 @@
+     1→import { sentryVitePlugin } from "@sentry/vite-plugin";
+     2→import tailwindcss from "@tailwindcss/vite";
+     3→import react from "@vitejs/plugin-react";
+     4→import path from "path";
+     5→import pkg from "./package.json";
+     6→import { defineConfig, loadEnv } from "vite";
+     7→import svgr from "vite-plugin-svgr";
+     8→import { execSync } from "child_process";
+     9→import { lingui } from "@lingui/vite-plugin";
+    10→import { tanstackRouter } from "@tanstack/router-plugin/vite";
+    11→import mkcert from "vite-plugin-mkcert";
+    12→import fs from "fs";
+    13→
+    14→export default ({ mode }: { mode: string }) => {
+    15→  process.env = { ...process.env, ...loadEnv(mode, __dirname) };
+    16→  // Include the app name, version, and commit hash to easily see errors across
+    17→  // releases and environments in the Sentry dashboard.
+    18→  //  Example: "bonkbot-web-terminal@0.0.29-d06b94364c"
+    19→  // Note: Using '-' instead of '+' because Sentry CLI doesn't allow '+' in release versions
+    20→
+    21→  const getCommitHash = () => {
+    22→    try {
+    23→      return (
+    24→        process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 10) ??
+    25→        execSync("git rev-parse --short=10 HEAD").toString().trim()
+    26→      );
+    27→    } catch {
+    28→      // Fallback when git is not available or not in a git repository
+    29→      return "unknown";
+    30→    }
+    31→  };
+    32→
+    33→  // Sanitize release name: remove @ symbol and replace / with - for Sentry CLI compatibility
+    34→  // Format: bonkbot-web-terminal-1.0.14b-a44697aa23
+    35→  const releaseName = `${pkg.name.replace("@", "").replace(/\//g, "-")}-${pkg.version}-${getCommitHash()}`;
+    36→
+    37→  // Plugin to generate version.json file for runtime version checking
+    38→  const versionPlugin = () => ({
+    39→    name: "version-plugin",
+    40→    writeBundle() {
+    41→      const versionFile = path.resolve(__dirname, "dist/version.json");
+    42→      fs.writeFileSync(
+    43→        versionFile,
+    44→        JSON.stringify({ version: releaseName }, null, 2)
+    45→      );
+    46→    },
+    47→  });
+    48→
+    49→  const htmlEnvPlugin = () => ({
+    50→    name: "html-env-plugin",
+    51→    transformIndexHtml(html: string) {
+    52→      return html
+    53→        .replace(/%VITE_SENTRY_DSN%/g, process.env.VITE_SENTRY_DSN || "")
+    54→        .replace(/%VITE_APP_ENV%/g, process.env.VITE_APP_ENV || "")
+    55→        .replace(
+    56→          /%VERCEL_DEPLOYMENT_ID%/g,
+    57→          process.env.VERCEL_DEPLOYMENT_ID || ""
+    58→        );
+    59→    },
+    60→  });
+    61→
+    62→  return defineConfig({
+    63→    // Set esbuild target for development transforms
+    64→    esbuild: {
+    65→      target: "es2020",
+    66→      // Suppress import.meta warnings - they're harmless as import.meta works at runtime
+    67→      logOverride: {
+    68→        "empty-import-meta": "silent",
+    69→      },
+    70→    },
+    71→    plugins: [
+    72→      htmlEnvPlugin(),
+    73→      tanstackRouter({
+    74→        target: "react",
+    75→        autoCodeSplitting: false,
+    76→        generatedRouteTree: "src/routes/routeTree.gen.ts",
+    77→        quoteStyle: "double",
+    78→        disableLogging: process.env.VITE_APP_ENV === "local",
+    79→      }),
+    80→      react({
+    81→        babel: {
+    82→          plugins: [
+    83→            "babel-plugin-react-compiler",
+    84→            "@lingui/babel-plugin-lingui-macro",
+    85→            ["@babel/plugin-proposal-decorators", { legacy: true }],
+    86→          ],
+    87→        },
+    88→      }),
+    89→      tailwindcss(),
+    90→      lingui(),
+    91→      svgr({
+    92→        // svgr options: https://react-svgr.com/docs/options/
+    93→        svgrOptions: {
+    94→          exportType: "default",
+    95→          ref: true,
+    96→          svgo: false,
+    97→          titleProp: true,
+    98→        },
+    99→        include: "**/*.svg",
+   100→      }),
+   101→      sentryVitePlugin({
+   102→        org: process.env.SENTRY_ORG,
+   103→        // Reduce verbosity for faster uploads
+   104→        debug: false,
+   105→        silent: true,
+   106→        project: process.env.SENTRY_PROJECT,
+   107→        authToken: process.env.SENTRY_AUTH_TOKEN,
+   108→        telemetry: false, // Disable telemetry for faster uploads
+   109→        sourcemaps: {
+   110→          // Delete sourcemaps in production
+   111→          filesToDeleteAfterUpload:
+   112→            process.env.VITE_APP_ENV === "prod" ||
+   113→            process.env.VITE_APP_ENV === "staging"
+   114→              ? ["**/dist/**/*.map"]
+   115→              : [],
+   116→
+   117→          ignore: [
+   118→            // charting library is a raw, minified js library that gets copied
+   119→            // over from the public/ folder.  It has no sourcemaps, nor should
+   120→            // we try to generate one for it.
+   121→            "**/charting_library/**/*",
+   122→            // datafeeds is not a minified js library, but since it lives in
+   123→            // public/ it doesn't get sourcemaps.
+   124→            "**/datafeeds/**/*",
+   125→          ],
+   126→        },
+   127→        release: {
+   128→          name: releaseName,
+   129→
+   130→          setCommits: {
+   131→            auto: true,
+   132→            ignoreMissing: true, // Ignore missing commits to avoid errors in CI/CD
+   133→            ignoreEmpty: true, // Ignore empty commits to avoid errors in CI/CD
+   134→          },
+   135→          deploy: {
+   136→            env: process.env.VITE_APP_ENV || "local",
+   137→          },
+   138→        },
+   139→        errorHandler: error => {
+   140→          console.error("❌ Sentry sourcemap upload failed:", error.message);
+   141→          throw error; // Re-throw to fail the build
+   142→        },
+   143→      }),
+   144→      process.env.VITE_APP_ENV === "local" ? mkcert() : undefined,
+   145→      versionPlugin(),
+   146→    ],
+   147→    resolve: {
+   148→      alias: {
+   149→        "@": path.resolve(__dirname, "./src"),
+   150→        "@bonkbot/telemetry": path.resolve(__dirname, "./src"),
+   151→        "@pvp": path.resolve(__dirname, "../../packages/pvp/src"),
+   152→      },
+   153→      dedupe: ["react", "react-dom"],
+   154→    },
+   155→    server: {
+   156→      https: process.env.VITE_APP_ENV === "local" ? {} : undefined,
+   157→      port: 3000,
+   158→      proxy: {
+   159→        "/v1": {
+   160→          target: process.env.VITE_API_URL,
+   161→          changeOrigin: true,
+   162→          secure: process.env.VITE_API_URL?.startsWith("https://") ?? false,
+   163→          ws: true,
+   164→        },
+   165→        "/data": {
+   166→          target: process.env.VITE_DATA_API_URL,
+   167→          changeOrigin: true,
+   168→          secure:
+   169→            process.env.VITE_DATA_API_URL?.startsWith("https://") ?? false,
+   170→          ws: true,
+   171→        },
+   172→      },
+   173→    },
+   174→    preview: {
+   175→      https: process.env.VITE_APP_ENV === "local" ? {} : undefined,
+   176→      port: 3000,
+   177→    },
+   178→    build: {
+   179→      sourcemap: true,
+   180→      cssCodeSplit: false,
+   181→      target: "es2020",
+   182→      // rollupOptions: {
+   183→      //   output: {
+   184→      //     manualChunks: (id: string) => {
+   185→      //       if (id.includes("node_modules")) {
+   186→      //         if (
+   187→      //           id.includes("react") ||
+   188→      //           id.includes("react-dom") ||
+   189→      //           id.includes("react-router-dom")
+   190→      //         ) {
+   191→      //           return "react-vendor";
+   192→      //         }
+   193→      //         if (id.includes("@radix-ui")) {
+   194→      //           return "radix-ui";
+   195→      //         }
+   196→      //         if (id.includes("@tanstack")) {
+   197→      //           return "tanstack";
+   198→      //         }
+   199→
+   200→      //         return "vendor";
+   201→      //       }
+   202→      //     },
+   203→      //   },
+   204→      // },
+   205→    },
+   206→    define: {
+   207→      __RELEASE_NAME__: JSON.stringify(releaseName),
+   208→    },
+   209→  });
+   210→};
+   211→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

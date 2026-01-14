@@ -1,0 +1,247 @@
+     1→# Token Analysis Autopilot
+     2→
+     3→Configurable rule-based analysis system for Solana tokens that triggers automated paper trades via customizable strategies.
+     4→
+     5→## Features
+     6→
+     7→- **Rule Engine**: Configurable rules that analyze token metrics and emit buy/sell signals
+     8→- **Template Strategies**: Pre-built rule combinations for common trading patterns
+     9→- **Paper Trading**: Simulated trading with full P&L tracking
+    10→- **Live Portfolio**: Real-time unrealized P&L with color-coded output
+    11→- **Opposite Signal Handling**: Auto-close positions when opposite signal fires
+    12→- **CLI Interface**: Simple commands for configuration and monitoring
+    13→
+    14→## Installation
+    15→
+    16→```bash
+    17→npm install
+    18→```
+    19→
+    20→## Quick Start
+    21→
+    22→```bash
+    23→# 1. Add a token to watchlist
+    24→npm run cli watch DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 BONK
+    25→
+    26→# 2. Add a trading strategy
+    27→npm run cli use momentum-buy
+    28→
+    29→# 3. Start analysis loop
+    30→npm run cli run
+    31→```
+    32→
+    33→## CLI Commands
+    34→
+    35→### Watchlist Management
+    36→```bash
+    37→watch <mint> [symbol]   # Add token to watchlist
+    38→unwatch <mint>          # Remove token from watchlist
+    39→list                    # List all watched tokens
+    40→```
+    41→
+    42→### Rule Management
+    43→```bash
+    44→templates               # List available strategy templates
+    45→use <template>          # Activate a template
+    46→remove <rule-id>        # Remove a rule set
+    47→rules                   # List active rules
+    48→```
+    49→
+    50→### Configuration
+    51→```bash
+    52→config                  # Show current config
+    53→mode <paper|live>       # Set trading mode
+    54→size <sol>              # Set default position size
+    55→```
+    56→
+    57→### Trading
+    58→```bash
+    59→analyze <mint>          # Analyze single token (triggers trade if signal)
+    60→run                     # Start continuous analysis loop
+    61→```
+    62→
+    63→### Portfolio
+    64→```bash
+    65→status                  # Live portfolio overview with P&L
+    66→trades                  # List all paper trades
+    67→stats                   # Show trading statistics
+    68→close <mint>            # Close open position
+    69→reset                   # Clear all trading data
+    70→```
+    71→
+    72→## Strategy Templates
+    73→
+    74→View available templates with compact rule notation:
+    75→
+    76→```bash
+    77→npm run cli templates
+    78→```
+    79→
+    80→Output:
+    81→```
+    82→momentum-buy:   price +1%/5m & price +2%/1h & vol 1.5x/5m & ratio 1.5:1/5m
+    83→momentum-sell:  price -2%/5m & ratio 1.5:1/5m
+    84→volume-alert:   vol 2x/5m | vol 3x/1h
+    85→retail-interest: 50+30 traders/5m & ratio 1.2:1/5m
+    86→```
+    87→
+    88→### Available Templates
+    89→
+    90→| Template | Description | Mode |
+    91→|----------|-------------|------|
+    92→| `momentum-buy` | Rising price + volume spike + buy pressure | ALL rules must match |
+    93→| `momentum-sell` | Falling price + sell pressure | ALL rules must match |
+    94→| `volume-alert` | Significant volume spikes | ANY rule can trigger |
+    95→| `retail-interest` | High trader count + buyer majority | ALL rules must match |
+    96→
+    97→## Rule Types
+    98→
+    99→### Price Change
+   100→Triggers on percentage price movement over timeframe.
+   101→```
+   102→price +1%/5m    # Up 1% in 5 minutes
+   103→price -2%/1h    # Down 2% in 1 hour
+   104→price +-5%/24h  # Up or down 5% in 24 hours
+   105→```
+   106→
+   107→### Volume Spike
+   108→Triggers when volume exceeds average by multiplier.
+   109→```
+   110→vol 2x/5m       # 2x average volume in 5 minutes
+   111→vol 3x/1h       # 3x average volume in 1 hour
+   112→```
+   113→
+   114→### Buy/Sell Ratio
+   115→Triggers when buy volume exceeds sell volume (or vice versa).
+   116→```
+   117→ratio 1.5:1/5m  # 1.5x more buy volume than sell in 5m
+   118→```
+   119→
+   120→### Trader Count
+   121→Triggers on unique trader activity.
+   122→```
+   123→50+30 traders/5m  # 50 total traders, 30+ buyers in 5m
+   124→```
+   125→
+   126→### Breakout
+   127→Triggers when price breaks out of recent range.
+   128→```
+   129→breakout 5%/20c   # 5% breakout over 20 candles
+   130→```
+   131→
+   132→### MA Crossover
+   133→Triggers on moving average crossover.
+   134→```
+   135→ma 10x50          # 10-period crosses 50-period
+   136→```
+   137→
+   138→## Run Loop Output
+   139→
+   140→The `run` command shows real-time status with color-coded P&L:
+   141→
+   142→```
+   143→[06:33:37] #1  |  Watch: BONK: -  |  Trades: MUR (0.10 SOL) -77.9%
+   144→[06:34:07] #2  |  Watch: BONK: BUY (85%)  |  Trades: MUR (0.10 SOL) -76.2%
+   145→```
+   146→
+   147→- **Watch**: Tokens on watchlist with current signals (- = hold, BUY/SELL = signal)
+   148→- **Trades**: Open positions with size and unrealized P&L (green = profit, red = loss)
+   149→
+   150→## Opposite Signal Handling
+   151→
+   152→Configure behavior when opposite signal fires on an open position:
+   153→
+   154→```typescript
+   155→onOppositeSignal: 'close' | 'flip' | 'ignore'
+   156→```
+   157→
+   158→- `close`: Close position, don't open new (default)
+   159→- `flip`: Close position, open opposite direction
+   160→- `ignore`: Keep existing position, ignore signal
+   161→
+   162→## Configuration
+   163→
+   164→Config stored in `.autopilot/config.json`:
+   165→
+   166→```typescript
+   167→{
+   168→  watchlist: [],           // Tokens to monitor
+   169→  ruleSets: [],            // Active rule sets
+   170→  trigger: {
+   171→    enabled: true,
+   172→    mode: 'paper',         // paper | live
+   173→    defaultPositionSizeSol: 0.1,
+   174→    maxPositionSizeSol: 1,
+   175→    cooldownMs: 60000,     // 1 minute between triggers
+   176→    onOppositeSignal: 'close'
+   177→  },
+   178→  pollIntervalMs: 30000    // 30 second scan interval
+   179→}
+   180→```
+   181→
+   182→## Data Storage
+   183→
+   184→All data stored in `.autopilot/`:
+   185→- `config.json` - User configuration
+   186→- `trades.json` - Paper trade history
+   187→- `events.json` - Trigger event log
+   188→
+   189→## API Integration
+   190→
+   191→Uses local BONKbot web-terminal API (`localhost:3000`) for:
+   192→- Token market data (price, volume, traders)
+   193→- OHLCV candle data
+   194→- Trade history
+   195→
+   196→## Status Command
+   197→
+   198→Get full portfolio overview:
+   199→
+   200→```bash
+   201→npm run cli status
+   202→```
+   203→
+   204→Output:
+   205→```
+   206→=== PORTFOLIO STATUS ===
+   207→
+   208→Open Positions:
+   209→  BUY BONK  +12.34%  (+0.0123 SOL)
+   210→    Entry: 0.00000123 -> Now: 0.00000138 SOL
+   211→
+   212→  Exposure: 0.1000 SOL
+   213→  Unrealized: +0.0123 SOL ($1.23)
+   214→
+   215→Realized P&L:
+   216→  5 trades | 3W/2L | 60% win
+   217→  Total: +0.0456 SOL ($4.56)
+   218→
+   219→Config:
+   220→  Watching: 2 tokens | Rules: 1 sets
+   221→  Mode: paper
+   222→```
+   223→
+   224→## Development
+   225→
+   226→```bash
+   227→npm run dev        # Watch mode
+   228→npm run build      # TypeScript compile
+   229→npm run test       # Run test suite
+   230→```
+   231→
+   232→## Roadmap
+   233→
+   234→- [ ] Magic SL: Williams fractal trailing stop
+   235→- [ ] Magic S/R: Candlestick rotation support/resistance
+   236→- [ ] Magic TP: Auto-sell at rotation resistance
+   237→- [ ] Magic Buy: Entry at support levels
+   238→- [ ] Live LOIS integration
+   239→
+   240→## License
+   241→
+   242→Private - BONKbot Hackathon 2025
+   243→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

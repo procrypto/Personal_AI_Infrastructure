@@ -1,0 +1,129 @@
+---
+phase: 06-community-endpoints
+plan: 01
+type: execute
+---
+
+<objective>
+Add ClickHouse INSERT helper and create Twitter proxy endpoint.
+
+Purpose: Enable data writes to ClickHouse and proxy Twitter API calls for community data.
+Output: Updated client.ts with INSERT, new twitter_proxy.ts endpoint.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@src/clickhouse/client.ts
+@src/endpoints/_template.ts
+@src/config.ts
+
+**Reference PHP implementation:**
+The original PHP files are at:
+- /Users/neilhart/Downloads/twitter-proxy.php
+- /Users/neilhart/Downloads/community-clickhouse.php
+
+**Key patterns from PHP:**
+- Twitter proxy: proxies to api.twitterapi.io with x-api-key header
+- Supports `info` and `tweets` endpoints
+- `tweets` paginates up to 5 pages (100 tweets max)
+- API key passed as query param, forwarded as header
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add ClickHouse INSERT helper to client.ts</name>
+  <files>src/clickhouse/client.ts</files>
+  <action>
+Add a new function `clickhouseInsert` that handles bulk INSERT operations.
+
+Implementation:
+1. Accept table name and array of row objects
+2. Build INSERT SQL with proper escaping (use existing escapeString)
+3. Handle empty rows case (return early with success)
+4. Return success/failure with insert count
+
+Follow the pattern from community-clickhouse.php ch_insert():
+- Extract column names from first row
+- Build VALUES clause with proper escaping
+- String values get single quotes, numbers don't
+- Use existing auth pattern (POST to queries API)
+
+Signature: `clickhouseInsert<T extends Record<string, unknown>>(table: string, rows: T[]): Promise<InsertResult>`
+
+Type: `type InsertResult = { success: true; inserted: number } | { success: false; error: string }`
+  </action>
+  <verify>TypeScript compiles: `bun run --bun src/server.ts` starts without errors</verify>
+  <done>clickhouseInsert function exported from client.ts, handles string escaping and bulk inserts</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create Twitter proxy endpoint</name>
+  <files>src/endpoints/generic/twitter_proxy.ts, src/server.ts</files>
+  <action>
+Create endpoint that proxies requests to api.twitterapi.io for Twitter Community data.
+
+Route: GET /local-api/twitter-proxy
+
+Query params:
+- endpoint: 'info' or 'tweets' (required)
+- community_id: Twitter community ID (required)
+- api_key: Twitter API key (required)
+
+Implementation:
+1. Validate all three params present
+2. Validate endpoint is 'info' or 'tweets'
+3. For 'info': single request to https://api.twitterapi.io/twitter/community/info?community_id={id}
+4. For 'tweets': paginate up to 5 pages (20 tweets/page = 100 max)
+   - First request: no cursor
+   - Subsequent: use next_cursor from response
+   - Stop when has_next is false or no next_cursor
+   - Merge all tweets into single array
+   - Add small delay between pages (100ms) to avoid rate limiting
+5. Forward x-api-key header to Twitter API
+6. Return JSON response (pass through for info, merged for tweets)
+
+Error handling:
+- Missing params: { status: 'error', msg: 'Missing ...' }
+- Invalid endpoint: { status: 'error', msg: 'Invalid endpoint' }
+- Fetch errors: { status: 'error', msg: 'Fetch error: ...' }
+
+Register in server.ts with other generic endpoints.
+  </action>
+  <verify>
+Start server with `bun dev`, then test:
+```bash
+curl "http://localhost:8787/local-api/twitter-proxy?endpoint=info&community_id=test&api_key=test"
+```
+Should return error about invalid API key (expected - proves endpoint works)
+  </verify>
+  <done>Twitter proxy endpoint responds to requests, validates params, proxies to Twitter API</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run --bun src/server.ts` starts without errors
+- [ ] clickhouseInsert function exported from client.ts
+- [ ] Twitter proxy endpoint registered and responds to requests
+- [ ] Invalid params return proper error responses
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Ready for 06-02 (community tracker endpoints that use INSERT)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/06-community-endpoints/06-01-SUMMARY.md`
+</output>

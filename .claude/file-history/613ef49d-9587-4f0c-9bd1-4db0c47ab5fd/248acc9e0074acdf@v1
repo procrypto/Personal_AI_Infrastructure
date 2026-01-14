@@ -1,0 +1,131 @@
+/**
+ * Autopilot Store Types
+ *
+ * Types for the token-analysis-autopilot integration.
+ * Position entries do NOT include current price - that comes from NATS market_data.
+ */
+
+// Position entry data (no current price - frontend fetches via NATS)
+export interface AutopilotPositionEntry {
+  mint: string;
+  symbol: string;
+  action: "buy" | "sell";
+  entryPriceSol: number;
+  positionSizeSol: number;
+  entryTime: number;
+}
+
+export interface AutopilotSignal {
+  timestamp: number;
+  mint: string;
+  symbol: string;
+  signalType: "magic_buy" | "magic_exit" | "dump_exit" | "rule_signal";
+  action: "buy" | "sell" | "close";
+  reason: string;
+  pnlPercent?: number;
+  entryType?: string;
+}
+
+export interface AutopilotMarketStatus {
+  state: "NORMAL" | "CAUTION" | "DUMP";
+  solPriceChangePercent: number;
+  blockEntries: boolean;
+  exitAll: boolean;
+}
+
+export interface AutopilotStats {
+  totalTrades: number;
+  openTrades: number;
+  closedTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnlSol: number;
+  totalPnlUsd: number;
+  avgPnlPercent: number;
+}
+
+export interface AutopilotScanTick {
+  timestamp: number;
+  scanNumber: number;
+  tokenCount: number;
+  openPositions: number;
+}
+
+export interface AutopilotWatchedToken {
+  mint: string;
+  symbol: string;
+  source: "watchlist" | "trending" | "whales";
+  hasPosition?: boolean;
+}
+
+export interface AutopilotTokenList {
+  watchlist: AutopilotWatchedToken[];
+  trending: AutopilotWatchedToken[];
+  whales: AutopilotWatchedToken[];
+}
+
+export interface AutopilotConfig {
+  autoSourcesEnabled: boolean;
+  trendingEnabled: boolean;
+  whalesEnabled: boolean;
+  marketFilterEnabled: boolean;
+  mode: "paper" | "live";
+  positionSizeSol: number;
+  pollIntervalMs: number;
+}
+
+export interface AutopilotStrategy {
+  id: string;
+  name: string;
+  description: string;
+  mode: "all" | "any";
+  ruleCount: number;
+  summary: string;
+}
+
+export interface AutopilotStrategies {
+  available: AutopilotStrategy[];
+  active: string[];
+}
+
+export interface AutopilotStore {
+  // Connection status
+  isConnected: boolean;
+  setIsConnected: (connected: boolean) => void;
+
+  // Position entries (no price data - frontend calculates P&L with NATS data)
+  positions: Map<string, AutopilotPositionEntry>;
+  setPositions: (positions: AutopilotPositionEntry[]) => void;
+
+  // Signals history (last 50)
+  signals: AutopilotSignal[];
+  addSignal: (signal: AutopilotSignal) => void;
+
+  // Market status
+  marketStatus: AutopilotMarketStatus;
+  setMarketStatus: (status: AutopilotMarketStatus) => void;
+
+  // Trading stats
+  stats: AutopilotStats;
+  setStats: (stats: AutopilotStats) => void;
+
+  // Scan metadata
+  scanTick: AutopilotScanTick | null;
+  setScanTick: (tick: AutopilotScanTick) => void;
+
+  // Token lists
+  tokenList: AutopilotTokenList;
+  setTokenList: (list: AutopilotTokenList) => void;
+
+  // Config
+  config: AutopilotConfig;
+  setConfig: (config: AutopilotConfig) => void;
+
+  // Strategies
+  strategies: AutopilotStrategies;
+  setStrategies: (strategies: AutopilotStrategies) => void;
+
+  // Reset all
+  reset: () => void;
+}

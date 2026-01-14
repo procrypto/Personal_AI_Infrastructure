@@ -1,0 +1,84 @@
+   395→
+   396→        // Batch fetch all market data upfront (much faster than individual calls)
+   397→        const allMints = tokens.map(t => t.mint);
+   398→        const marketDataCache = await localApi.getMarketDataBatch(allMints);
+   399→
+   400→        const scanResults: string[] = [];
+   401→        const tradeResults: string[] = [];
+   402→
+   403→        // Process all tokens (fast path - no additional API calls)
+   404→        for (const token of tokens) {
+   405→          const isOpenTrade = openMints.has(token.mint);
+   406→
+   407→          // Get cached market data first
+   408→          const marketData = marketDataCache.get(token.mint);
+   409→          if (!marketData) continue; // Skip tokens without data
+   410→
+   411→          const sym = token.symbol || marketData.symbol || token.mint.slice(0, 6);
+   412→          const src = sourceLabel(token.source);
+   413→
+   414→          try {
+   415→            // Use fast path - analyze with pre-fetched market data (no API calls)
+   416→            const signals = engine.analyzeWithMarketData(marketData);
+   417→            const result = engine.aggregateSignals(signals);
+   418→
+   419→            // If this is an open trade, show P&L
+   420→            if (isOpenTrade) {
+   421→              const trade = openTrades.find(t => t.mint === token.mint)!;
+   422→              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   423→              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   424→              const size = trade.positionSizeSol.toFixed(2);
+   425→              const color = pnl.pnlPercent >= 0 ? '\x1b[32m' : '\x1b[31m';
+   426→              const reset = '\x1b[0m';
+   427→              tradeResults.push(`[${src}]${sym} (${size}) ${color}${sign}${pnl.pnlPercent.toFixed(1)}%${reset}`);
+   428→
+   429→              // Check for exit signals
+   430→              if (result.action !== 'hold') {
+   431→                const triggerResult = await trigger.trigger({
+   432→                  mint: token.mint,
+   433→                  symbol: trade.symbol,
+   434→                  action: result.action,
+   435→                  priceSol: marketData.price_sol,
+   436→                  priceUsd: marketData.price_usd,
+   437→                  ruleSetId: ruleSets[0].id,
+   438→                  signals: result.signals,
+   439→                  confidence: result.confidence,
+   440→                  quiet: true,
+   441→                });
+   442→                if (triggerResult.triggered) {
+   443→                  tradeResults[tradeResults.length - 1] += ' EXIT';
+   444→                }
+   445→                await paperTracker.save();
+   446→              }
+   447→            } else {
+   448→              // Scan result (not an open trade)
+   449→              if (result.action !== 'hold') {
+   450→                const conf = (result.confidence * 100).toFixed(0);
+   451→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   452→                const reset = '\x1b[0m';
+   453→
+   454→                const triggerResult = await trigger.trigger({
+   455→                  mint: token.mint,
+   456→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   457→                  action: result.action,
+   458→                  priceSol: marketData.price_sol,
+   459→                  priceUsd: marketData.price_usd,
+   460→                  ruleSetId: ruleSets[0].id,
+   461→                  signals: result.signals,
+   462→                  confidence: result.confidence,
+   463→                  quiet: true,
+   464→                });
+   465→
+   466→                // Only show signals that actually triggered a trade
+   467→                if (triggerResult.triggered) {
+   468→                  scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   469→                }
+   470→                await paperTracker.save();
+   471→              }
+   472→            }
+   473→          } catch {
+   474→            if (isOpenTrade) {
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

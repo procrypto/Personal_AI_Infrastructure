@@ -1,0 +1,198 @@
+/**
+ * useAutopilotData
+ *
+ * Main hook for accessing autopilot data from the Zustand store.
+ * Provides all autopilot data plus a sendCommand function for controls.
+ *
+ * Returns derived stats that compute totalPnlSol from live position data
+ * instead of using the static backend value.
+ *
+ * Also computes SOL price change percentage from NATS data for market status.
+ */
+
+import { useMemo, useRef, useEffect } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { useAutopilotPositions } from "./useAutopilotPositions";
+import { useAutopilotTokensWithPrices } from "./useAutopilotTokensWithPrices";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+
+/**
+ * Main hook for accessing all autopilot data.
+ * Returns positions with live P&L, signals, stats, and controls.
+ */
+export const useAutopilotData = () => {
+  // Positions with live P&L from NATS market data
+  const positions = useAutopilotPositions();
+
+  // Token lists with live prices from NATS market data
+  const tokenListWithPrices = useAutopilotTokensWithPrices();
+
+  // Calculate unrealized P&L from open positions (real-time from NATS market data)
+  const unrealizedPnlSol = useMemo(() => {
+    return positions.reduce((sum, pos) => sum + (pos.pnlSol ?? 0), 0);
+  }, [positions]);
+
+  // Get SOL price from store (from sol_price NATS topic)
+  const solPriceUsdStr = useGlobalStore(state => state.solanaPrice.usd);
+  const storeSolPrice = solPriceUsdStr ? parseFloat(solPriceUsdStr) : null;
+
+  // Get market data map to derive SOL price from token prices
+  const marketDataMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.market_data.data)
+  );
+
+  // Derive SOL price from NATS market data (price_usd / price_sol)
+  const derivedSolPrice = useMemo(() => {
+    // Get first token with valid prices from market data
+    for (const mintData of Object.values(marketDataMap)) {
+      if (mintData && mintData.size > 0) {
+        const tokenData = Array.from(mintData.values())[0];
+        if (tokenData?.price_usd && tokenData?.price_sol) {
+          const priceUsd =
+            typeof tokenData.price_usd === "string"
+              ? parseFloat(tokenData.price_usd)
+              : tokenData.price_usd;
+          const priceSol =
+            typeof tokenData.price_sol === "string"
+              ? parseFloat(tokenData.price_sol)
+              : tokenData.price_sol;
+
+          if (priceSol > 0 && !isNaN(priceUsd) && !isNaN(priceSol)) {
+            return priceUsd / priceSol;
+          }
+        }
+      }
+    }
+    return null;
+  }, [marketDataMap]);
+
+  // Priority: store (sol_price topic) > derived from market data
+  const solPriceUsd = storeSolPrice ?? derivedSolPrice;
+
+  // DIAGNOSTIC: Log SOL price source
+  console.log("[Autopilot] SOL price:", {
+    storeSolPrice,
+    derivedSolPrice,
+    solPriceUsd,
+  });
+
+  // Track initial SOL price to calculate change since widget opened
+  const initialSolPriceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (
+      solPriceUsd &&
+      !isNaN(solPriceUsd) &&
+      initialSolPriceRef.current === null
+    ) {
+      initialSolPriceRef.current = solPriceUsd;
+    }
+  }, [solPriceUsd]);
+
+  // Calculate SOL price change percentage
+  const solPriceChangePercent = useMemo(() => {
+    if (!solPriceUsd || isNaN(solPriceUsd) || !initialSolPriceRef.current)
+      return 0;
+    return (
+      ((solPriceUsd - initialSolPriceRef.current) /
+        initialSolPriceRef.current) *
+      100
+    );
+  }, [solPriceUsd]);
+
+  // All other data from autopilot store (tokenList now comes from useAutopilotTokensWithPrices)
+  const {
+    isConnected,
+    signals,
+    marketStatus,
+    stats,
+    scanTick,
+    lastAnalysis,
+    config,
+    strategies,
+  } = useGlobalStore(
+    useShallow(state => ({
+      isConnected: state.autopilot.isConnected,
+      signals: state.autopilot.signals,
+      marketStatus: state.autopilot.marketStatus,
+      stats: state.autopilot.stats,
+      scanTick: state.autopilot.scanTick,
+      lastAnalysis: state.autopilot.lastAnalysis,
+      config: state.autopilot.config,
+      strategies: state.autopilot.strategies,
+    }))
+  );
+
+  /**
+   * Send a command to the autopilot backend.
+   */
+  const sendCommand = (command: AutopilotCommand) => {
+    autopilotWebsocket.sendCommand(command);
+  };
+
+  // Derived stats with lifetime P&L (realized from backend + unrealized from open positions)
+  // Backend's totalPnlSol = realized P&L from closed trades
+  // Frontend's unrealizedPnlSol = live P&L from open positions via NATS
+  const derivedStats = useMemo(() => {
+    const lifetimePnl = stats.totalPnlSol + unrealizedPnlSol;
+    // DIAGNOSTIC: Log P&L calculation
+    console.log("[Autopilot] P&L calc:", {
+      backendRealizedPnl: stats.totalPnlSol,
+      unrealizedPnlSol,
+      lifetimePnl,
+    });
+    return {
+      ...stats,
+      totalPnlSol: lifetimePnl,
+    };
+  }, [stats, unrealizedPnlSol]);
+
+  // Derived market status with computed SOL price and change
+  // Note: Shows "change since widget opened" not "24h change" (true 24h would need historical data)
+  const derivedMarketStatus = useMemo(() => {
+    return {
+      ...marketStatus,
+      solPriceUsd: solPriceUsd ?? 0,
+      solPriceChangePercent,
+    };
+  }, [marketStatus, solPriceUsd, solPriceChangePercent]);
+
+  return {
+    // Connection status
+    isConnected,
+
+    // Positions with live P&L (calculated from NATS market data)
+    positions,
+
+    // Signals history
+    signals,
+
+    // Market status (derived: solPriceChangePercent computed from NATS)
+    marketStatus: derivedMarketStatus,
+
+    // Trading statistics (derived: totalPnlSol = realized + unrealized)
+    stats: derivedStats,
+
+    // Unrealized P&L from open positions only (for header display)
+    unrealizedPnlSol,
+
+    // Scan metadata
+    scanTick,
+
+    // Last analyzed token (for debugging/visibility)
+    lastAnalysis,
+
+    // Token lists with live prices from NATS
+    tokenList: tokenListWithPrices,
+
+    // Configuration
+    config,
+
+    // Available and active strategies
+    strategies,
+
+    // Command sender
+    sendCommand,
+  };
+};

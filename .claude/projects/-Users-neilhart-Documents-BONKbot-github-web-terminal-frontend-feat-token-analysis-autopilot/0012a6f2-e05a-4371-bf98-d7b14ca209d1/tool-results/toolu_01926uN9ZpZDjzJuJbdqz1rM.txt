@@ -1,0 +1,54 @@
+   780→          timestamp: Date.now(),
+   781→          scanNumber: scanCount,
+   782→          tokenCount: tokens.length,
+   783→          openPositions: openTrades.length,
+   784→        });
+   785→
+   786→        // Broadcast token list grouped by source
+   787→        const tokenListData: TokenListData = {
+   788→          watchlist: [],
+   789→          trending: [],
+   790→          whales: [],
+   791→        };
+   792→        for (const token of tokens) {
+   793→          const marketData = marketDataCache.get(token.mint);
+   794→          const watchedToken: WatchedToken = {
+   795→            mint: token.mint,
+   796→            symbol: token.symbol || marketData?.symbol || token.mint.slice(0, 6),
+   797→            source: token.source,
+   798→            priceSol: marketData?.price_sol,
+   799→            priceUsd: marketData?.price_usd,
+   800→            change1h: marketData?.price_change_1h,
+   801→            change24h: marketData?.price_change_24h,
+   802→            volume24h: marketData?.volume_24h,
+   803→            mcap: marketData?.mcap,
+   804→            hasPosition: openMints.has(token.mint),
+   805→          };
+   806→          if (token.source === 'watchlist') {
+   807→            tokenListData.watchlist.push(watchedToken);
+   808→          } else if (token.source === 'trending') {
+   809→            tokenListData.trending.push(watchedToken);
+   810→          } else if (token.source === 'whales') {
+   811→            tokenListData.whales.push(watchedToken);
+   812→          }
+   813→        }
+   814→        wsServer.broadcastTokenList(tokenListData);
+   815→
+   816→        // Broadcast market status
+   817→        wsServer.broadcastMarketStatus({
+   818→          state: marketFilterResult.state as 'NORMAL' | 'CAUTION' | 'DUMP',
+   819→          solPriceChangePercent: marketFilterResult.priceChangePercent,
+   820→          blockEntries: marketFilterResult.blockEntries,
+   821→          exitAll: marketFilterResult.exitAll,
+   822→        });
+   823→
+   824→        // Broadcast position entries (frontend fetches prices via NATS)
+   825→        const positionData: PositionData[] = openTrades.map(trade => ({
+   826→          mint: trade.mint,
+   827→          symbol: trade.symbol,
+   828→          action: trade.action,
+   829→          entryPriceSol: trade.entryPriceSol,
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

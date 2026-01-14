@@ -1,0 +1,69 @@
+     1→import { PVP_API_URL, SENTINEL_SOCKET_IO_URL } from "@/config";
+     2→import { getDataAccessToken } from "@/utils/auth-tokens";
+     3→import {
+     4→  SocketIOManager,
+     5→  type SocketIOManagerOptions,
+     6→} from "./SocketIOManager";
+     7→import { SocketIOWorkerClient } from "./worker/SocketIOWorkerClient";
+     8→import { isSharedWorkerSupported } from "./worker/SocketIOWorkerManager";
+     9→
+    10→// Use shared worker if supported, otherwise fall back to direct connection
+    11→const isBrowser = typeof window !== "undefined";
+    12→const useSharedWorker = isBrowser && isSharedWorkerSupported();
+    13→
+    14→/**
+    15→ * Create a new Socket.IO manager instance
+    16→ * @param options.url - WebSocket URL (required)
+    17→ * @param options.getToken - Token getter function, called at connect time for fresh token
+    18→ * @returns SocketIOManager or SocketIOWorkerClient depending on browser support
+    19→ *
+    20→ * @example
+    21→ * const manager = createSocketIOManager({
+    22→ *   url: SOCKET_IO_URL,
+    23→ *   getToken: () => getDataAccessToken() ?? undefined,
+    24→ * });
+    25→ */
+    26→export function createSocketIOManager(
+    27→  options: SocketIOManagerOptions
+    28→): SocketIOManager | SocketIOWorkerClient {
+    29→  if (useSharedWorker) {
+    30→    return new SocketIOWorkerClient(options);
+    31→  }
+    32→  return new SocketIOManager(options);
+    33→}
+    34→
+    35→// Default singleton instance
+    36→// Uses getToken to fetch fresh token at connect time (supports token refresh)
+    37→export const socketIOManager: SocketIOManager | SocketIOWorkerClient =
+    38→  createSocketIOManager({
+    39→    url: SENTINEL_SOCKET_IO_URL,
+    40→    getToken: () => getDataAccessToken() ?? undefined,
+    41→  });
+    42→
+    43→export const socketIOManagerPvp: SocketIOManager | SocketIOWorkerClient =
+    44→  createSocketIOManager({
+    45→    url: PVP_API_URL,
+    46→    getToken: () => getDataAccessToken() ?? undefined,
+    47→  });
+    48→
+    49→if (import.meta.env.DEV) {
+    50→  console.log(
+    51→    `[SocketIO] Using ${useSharedWorker ? "SharedWorker" : "direct connection"} mode`
+    52→  );
+    53→}
+    54→
+    55→// Used for debugging (browser only)
+    56→if (isBrowser) {
+    57→  window.socketIOManager = socketIOManager;
+    58→}
+    59→
+    60→declare global {
+    61→  interface Window {
+    62→    socketIOManager: SocketIOManager | SocketIOWorkerClient;
+    63→  }
+    64→}
+    65→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

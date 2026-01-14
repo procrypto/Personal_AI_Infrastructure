@@ -1,0 +1,113 @@
+/**
+ * useTimeAgo
+ *
+ * Custom hook that returns a live-updating "time ago" string.
+ * Updates every 1s when < 60s, every 10s when < 5m, every 30s otherwise.
+ */
+
+import { useState, useEffect } from "react";
+
+/**
+ * Format a timestamp into a human-readable "time ago" string.
+ * @param timestamp - Unix timestamp in milliseconds
+ * @returns Formatted string like "5s ago", "2m ago", "1h ago", or null if invalid
+ */
+function formatTimeAgo(timestamp: number | null | undefined): string | null {
+  if (timestamp === null || timestamp === undefined) {
+    return null;
+  }
+
+  const seconds = Math.round((Date.now() - timestamp) / 1000);
+
+  if (seconds < 0) {
+    return "just now";
+  }
+
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
+/**
+ * Determine refresh interval based on age.
+ * - < 60s: refresh every 1s
+ * - < 5m: refresh every 10s
+ * - >= 5m: refresh every 30s
+ */
+function getRefreshInterval(timestamp: number | null | undefined): number {
+  if (timestamp === null || timestamp === undefined) {
+    return 30000; // Default to 30s for null timestamps
+  }
+
+  const seconds = Math.round((Date.now() - timestamp) / 1000);
+
+  if (seconds < 60) {
+    return 1000; // 1 second
+  }
+
+  if (seconds < 300) {
+    // 5 minutes
+    return 10000; // 10 seconds
+  }
+
+  return 30000; // 30 seconds
+}
+
+/**
+ * Hook that returns a live-updating "time ago" string for a timestamp.
+ *
+ * @param timestamp - Unix timestamp in milliseconds
+ * @returns Formatted string like "5s ago", "2m ago", "1h ago", or null if invalid
+ *
+ * @example
+ * const timeAgo = useTimeAgo(lastAnalysis?.timestamp);
+ * // Returns: "5s ago" (updates live)
+ */
+export function useTimeAgo(
+  timestamp: number | null | undefined
+): string | null {
+  const [timeAgo, setTimeAgo] = useState<string | null>(() =>
+    formatTimeAgo(timestamp)
+  );
+
+  useEffect(() => {
+    // Update immediately when timestamp changes
+    setTimeAgo(formatTimeAgo(timestamp));
+
+    if (timestamp === null || timestamp === undefined) {
+      return;
+    }
+
+    // Set up interval for live updates
+    let intervalId: ReturnType<typeof setInterval>;
+
+    const scheduleUpdate = () => {
+      const interval = getRefreshInterval(timestamp);
+      intervalId = setInterval(() => {
+        setTimeAgo(formatTimeAgo(timestamp));
+        // Re-schedule with potentially different interval
+        clearInterval(intervalId);
+        scheduleUpdate();
+      }, interval);
+    };
+
+    scheduleUpdate();
+
+    // Cleanup interval on unmount or timestamp change
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [timestamp]);
+
+  return timeAgo;
+}
+
+export default useTimeAgo;

@@ -1,0 +1,622 @@
+# Token Analysis Autopilot
+
+Configurable rule-based analysis system for Solana tokens that triggers automated paper trades via customizable strategies.
+
+## Features
+
+- **Rule Engine**: Configurable rules that analyze token metrics and emit buy/sell signals
+- **Template Strategies**: Pre-built rule combinations for common trading patterns
+- **Auto-Sources**: Automated screening via trending tokens and whale activity
+- **Paper Trading**: Simulated trading with full P&L tracking
+- **Live Portfolio**: Real-time unrealized P&L with color-coded output
+- **Opposite Signal Handling**: Auto-close positions when opposite signal fires
+- **CLI Interface**: Simple commands for configuration and monitoring
+
+## Installation
+
+```bash
+npm install
+```
+
+## Quick Start
+
+```bash
+# 1. Add a token to watchlist
+npm run cli watch DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 BONK
+
+# 2. Add a trading strategy
+npm run cli use momentum-buy
+
+# 3. Start analysis loop
+npm run cli run
+```
+
+## CLI Commands
+
+### Watchlist Management
+```bash
+watch <mint> [symbol]   # Add token to watchlist
+unwatch <mint>          # Remove token from watchlist
+list                    # List all watched tokens
+```
+
+### Auto-Sources
+```bash
+sources                 # Show auto-source status
+sources on|off          # Enable/disable all auto-sources
+sources trending on|off # Toggle trending source
+sources whales on|off   # Toggle whale moves source
+```
+
+### Rule Management
+```bash
+templates               # List available strategy templates
+use <template>          # Activate a template
+remove <rule-id>        # Remove a rule set
+rules                   # List active rules
+```
+
+### Configuration
+```bash
+config                  # Show current config
+mode <paper|live>       # Set trading mode
+size <sol>              # Set default position size
+```
+
+### Trading
+```bash
+analyze <mint>          # Analyze single token (triggers trade if signal)
+run                     # Start continuous analysis loop
+```
+
+### Portfolio
+```bash
+status                  # Live portfolio overview with P&L
+trades                  # List all paper trades
+stats                   # Show trading statistics
+close <mint>            # Close open position
+reset                   # Clear all trading data
+```
+
+## Strategy Templates
+
+View available templates with compact rule notation:
+
+```bash
+npm run cli templates
+```
+
+Output:
+```
+momentum-buy:        price +1%/5m & price +2%/1h & vol 1.5x/5m & ratio 1.5:1/5m
+momentum-sell:       price -2%/5m & ratio 1.5:1/5m
+volume-alert:        vol 2x/5m | vol 3x/1h
+retail-interest:     50+30 traders/5m & ratio 1.2:1/5m
+rotations:           rotations [BOS+PB+SFP]
+rotations-conservative: rotations [BOS]
+```
+
+### Available Templates
+
+| Template | Description | Mode |
+|----------|-------------|------|
+| `momentum-buy` | Rising price + volume spike + buy pressure | ALL rules must match |
+| `momentum-sell` | Falling price + sell pressure | ALL rules must match |
+| `volume-alert` | Significant volume spikes | ANY rule can trigger |
+| `retail-interest` | High trader count + buyer majority | ALL rules must match |
+| `rotations` | Market structure via candlestick rotations (BOS, pullbacks, SFP) | ANY signal triggers |
+| `rotations-conservative` | Only break of structure signals | ANY signal triggers |
+
+## Rule Types
+
+### Price Change
+Triggers on percentage price movement over timeframe.
+```
+price +1%/5m    # Up 1% in 5 minutes
+price -2%/1h    # Down 2% in 1 hour
+price +-5%/24h  # Up or down 5% in 24 hours
+```
+
+### Volume Spike
+Triggers when volume exceeds average by multiplier.
+```
+vol 2x/5m       # 2x average volume in 5 minutes
+vol 3x/1h       # 3x average volume in 1 hour
+```
+
+### Buy/Sell Ratio
+Triggers when buy volume exceeds sell volume (or vice versa).
+```
+ratio 1.5:1/5m  # 1.5x more buy volume than sell in 5m
+```
+
+### Trader Count
+Triggers on unique trader activity.
+```
+50+30 traders/5m  # 50 total traders, 30+ buyers in 5m
+```
+
+### Breakout
+Triggers when price breaks out of recent range.
+```
+breakout 5%/20c   # 5% breakout over 20 candles
+```
+
+### MA Crossover
+Triggers on moving average crossover.
+```
+ma 10x50          # 10-period crosses 50-period
+```
+
+### Rotations (Market Structure)
+Detects market structure via candlestick rotations based on the Rotations v1.5.2 indicator.
+
+```
+rotations [BOS+PB+SFP]  # All signal types enabled
+rotations [BOS]          # Only break of structure
+```
+
+**Signal Types:**
+- **BOS (Break of Structure)**: New rotation established - structure shift
+- **PB (Pullback)**: Price at support in uptrend, or resistance in downtrend
+- **SFP (Swing Failure Pattern)**: False breakout - wick beyond level, close inside
+
+---
+
+## Rotations S/R System
+
+The Rotations system provides dynamic support/resistance detection based on price action structure.
+
+### Core Algorithm
+
+```
+State: -1 (bearish), 0 (invalidated), +1 (bullish)
+
+NEW UPWARD ROTATION (+1):
+  close > rotationHigh AND close > previous candle high
+  → rotationHigh = current high
+  → rotationLow = current low
+
+NEW DOWNWARD ROTATION (-1):
+  close < rotationLow AND close < previous candle low
+  → rotationHigh = current high
+  → rotationLow = current low
+
+INVALIDATION (0):
+  Price crosses opposite level without establishing new rotation
+```
+
+### Visual Reference
+
+```
+UPWARD ROTATION (State +1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+    rotationHigh ─────── Resistance (Magic TP zone)
+         │
+         │  ← Price action
+         │
+    rotationLow ──────── Support (Magic SL zone)
+
+
+DOWNWARD ROTATION (State -1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    rotationHigh ─────── Resistance
+         │
+         │  ← Price action
+         │
+    rotationLow ──────── Support
+
+
+INVALIDATION (State 0)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    rotationHigh ─────── Range top
+         │
+         │  ← Ranging / No direction
+         │
+    rotationLow ──────── Range bottom
+```
+
+### Signal Generation
+
+| Signal | Condition | Action |
+|--------|-----------|--------|
+| New Up Rotation | State flips to +1 | BUY signal |
+| New Down Rotation | State flips to -1 | SELL signal |
+| Pullback to Support | State = +1, price near rotationLow | BUY signal |
+| Pullback to Resistance | State = -1, price near rotationHigh | SELL signal |
+| SFP Low | Wick below rotationLow, close above | BUY signal |
+| SFP High | Wick above rotationHigh, close below | SELL signal |
+
+### Configuration
+
+```typescript
+{
+  ruleType: 'rotations',
+  levelBuffer: 0.5,           // 0.5% buffer for "at level" detection
+  requireHtfAlignment: false, // Require higher timeframe agreement
+  signalOnRotation: true,     // Signal on new rotations (BOS)
+  signalOnPullback: true,     // Signal on pullback to S/R
+  signalOnSFP: true,          // Signal on false breakouts
+}
+```
+
+---
+
+## Magic Exit System
+
+Automatic exit management based on rotation support/resistance levels.
+
+### Magic Take Profit (TP)
+
+**Logic:** Auto-close long positions when price approaches rotation resistance.
+
+```
+Trigger Condition (for longs):
+  - Price within 0.5% of rotationHigh (resistance)
+  - Position is in profit (unrealized P&L > 0)
+
+OR:
+  - Price exceeds rotationHigh
+  - Position is in profit
+```
+
+**Why it works:** Rotation resistance represents the level where price previously reversed. Taking profit before/at this level captures gains before potential rejection.
+
+### Magic Stop Loss (SL)
+
+**Logic:** Auto-close long positions when price breaks below rotation support.
+
+```
+Trigger Condition (for longs):
+  - Price is 0.5%+ below rotationLow (support)
+
+Result:
+  - Position closed immediately
+  - Prevents further losses from structure breakdown
+```
+
+**Why it works:** When price breaks below rotationLow, the bullish structure is invalidated. Cutting losses here prevents riding a trend reversal.
+
+### Configuration
+
+```typescript
+{
+  tpEnabled: true,
+  tpTriggerPercent: 0.5,  // Within 0.5% of resistance to trigger
+
+  slEnabled: true,
+  slTriggerPercent: 0.5,  // 0.5% below support to trigger
+
+  tslEnabled: false,      // Williams fractal trailing (TODO)
+}
+```
+
+### Run Loop Integration
+
+Magic exits are checked on every scan cycle:
+
+```
+[time] #scan (count)  |  Magic: SYMBOL:+5.2%  |  New: ...  |  Open: ...
+```
+
+- **Magic: SYMBOL:+X%** shows trades closed by magic exits with P&L
+
+---
+
+## Market Filter (SOL Dump Protection)
+
+Risk management system that monitors SOL price to protect against broad market dumps.
+
+### Why SOL?
+
+1. **Correlation**: Most Solana tokens are correlated with SOL price
+2. **Liquidity**: SOL is the base pair - when SOL dumps, everything dumps
+3. **Available**: SOL price is available through existing API
+4. **Simple**: No need to track BTC, ETH, or complex correlations
+
+### State Machine
+
+```
+                    ┌─────────────────────────────────────┐
+                    │                                     │
+                    ▼                                     │
+   NORMAL ──(-3%)──► CAUTION ──(-5%)──► DUMP             │
+      ▲                                   │               │
+      │                                   │               │
+      └─────────────(≥0%)─────────────────┘               │
+```
+
+| State | 15m SOL Change | Action |
+|-------|----------------|--------|
+| NORMAL | > -3% | Trade normally |
+| CAUTION | -3% to -5% | Skip new entries, keep existing |
+| DUMP | < -5% | Exit all positions |
+| Recovery | ≥ 0% | Resume normal operations |
+
+### Threshold Rationale
+
+Based on typical SOL volatility in 15m windows:
+
+| 15m Change | Frequency | Interpretation |
+|------------|-----------|----------------|
+| ±1-2% | Common | Normal volatility, noise |
+| -3% | Occasional | Notable selling pressure |
+| -5% | Uncommon | Significant dump, risk-off |
+| -7%+ | Rare | Major event (news, hack) |
+
+### Configuration
+
+```typescript
+{
+  enabled: true,
+  timeframeMinutes: 15,
+  skipEntriesThreshold: -3,   // -3% = skip entries
+  exitAllThreshold: -5,       // -5% = exit all
+  recoveryThreshold: 0,       // 0% = resume when not bleeding
+  exitDelayMs: 5000,          // 5s delay to confirm dump
+}
+```
+
+### CLI Commands
+
+```bash
+filter              # Show market filter status
+filter on           # Enable market filter
+filter off          # Disable market filter
+```
+
+### Run Loop Output
+
+When market filter is not in NORMAL state, it shows in output:
+
+```
+[06:33:37] #1  |  SOL -3.5% [CAUTION]  |  No signals
+[06:34:07] #2  |  SOL -5.2% [DUMP]  |  DumpExit: BONK:-2.1% TOKEN:-1.5%
+[06:34:37] #3  |  SOL +0.3%  |  (45 tokens)  |  No signals
+```
+
+---
+
+## Williams Fractal Trailing Stop (TODO)
+
+Planned feature: Trail stop loss to Williams fractal swing lows.
+
+### Algorithm
+
+```
+Williams Fractal Detection:
+  High Fractal: high[n] >= highest(high, leftBars + rightBars + 1)
+  Low Fractal:  low[n] <= lowest(low, leftBars + rightBars + 1)
+
+Trailing Logic:
+  - longTrail trails UP from confirmed low fractals
+  - Exit when price closes below longTrail
+```
+
+### Planned Settings
+
+```typescript
+{
+  timeframe: '1m',     // Candle resolution
+  leftBars: 3,         // Bars back to confirm fractal
+  rightBars: 3,        // Bars forward to confirm fractal
+  // 3/3 = 7-bar window for fractal confirmation
+}
+```
+
+---
+
+## Run Loop Output
+
+The `run` command shows real-time status with color-coded P&L and source indicators:
+
+```
+Starting analysis loop... (Ctrl+C to stop)
+  Watchlist: 1 | Trending: 20 | Whales: 15
+  Open trades: 1 | Rules: 1 sets | Mode: paper
+  Scan interval: 30000ms | Source refresh: 900s
+
+[06:33:37] #1  |  Scan: [W]BONK:- [T]810:- [$]neet:-  |  Trades: [T]MUR (0.10) +5.2%
+[06:34:07] #2  |  Scan: [W]BONK:BUY(85%) [T]810:- [$]neet:SELL(72%)  |  Trades: [T]MUR (0.10) +5.8%
+```
+
+### Source Indicators
+- `[W]` = Manual watchlist
+- `[T]` = Trending (from discovery/trending endpoint)
+- `[$]` = Whale moves (from discovery/whale_moves endpoint)
+
+### Output Sections
+- **Scan**: Tokens being analyzed with signals (- = hold, BUY/SELL = signal with confidence)
+- **Trades**: Open positions with size and unrealized P&L (green = profit, red = loss)
+
+## Auto-Sources
+
+Auto-sources provide automated token screening by pulling from BONKbot's discovery endpoints:
+
+- **Trending**: Tokens with high recent volume/activity from `/discovery/trending`
+- **Whale Moves**: Tokens being actively traded by whale wallets from `/discovery/whale_moves`
+
+### How It Works
+
+1. On startup, auto-sources are fetched immediately
+2. Lists refresh every 15 minutes (configurable)
+3. Tokens from auto-sources are analyzed alongside your manual watchlist
+4. Same rule sets apply to all sources (TODO: per-source strategies)
+5. Source is tracked and displayed in output for transparency
+
+### Configuration
+
+```bash
+# Check current status
+npm run cli sources
+
+# Enable/disable all auto-sources
+npm run cli sources on
+npm run cli sources off
+
+# Toggle individual sources
+npm run cli sources trending off
+npm run cli sources whales on
+```
+
+### Notes
+
+- Auto-sources have unlimited position limits (TODO: add per-source limits)
+- No spam filtering currently applied (TODO: add when expanding to broader sources)
+- Manual watchlist tokens always take priority over auto-source duplicates
+
+## Opposite Signal Handling
+
+Configure behavior when opposite signal fires on an open position:
+
+```typescript
+onOppositeSignal: 'close' | 'flip' | 'ignore'
+```
+
+- `close`: Close position, don't open new (default)
+- `flip`: Close position, open opposite direction
+- `ignore`: Keep existing position, ignore signal
+
+## Configuration
+
+Config stored in `.autopilot/config.json`:
+
+```typescript
+{
+  watchlist: [],           // Manual tokens to monitor
+  ruleSets: [],            // Active rule sets
+  autoSources: {
+    enabled: true,         // Master toggle for auto-sources
+    trending: true,        // Enable trending source
+    whales: true,          // Enable whale moves source
+    refreshIntervalMs: 900000,  // 15 minutes
+    trendingLimit: 20,     // Max tokens from trending
+    whalesLimit: 20        // Max tokens from whale_moves
+  },
+  trigger: {
+    enabled: true,
+    mode: 'paper',         // paper | live
+    defaultPositionSizeSol: 0.1,
+    maxPositionSizeSol: 1,
+    cooldownMs: 60000,     // 1 minute between triggers
+    onOppositeSignal: 'close'
+  },
+  pollIntervalMs: 30000    // 30 second scan interval
+}
+```
+
+## Data Storage
+
+All data stored in `.autopilot/`:
+- `config.json` - User configuration
+- `trades.json` - Paper trade history
+- `events.json` - Trigger event log
+
+## API Integration
+
+Uses local BONKbot web-terminal API (`localhost:8787`) for:
+- Token market data (price, volume, traders)
+- OHLCV candle data
+- Trade history
+- Discovery endpoints (trending, whale_moves)
+
+## Status Command
+
+Get full portfolio overview:
+
+```bash
+npm run cli status
+```
+
+Output:
+```
+=== PORTFOLIO STATUS ===
+
+Open Positions:
+  BUY BONK  +12.34%  (+0.0123 SOL)
+    Entry: 0.00000123 -> Now: 0.00000138 SOL
+
+  Exposure: 0.1000 SOL
+  Unrealized: +0.0123 SOL ($1.23)
+
+Realized P&L:
+  5 trades | 3W/2L | 60% win
+  Total: +0.0456 SOL ($4.56)
+
+Config:
+  Watching: 2 tokens | Rules: 1 sets
+  Mode: paper
+```
+
+## Development
+
+```bash
+npm run dev        # Watch mode
+npm run build      # TypeScript compile
+npm run test       # Run test suite
+```
+
+## Architecture
+
+### LOIS Alignment
+
+The codebase is structured to mirror the LOIS (Limit Order Intent System) architecture for easy porting to Rust:
+
+| TypeScript | Rust LOIS | Purpose |
+|------------|-----------|---------|
+| `RuleIntent` | `Intent` | Stored rule + token config |
+| `TriggerEvaluationResult` | `TriggerEvaluationResult` | Dispatcher output |
+| `RuleEvaluationRequest` | NATS message | Dispatcher → Evaluator |
+| `RuleDispatcher` | Dispatcher binary | Trigger evaluation |
+| `TradeTrigger` | Evaluator | Trade execution |
+
+### Data Flow
+
+```
+Market Data (polling/WebSocket)
+         ↓
+   RuleDispatcher
+         ↓
+  TriggerEvaluationResult
+         ↓
+   RuleEvaluationRequest
+         ↓
+   TradeTrigger/Evaluator
+         ↓
+     Paper Trade
+         ↓
+   MagicExitChecker
+         ↓
+   Auto TP/SL
+```
+
+---
+
+## Roadmap
+
+### Completed
+- [x] Rule Engine with configurable rules
+- [x] Auto-Sources (trending, whale_moves)
+- [x] Paper Trading with P&L tracking
+- [x] Rotations S/R System
+- [x] Magic TP (auto-sell at resistance)
+- [x] Magic SL (auto-close on support break)
+- [x] Market Filter (SOL dump protection)
+- [x] LOIS-aligned architecture
+
+### In Progress
+- [ ] Williams Fractal Trailing Stop (1m, 3/3 range)
+- [ ] Magic Buy (entry at support levels)
+
+### Planned
+- [ ] Frontend integration (beta data API + WebSockets)
+- [ ] Live LOIS integration (Rust evaluator)
+- [ ] Per-source strategy configuration
+- [ ] Position limits per source
+- [ ] Spam filtering for auto-sources
+
+---
+
+## License
+
+Private - BONKbot Hackathon 2025

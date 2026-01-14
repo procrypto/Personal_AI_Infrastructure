@@ -1,0 +1,135 @@
+# Context for wasm-validator
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+WASM-based transaction validation framework that provides a critical security layer for BONKbot. Validates Solana transactions before DEX execution, enforcing fee policies, recipient whitelisting, and swap conditions. Runs in a sandboxed WebAssembly environment for security isolation.
+
+**Critical constraint**: This is a security-critical system - validation logic must be thoroughly tested and any changes require careful review.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Runtime | Rust 1.88.0 + wasm32-wasip1 | WASM compilation target |
+| Blockchain | Solana SDK 1.18.23 | Transaction parsing |
+| Serialization | Borsh/Bincode | Data encoding |
+| Host Communication | FFI (lookup/result) | WASM-host bridge |
+
+### Workspace Structure
+
+```
+crates/
+  common/         # Types, constraints, errors
+  host_extern/    # WASM host bindings (FFI)
+  programs/       # Solana program parsers (20 DEXes)
+modules/
+  send_sol/       # Direct SOL transfers
+  sol_swap/       # Multi-DEX token swaps (main module)
+  sslp_create/    # Meteora DLMM liquidity
+```
+
+### Supported DEXes (19)
+
+Jupiter, Raydium (Standard/CLMM/CPMM/Launchpad), Meteora (4 variants), Orca, PumpFun (2), Boop, Heaven, Messina, Moonshot, Limit Order, Token Mill, Vertigo
+
+## Capabilities
+
+### Validation Flow
+
+```
+Host provides: transactions, constraints, annotations
+  | FFI (lookup)
+WASM Module:
+  1. Deserialize constraint/annotation
+  2. Iterate transactions
+  3. Validate instructions per DEX
+  4. Check amounts, fees, destinations
+  | FFI (result)
+Host receives: verification result
+```
+
+### Key Constraints Enforced
+
+| Constraint | Value | Purpose |
+|------------|-------|---------|
+| `max_fee_bps` | 100 (1%) | Max fee limit |
+| `fee_receivers` | Whitelist | BONKbot accounts only |
+| `max_priority_fee` | 100 SOL | Priority fee cap |
+| Token whitelist | Dynamic | Purchase restrictions |
+
+### Extension Points
+
+- **Add DEX**: Create parser in `crates/programs/`, implement `VerifyProgram` trait
+- **Add Constraint**: Extend `Constraint` enum in `crates/common/`
+- **Add Module**: New binary in `modules/` for different validation types
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- All parsers implement the `VerifyProgram` trait
+- Use `Constraint` enum variants for type-safe validation
+- ENV=dev/prod controls test vs production mode
+- Single-threaded tests (`--test-threads=1`)
+
+### Common Tasks
+
+#### Build
+
+```bash
+rustup target add wasm32-wasip1
+ENV=prod cargo build --target wasm32-wasip1 --release
+```
+
+#### Test
+
+```bash
+ENV=dev cargo test --workspace -- --test-threads=1
+```
+
+#### Finding Code
+
+- DEX parsers: `crates/programs/src/`
+- Constraint types: `crates/common/src/constraints.rs`
+- FFI bindings: `crates/host_extern/src/`
+- Main swap module: `modules/sol_swap/src/`
+
+### Things to Avoid
+
+- Changing validation logic without thorough testing
+- Adding new fee receivers without security review
+- Skipping the WASM build target verification
+- Running tests in parallel (causes race conditions)
+
+## Related Documentation
+
+- [README.md](README.md) - Build and test instructions
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| bonkbot | Transactions to validate |
+| Solana RPC | Account lookups via FFI |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| bonkbot | Validation results (pass/fail) |
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] Review guidelines and tone expectations
+- [ ] Specific coding standards beyond what's documented
+- [ ] PR review process and requirements
+- [ ] Common pitfalls learned from experience
+-->

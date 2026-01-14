@@ -1,0 +1,38 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/trading/auto-sources.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+    84→    await Promise.allSettled(promises);
+    85→    this.lastRefresh = Date.now();
+    86→  }
+    87→
+    88→  private async refreshTrending(): Promise<void> {
+    89→    try {
+    90→      const trending = await this.api.getTrending(this.config.trendingLimit);
+    91→
+    92→      if (!trending || !Array.isArray(trending)) {
+    93→        console.log('[AutoSources] Trending returned non-array:', typeof trending);
+    94→        return;
+    95→      }
+    96→
+    97→      console.log(`[AutoSources] Trending raw count: ${trending.length}`);
+    98→
+    99→      this.trendingTokens = trending
+   100→        .filter(item => item.mint && item.market_data)
+   101→        .map((item, index) => ({
+   102→          mint: item.mint,
+   103→          symbol: item.market_data?.symbol || item.mint.slice(0, 6),
+   104→          source: 'trending' as TokenSource,
+   105→          metadata: {
+   106→            rank: index + 1,
+   107→            volumeUsd: item.trending_data?.volume_usd_1h,
+   108→          },
+   109→        }));
+   110→
+   111→      console.log(`[AutoSources] Trending after filter: ${this.trendingTokens.length}`);
+   112→    } catch (error) {
+   113→      console.error('[AutoSources] Trending fetch failed:', error instanceof Error ? error.message : error);
+   114→      // Keep existing tokens on failure
+   115→    }
+   116→  }
+   117→
+   118→  private async refreshWhales(): Promise<void> {
+   119→    try {
+   120→      const whales = await this.api.getWhaleMoves();

@@ -1,0 +1,89 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { useWhaleMoves } from "@/api/discovery/useWhaleMoves";
+     3→import { LoadingSpinner } from "@/components/loading-spinner";
+     4→import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+     5→import { Anchor } from "lucide-react";
+     6→import { useNavigate } from "@tanstack/react-router";
+     7→import { QuickTradeButton } from "../components/quick-trade-button";
+     8→
+     9→export const WhaleMovesWidget = () => {
+    10→  const navigate = useNavigate();
+    11→  const { data: whales, isLoading } = useWhaleMoves();
+    12→
+    13→  if (isLoading) {
+    14→    return (
+    15→      <div className="flex h-full items-center justify-center">
+    16→        <LoadingSpinner />
+    17→      </div>
+    18→    );
+    19→  }
+    20→
+    21→  return (
+    22→    <div className="flex h-full flex-col">
+    23→      {/* Header */}
+    24→      <div className="mb-3 flex items-center gap-2">
+    25→        <Anchor className="h-4 w-4 text-blue-400" />
+    26→        <span className="text-text-secondary text-xs">Live whale activity</span>
+    27→      </div>
+    28→
+    29→      {/* Whale List */}
+    30→      <div className="flex-1 space-y-2 overflow-auto">
+    31→        {whales.length === 0 ? (
+    32→          <div className="text-text-secondary flex h-full items-center justify-center text-sm">
+    33→            No whale moves
+    34→          </div>
+    35→        ) : (
+    36→          whales.slice(0, 5).map(whale => (
+    37→            <div
+    38→              key={whale.mint}
+    39→              onClick={() =>
+    40→                navigate({ to: "/trading/$mint", params: { mint: whale.mint } })
+    41→              }
+    42→              className="border-border-primary bg-bg-tertiary/50 hover:border-border-secondary hover:bg-bg-tertiary flex cursor-pointer items-center justify-between rounded-lg border p-2 transition-colors"
+    43→            >
+    44→              <div className="flex items-center gap-3">
+    45→                <div className="flex h-7 w-7 items-center justify-center rounded bg-blue-500/20 text-xs font-bold text-blue-400">
+    46→                  {whale.whales_15m}
+    47→                </div>
+    48→                <div>
+    49→                  <span className="text-text-primary text-xs font-medium">
+    50→                    ${whale.token_symbol}
+    51→                  </span>
+    52→                  <span className="text-text-secondary block max-w-[100px] truncate text-[10px]">
+    53→                    {whale.token_name}
+    54→                  </span>
+    55→                </div>
+    56→              </div>
+    57→              <div className="flex items-center gap-2">
+    58→                <div className="text-right">
+    59→                  <div className="text-text-primary text-xs font-medium">
+    60→                    <FormattedNumber
+    61→                      preset="usd"
+    62→                      value={parseFloat(whale.volume_usd_15m || "0")}
+    63→                      animate
+    64→                    />
+    65→                  </div>
+    66→                  <div className="text-text-secondary text-[10px]">15m vol</div>
+    67→                </div>
+    68→                <QuickTradeButton mint={whale.mint} />
+    69→              </div>
+    70→            </div>
+    71→          ))
+    72→        )}
+    73→      </div>
+    74→
+    75→      {/* View All Button */}
+    76→      <button
+    77→        onClick={() => navigate({ to: "/discovery" })}
+    78→        className="bg-bg-tertiary text-text-secondary hover:bg-bg-quartiary mt-3 w-full rounded-lg py-2 text-xs font-medium transition-colors"
+    79→      >
+    80→        View All Whale Moves →
+    81→      </button>
+    82→    </div>
+    83→  );
+    84→};
+    85→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

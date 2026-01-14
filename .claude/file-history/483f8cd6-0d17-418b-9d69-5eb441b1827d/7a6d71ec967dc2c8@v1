@@ -1,0 +1,128 @@
+/**
+ * QA Coordination Event Emitters
+ *
+ * Typed helper functions for emitting events from core actions.
+ * These provide a clean API for dispatching events without directly
+ * interacting with the event bus.
+ *
+ * Usage:
+ *   await emitTicketCreated(ticket);
+ *   await emitTicketAssigned(ticket, tester, true);
+ */
+
+import { getEventBus } from './event-bus.js';
+import type {
+  QATicket,
+  TesterProfile,
+  TicketStatus,
+  QASession,
+} from '../types.js';
+
+/**
+ * Emit when a new ticket is created
+ */
+export async function emitTicketCreated(ticket: QATicket): Promise<void> {
+  await getEventBus().dispatch('ticket:created', { ticket });
+}
+
+/**
+ * Emit when a ticket is assigned (auto or manual)
+ */
+export async function emitTicketAssigned(
+  ticket: QATicket,
+  tester: TesterProfile,
+  autoAssigned: boolean
+): Promise<void> {
+  await getEventBus().dispatch('ticket:assigned', {
+    ticket,
+    tester,
+    autoAssigned,
+  });
+}
+
+/**
+ * Emit when a ticket is claimed by a tester
+ */
+export async function emitTicketClaimed(
+  ticket: QATicket,
+  tester: TesterProfile
+): Promise<void> {
+  await getEventBus().dispatch('ticket:claimed', {
+    ticket,
+    tester,
+    autoAssigned: false,
+  });
+}
+
+/**
+ * Emit when a ticket status changes
+ */
+export async function emitTicketStatusChanged(
+  ticket: QATicket,
+  previousStatus: TicketStatus,
+  changedBy: string
+): Promise<void> {
+  await getEventBus().dispatch('ticket:status_changed', {
+    ticket,
+    previousStatus,
+    changedBy,
+  });
+}
+
+/**
+ * Emit when a ticket is escalated due to age
+ */
+export async function emitTicketEscalated(
+  ticket: QATicket,
+  escalationLevel: 'warning_24h' | 'critical_48h',
+  hoursSinceCreated: number
+): Promise<void> {
+  await getEventBus().dispatch('ticket:escalated', {
+    ticket,
+    escalationLevel,
+    hoursSinceCreated,
+  });
+}
+
+/**
+ * Emit when a ceremony QA session starts
+ */
+export async function emitSessionStarted(session: QASession): Promise<void> {
+  await getEventBus().dispatch('session:started', { session });
+}
+
+/**
+ * Emit when a ceremony QA session completes
+ */
+export async function emitSessionCompleted(
+  session: QASession,
+  passedCount: number,
+  failedCount: number
+): Promise<void> {
+  await getEventBus().dispatch('session:completed', {
+    session,
+    passedCount,
+    failedCount,
+  });
+}
+
+/**
+ * Emit when a Grafana alert triggers QA attention
+ */
+export async function emitAlertTriggered(
+  alertName: string,
+  alertUrl: string,
+  severity: 'warning' | 'critical',
+  metric: string,
+  currentValue: number,
+  threshold: number
+): Promise<void> {
+  await getEventBus().dispatch('alert:triggered', {
+    alertName,
+    alertUrl,
+    severity,
+    metric,
+    currentValue,
+    threshold,
+  });
+}

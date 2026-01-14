@@ -1,0 +1,92 @@
+/**
+ * Test Opposite Signal Close
+ *
+ * Opens a position, then triggers opposite signal to test auto-close.
+ */
+
+import { configStore } from './config/index.js';
+import { localApi } from './api/index.js';
+import { paperTracker, createTrigger } from './trading/index.js';
+
+async function testOppositeClose() {
+  console.log('╔══════════════════════════════════════════════════════════════╗');
+  console.log('║  OPPOSITE SIGNAL CLOSE TEST                                  ║');
+  console.log('╚══════════════════════════════════════════════════════════════╝\n');
+
+  const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'; // BONK
+
+  await configStore.load();
+  await paperTracker.load();
+
+  // Clear for clean test
+  paperTracker.clearAll();
+
+  const trigger = createTrigger({
+    enabled: true,
+    mode: 'paper',
+    defaultPositionSizeSol: 0.1,
+    maxPositionSizeSol: 1,
+    cooldownMs: 0,
+    onOppositeSignal: 'close', // Test close mode
+  });
+
+  const marketData = await localApi.getMarketData(mint);
+
+  // Step 1: Open a BUY position
+  console.log('1. Opening BUY position...');
+  await trigger.trigger({
+    mint,
+    symbol: marketData.symbol,
+    action: 'buy',
+    priceSol: marketData.price_sol,
+    priceUsd: marketData.price_usd,
+    ruleSetId: 'test',
+    signals: [{ ruleId: 'test', ruleName: 'Test', reason: 'Manual test', strength: 1, mint, symbol: marketData.symbol, type: 'buy', data: {}, timestamp: Date.now() }],
+    confidence: 0.8,
+  });
+
+  console.log('\n2. Current open trades:');
+  for (const t of paperTracker.getOpenTrades()) {
+    console.log(`   ${t.action.toUpperCase()} ${t.symbol} @ ${t.entryPriceSol}`);
+  }
+
+  // Step 2: Trigger SELL signal (opposite)
+  console.log('\n3. Triggering SELL signal (opposite)...');
+  const result = await trigger.trigger({
+    mint,
+    symbol: marketData.symbol,
+    action: 'sell',
+    priceSol: marketData.price_sol * 1.05, // Simulate 5% up
+    priceUsd: marketData.price_usd * 1.05,
+    ruleSetId: 'test',
+    signals: [{ ruleId: 'test', ruleName: 'Test', reason: 'Opposite signal test', strength: 1, mint, symbol: marketData.symbol, type: 'sell', data: {}, timestamp: Date.now() }],
+    confidence: 0.8,
+  });
+
+  console.log(`\n   Result: ${result.triggered ? 'Triggered' : 'Not triggered'}`);
+  console.log(`   Reason: ${result.reason || 'Position closed'}`);
+
+  // Step 3: Check status
+  console.log('\n4. Open trades after opposite signal:');
+  const openTrades = paperTracker.getOpenTrades();
+  if (openTrades.length === 0) {
+    console.log('   None (position was closed!)');
+  } else {
+    for (const t of openTrades) {
+      console.log(`   ${t.action.toUpperCase()} ${t.symbol}`);
+    }
+  }
+
+  console.log('\n5. Realized P&L:');
+  const stats = paperTracker.getStats();
+  console.log(`   ${stats.closedTrades} closed | ${stats.wins}W/${stats.losses}L`);
+  console.log(`   Total: ${stats.totalPnlSol >= 0 ? '+' : ''}${stats.totalPnlSol.toFixed(4)} SOL`);
+
+  await paperTracker.save();
+
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('Test complete!');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+}
+
+testOppositeClose().catch(console.error);

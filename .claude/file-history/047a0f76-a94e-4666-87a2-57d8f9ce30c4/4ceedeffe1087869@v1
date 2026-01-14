@@ -1,0 +1,147 @@
+/**
+ * Discovery Whale Moves (direct query)
+ *
+ * Prod serves this from an in-memory cache; locally we run the ClickHouse query directly.
+ * Ports SQL from web-terminal `discovery/fetch/whale_moves.sql`.
+ *
+ * ⚠️ Fetches PRODUCTION data. Use responsibly.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery } from "../../clickhouse/client";
+
+type WhaleMovesRow = {
+    token_symbol: string;
+    token_name: string;
+    mint: string;
+    image: string;
+    whales_15m: string;
+    whales_1h: string;
+    whales_6h: string;
+    whales_24h: string;
+    trades_15m: string;
+    trades_1h: string;
+    trades_6h: string;
+    trades_24h: string;
+    current_market_cap_usd: string;
+    volume_usd_15m: string;
+    volume_usd_1h: string;
+    volume_usd_6h: string;
+    volume_usd_24h: string;
+    market_cap_raw: string;
+};
+
+type WhaleMovesResponse =
+    | { ok: true; data: WhaleMovesRow[]; count: number }
+    | { ok: false; error: string };
+
+const buildWhaleMovesSql = (): string => {
+    return `
+        WITH whale_moves AS (
+            SELECT
+                mint,
+                any(symbol) AS token_symbol,
+                any(token_name) AS token_name,
+                any(market_cap_usd) AS market_cap_usd,
+                any(image) AS image,
+                sumIf(volume_usd, timestamp >= now() - INTERVAL 15 MINUTE) AS volume_usd_15m,
+                countIf(timestamp >= now() - INTERVAL 15 MINUTE) AS trades_15m,
+                uniqIf(whale_address, timestamp >= now() - INTERVAL 15 MINUTE) AS whales_15m,
+                sumIf(volume_usd, timestamp >= now() - INTERVAL 1 HOUR) AS volume_usd_1h,
+                countIf(timestamp >= now() - INTERVAL 1 HOUR) AS trades_1h,
+                uniqIf(whale_address, timestamp >= now() - INTERVAL 1 HOUR) AS whales_1h,
+                sumIf(volume_usd, timestamp >= now() - INTERVAL 6 HOUR) AS volume_usd_6h,
+                countIf(timestamp >= now() - INTERVAL 6 HOUR) AS trades_6h,
+                uniqIf(whale_address, timestamp >= now() - INTERVAL 6 HOUR) AS whales_6h,
+                sumIf(volume_usd, timestamp >= now() - INTERVAL 24 HOUR) AS volume_usd_24h,
+                countIf(timestamp >= now() - INTERVAL 24 HOUR) AS trades_24h,
+                uniqIf(whale_address, timestamp >= now() - INTERVAL 24 HOUR) AS whales_24h
+            FROM discovery_fact_whale_trades_7d
+            WHERE timestamp >= now() - INTERVAL 24 HOUR
+            GROUP BY mint
+        ),
+        market_filter AS (
+            SELECT
+                mint,
+                max_market_cap_usd_l24h AS ath_market_cap_usd,
+                current_market_cap_usd_l24h AS current_market_cap_usd
+            FROM discovery_dim_token_market_cap_1m_v
+            WHERE last_updated >= now() - INTERVAL 1 DAY
+              AND ath_market_cap_usd > 0
+              AND current_market_cap_usd > (ath_market_cap_usd * 0.4)
+        ),
+        whale_agg AS (
+            SELECT
+                token_symbol,
+                token_name,
+                mint,
+                image,
+                whales_15m,
+                whales_1h,
+                whales_6h,
+                whales_24h,
+                trades_15m,
+                trades_1h,
+                trades_6h,
+                trades_24h,
+                current_market_cap_usd,
+                volume_usd_15m,
+                volume_usd_1h,
+                volume_usd_6h,
+                volume_usd_24h,
+                mf.current_market_cap_usd AS market_cap_raw
+            FROM whale_moves wm
+            JOIN market_filter mf ON mf.mint = wm.mint
+            ORDER BY volume_usd_15m DESC
+            LIMIT 100
+        ),
+        non_scam_coins AS (
+            SELECT
+                tm.mint,
+                now() AS last_updated
+            FROM materializer_token_market_data tm
+            WHERE tm.mint IN (SELECT mint FROM whale_agg)
+              AND tm.market_cap_usd > 0
+              AND tm.timestamp >= now() - INTERVAL 1 DAY
+            GROUP BY tm.mint
+            HAVING argMax(tm.launchpad, tm.timestamp) != ''
+               AND argMax(tm.launchpad, tm.timestamp) IS NOT NULL
+               AND argMax(tm.trading_bot_holders_pct, tm.timestamp) > 5
+        )
+        SELECT
+            filtered_results.*
+        FROM (
+            SELECT
+                agg.*
+            FROM whale_agg agg
+            WHERE agg.mint IN (SELECT mint FROM non_scam_coins)
+            ORDER BY volume_usd_15m DESC
+            LIMIT 20
+        ) AS filtered_results
+        ORDER BY volume_usd_15m DESC
+    `;
+};
+
+export const registerWhaleMovesRoutes = (app: Elysia) => {
+    app.get("/discovery/whale-moves", async () => {
+        const sql = buildWhaleMovesSql();
+        const result = await clickhouseQuery<WhaleMovesRow>(sql);
+
+        if (!result.success) {
+            return { ok: false, error: result.error } satisfies WhaleMovesResponse;
+        }
+
+        return {
+            ok: true,
+            data: result.data,
+            count: result.data.length,
+        } satisfies WhaleMovesResponse;
+    });
+};
+
+
+
+
+
+
+

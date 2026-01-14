@@ -1,0 +1,125 @@
+/**
+ * useTokenSignalStrength
+ *
+ * Provides per-token signal strength for visual indicators in the screener.
+ * Builds a Map<mint, SignalStrength> from the signals array in the autopilot store.
+ *
+ * Signal intensity uses exponential decay:
+ * - 1.0 at 0 seconds (just occurred)
+ * - 0.5 at ~30 seconds
+ * - 0.1 at ~60 seconds
+ * - Approaches 0 as time passes
+ */
+
+import { useMemo } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type { AutopilotSignal } from "@/store/memoryStore/slices/autopilot-store/types";
+
+/**
+ * Signal strength for a token.
+ */
+export interface SignalStrength {
+  /** Signal type: buy signals show green glow, sell signals show red glow */
+  type: "buy" | "sell" | "none";
+  /** Intensity from 0-1, higher for more recent signals */
+  intensity: number;
+  /** Timestamp when the signal occurred */
+  timestamp: number;
+}
+
+/**
+ * Decay time constant in milliseconds.
+ * At t = DECAY_TIME_CONSTANT, intensity = 1/e ≈ 0.37
+ * At t = 2 * DECAY_TIME_CONSTANT, intensity ≈ 0.14
+ * At t = 3 * DECAY_TIME_CONSTANT, intensity ≈ 0.05
+ *
+ * With 20000ms (20s), we get:
+ * - 0s: 1.0
+ * - 20s: 0.37
+ * - 40s: 0.14
+ * - 60s: 0.05
+ */
+const DECAY_TIME_CONSTANT_MS = 20000;
+
+/**
+ * Minimum intensity threshold below which we consider the signal "none".
+ */
+const MIN_INTENSITY_THRESHOLD = 0.05;
+
+/**
+ * Classify signal type from AutopilotSignal.
+ */
+function classifySignalType(signal: AutopilotSignal): "buy" | "sell" {
+  switch (signal.signalType) {
+    case "magic_buy":
+      return "buy";
+    case "magic_exit":
+    case "dump_exit":
+      return "sell";
+    case "rule_signal":
+      // For rule_signal, use the action field
+      return signal.action === "buy" ? "buy" : "sell";
+    default:
+      return "sell";
+  }
+}
+
+/**
+ * Calculate intensity using exponential decay.
+ * @param ageMs - Age of signal in milliseconds
+ * @returns Intensity from 0 to 1
+ */
+function calculateIntensity(ageMs: number): number {
+  // Exponential decay: intensity = e^(-t/τ)
+  const intensity = Math.exp(-ageMs / DECAY_TIME_CONSTANT_MS);
+  return Math.max(0, Math.min(1, intensity));
+}
+
+/**
+ * Hook to get signal strength for each token in the autopilot signals array.
+ * Returns a Map<mint, SignalStrength> for efficient O(1) lookups.
+ */
+export const useTokenSignalStrength = (): Map<string, SignalStrength> => {
+  // Get signals array from autopilot store
+  const signals = useGlobalStore(
+    useShallow(state => state.autopilot.signals)
+  );
+
+  return useMemo(() => {
+    const now = Date.now();
+    const strengthMap = new Map<string, SignalStrength>();
+
+    // Group signals by mint, keeping only the most recent per mint
+    const latestSignalByMint = new Map<string, AutopilotSignal>();
+
+    for (const signal of signals) {
+      const existing = latestSignalByMint.get(signal.mint);
+      if (!existing || signal.timestamp > existing.timestamp) {
+        latestSignalByMint.set(signal.mint, signal);
+      }
+    }
+
+    // Calculate signal strength for each mint
+    for (const [mint, signal] of latestSignalByMint) {
+      const ageMs = now - signal.timestamp;
+      const intensity = calculateIntensity(ageMs);
+
+      // If intensity is below threshold, treat as no signal
+      if (intensity < MIN_INTENSITY_THRESHOLD) {
+        strengthMap.set(mint, {
+          type: "none",
+          intensity: 0,
+          timestamp: signal.timestamp,
+        });
+      } else {
+        strengthMap.set(mint, {
+          type: classifySignalType(signal),
+          intensity,
+          timestamp: signal.timestamp,
+        });
+      }
+    }
+
+    return strengthMap;
+  }, [signals]);
+};

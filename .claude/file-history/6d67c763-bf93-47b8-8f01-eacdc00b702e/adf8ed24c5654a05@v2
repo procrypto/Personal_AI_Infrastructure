@@ -1,0 +1,88 @@
+# Token Analysis Autopilot - Frontend Integration
+
+## What This Is
+
+Frontend integration for the token-analysis-autopilot paper trading system. Brings the CLI's rule-based analysis and paper trading capabilities into the web-terminal dashboard widget, using existing WebSocket patterns and NATS data sources.
+
+## Core Value
+
+**Full feature parity with the CLI through the dashboard widget.** Users should be able to configure strategies, monitor positions, view signals, and track P&L without touching the command line.
+
+## Requirements
+
+### Validated
+
+- Rule engine with configurable strategies (CLI) — existing
+- Paper trading with P&L tracking (CLI) — existing
+- Rotations S/R, Magic TP/SL, Market Filter (CLI) — existing
+- Auto-sources: trending, whale moves (CLI) — existing
+- WebSocket server foundation in autopilot repo — existing
+- Dashboard widget UI scaffold — existing (uncommitted)
+- Zustand store slice for autopilot data — existing (uncommitted)
+- WebSocket client extending BaseWebsocket — existing (uncommitted)
+
+### Active
+
+- [ ] Complete WebSocket message protocol (backend→frontend)
+- [ ] Wire autopilot backend to serve all CLI data via WebSocket
+- [ ] Connect widget to backend and display live data
+- [ ] Implement all control commands (strategies, sources, filter toggles)
+- [ ] Calculate real-time P&L using NATS market_data subscriptions
+- [ ] Add Vite proxy config to route autopilot WebSocket
+- [ ] (Stretch) Auto-start autopilot backend alongside frontend dev server
+
+### Out of Scope
+
+- LOIS/live trading integration — separate milestone after paper trading proven
+- Custom rule creation in UI — use pre-built templates only, no rule builder this sprint
+- Deploying autopilot backend to production — local development only
+- Changes to LOIS codebase in pum3 repo — that team's responsibility
+
+## Context
+
+**Related Repositories:**
+
+- `github/token-analysis-autopilot/` — CLI engine, WebSocket server, rule definitions
+- `github/web-terminal-frontend/feat-token-analysis-autopilot/` — this worktree
+- `github/local-api/` — ClickHouse dev server, Vite proxy pattern reference
+- `github/pum3/` — LOIS reference (not modifying)
+- `github/web-terminal/` — data backend reference (`ai.md`)
+
+**Current Implementation State:**
+
+- CLI is fully functional with all features
+- Frontend has partially-built WebSocket client, store, widget
+- WebSocket server exists in autopilot repo but message protocol incomplete
+- Widget UI exists but not connected to real data
+
+**Data Flow:**
+
+```
+autopilot backend (WebSocket server)
+    ↓ positions, signals, stats, config, strategies
+frontend widget (useAutopilotSubscription)
+    ↓ stores in Zustand
+AutopilotWidget renders
+    ↓ position mints
+NATS market_data subscriptions → live prices → P&L calculation
+```
+
+## Constraints
+
+- **Existing Patterns**: Must follow web-terminal's established WebSocket/store patterns
+- **Vite Proxy**: Backend communication via Vite dev server proxy (like local-api)
+- **NATS for Prices**: Use existing NATS market_data subscriptions for real-time prices
+- **No New Dependencies**: Use what's in package.json already
+
+## Key Decisions
+
+| Decision                           | Rationale                                                           | Outcome   |
+| ---------------------------------- | ------------------------------------------------------------------- | --------- |
+| Paper trading only (no LOIS)       | Prove the system works before live trading                          | — Pending |
+| Templates only (no custom rules)   | Reduce scope, CLI still available for power users                   | — Pending |
+| Feature parity before auto-startup | More valuable to have working features than convenient startup      | — Pending |
+| NATS for P&L not backend           | Leverage existing subscription infrastructure, backend stays simple | — Pending |
+
+---
+
+_Last updated: 2026-01-08 after initialization_

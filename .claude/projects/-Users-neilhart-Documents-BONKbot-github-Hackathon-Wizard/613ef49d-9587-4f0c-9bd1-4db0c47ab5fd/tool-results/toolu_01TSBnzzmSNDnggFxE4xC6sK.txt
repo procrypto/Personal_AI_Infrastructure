@@ -1,0 +1,38 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   434→                  tradeResults[tradeResults.length - 1] += ' EXIT';
+   435→                }
+   436→                await paperTracker.save();
+   437→              }
+   438→            } else {
+   439→              // Scan result (not an open trade)
+   440→              if (result.action === 'hold') {
+   441→                // Don't show hold results to reduce noise
+   442→              } else {
+   443→                const marketData = await localApi.getMarketData(token.mint);
+   444→                const conf = (result.confidence * 100).toFixed(0);
+   445→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   446→                const reset = '\x1b[0m';
+   447→
+   448→                const triggerResult = await trigger.trigger({
+   449→                  mint: token.mint,
+   450→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   451→                  action: result.action,
+   452→                  priceSol: marketData.price_sol,
+   453→                  priceUsd: marketData.price_usd,
+   454→                  ruleSetId: ruleSets[0].id,
+   455→                  signals: result.signals,
+   456→                  confidence: result.confidence,
+   457→                  quiet: true,
+   458→                });
+   459→
+   460→                // Only show signals that actually triggered a trade
+   461→                if (triggerResult.triggered) {
+   462→                  scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   463→                }
+   464→                await paperTracker.save();
+   465→              }
+   466→            }
+   467→          } catch {
+   468→            const sym = token.symbol || token.mint.slice(0, 6);
+   469→            const src = sourceLabel(token.source);
+   470→            if (isOpenTrade) {

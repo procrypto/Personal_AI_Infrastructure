@@ -1,0 +1,57 @@
+  The token-analysis-autopilot backend now runs its own WebSocket server on port 8765
+  for signal broadcasting. The frontend should NOT start its own WebSocket server.
+
+  **Required changes:**
+
+  1. Remove any code that starts a WebSocket server on port 8765
+  2. Instead, connect as a WebSocket CLIENT to ws://localhost:8765
+
+  3. **Send DATA FEEDS to the backend:**
+
+     Market data:
+     - `{ type: 'market_data_feed', data: TokenMarketData }`
+     - `{ type: 'ohlcv_update', mint: string, ohlcv: OHLCV[] }`
+     - `{ type: 'trade_feed', trade: Trade }`
+
+     CVD (Cumulative Volume Delta):
+     - `{ type: 'cvd_update', data: CVDData }`
+
+     CVDData interface:
+     ```typescript
+     interface CVDData {
+       mint: string;
+       timestamp: number;
+       cvd: number;           // Current cumulative volume delta
+       cvdChange: number;     // Change over period
+       buyVolume: number;     // Buy volume in period
+       sellVolume: number;    // Sell volume in period
+       netDelta: number;      // buyVolume - sellVolume for period
+       periodMs: number;      // Period length (e.g., 60000 for 1m)
+     }
+
+  4. Send COMMANDS to the backend:
+    - { command: 'toggle_sources', enabled: boolean }
+    - { command: 'toggle_trending', enabled: boolean }
+    - { command: 'toggle_whales', enabled: boolean }
+    - { command: 'toggle_filter', enabled: boolean }
+    - { command: 'set_mode', mode: 'paper' | 'live' }
+    - { command: 'set_position_size', sizeSol: number }
+    - { command: 'refresh_sources' }
+    - { command: 'get_config' }
+    - { command: 'get_strategies' }
+    - { command: 'toggle_strategy', strategyId: string, enabled: boolean }
+    - { command: 'close_position', mint: string }
+    - { command: 'close_all_positions' }
+  5. Listen for EVENTS from the backend:
+    - signal - Rule signals, magic buy/exit, dump exit events
+    - position_update - Open positions
+    - market_status - SOL dump protection state
+    - stats_update - Trading statistics
+    - scan_tick - Heartbeat/liveness
+    - token_list - Watched tokens by source
+    - config - Current configuration
+    - strategies - Available/active strategies
+    - last_analysis - Most recent token analysis result
+
+  The backend CLI should be started separately with npm run cli run and the
+  frontend connects to it as a client.

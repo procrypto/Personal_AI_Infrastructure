@@ -1,0 +1,2600 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import React, {
+  memo,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { cn } from "@/lib/utils";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { useKols, type Kol } from "@bonkbot/pvp";
+import { socketIOManagerPvp } from "@/websocket/socketio/socketIOInstance";
+import { useWalletTrackerSubscription } from "@/hooks/useSubscriptions/useWalletTrackerSubscription";
+import { useGetTrackedWallets } from "@/api/walletTracking/useTrackedWallets";
+import { useQueries } from "@tanstack/react-query";
+import { xUserProfileQueryOptions } from "@/api/social/useXUserProfileApi";
+import { useMarketSwap } from "@/api/swap/useMarketSwap";
+import { usePersistentGlobalStore } from "@/store/persistentStore/usePersistentGlobalStore";
+import { useValidateQuickbuyAmount } from "@/hooks/useValidateQuickbuyAmount";
+import { toLamports } from "@/lib/formatters";
+import { v4 as uuidv4 } from "uuid";
+import { ButtonToggle, ButtonToggleItem } from "@/components/button-toggle";
+import { Tooltip } from "@/components/tooltip";
+import { Badge } from "@/components/badge";
+import { Button } from "@/ui/base/Button";
+import {
+  ChartPreviewTooltip,
+  ChartPreviewTooltipContent,
+} from "@/components/TradingViewChart/chart-preview-tooltip";
+import { toast } from "sonner";
+import { Toast } from "@/components/toast";
+import { t } from "@lingui/core/macro";
+import {
+  Zap,
+  SlidersHorizontal,
+  Pin,
+  List,
+  LayoutGrid,
+  Lock,
+  LineChart,
+  CirclePause,
+} from "lucide-react";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/popover";
+import { LoadingSpinner } from "@/components/loading-spinner";
+import { XProfileTooltip } from "@/components/socials/x-profile-tooltip";
+import XIcon from "@/assets/icons/x.svg";
+import { useTokenStatsValues } from "@/pages/TradingPage/hooks/useTokenStatsValues";
+import { ProgressAvatar } from "@/components/progress-avatar";
+import { TokenExternalIcons } from "@/pages/TradingPage/components/token-external-icons";
+import { parseLinks } from "@/lib/tokenParsers";
+import { useBonkbotImageUrl } from "@/pages/XRayPage/XRayTokensList/XRayListItem/useBonkbotImageUrl";
+import { useHydrateMarketData } from "@/hooks/useHydrateMarketData";
+import { useSubscribeMints } from "@/hooks/useSubscribeMints";
+import { useTrenchBenchBackfill } from "@/hooks/useTrenchBenchBackfill";
+import { useTrenchBenchStore } from "@/store/trenchBenchStore";
+
+// =============================================================================
+// Hooks
+// =============================================================================
+
+// Hook that returns a timestamp that updates every N seconds (for live time displays)
+const useTimeTick = (intervalMs: number = 5000) => {
+  const [tick, setTick] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setTick(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+
+  return tick;
+};
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type MarketCapTab = "under100k" | "100k-1m" | "over1m";
+type SortOrder = "activity" | "relevance";
+type TimeWindow = "15m" | "1h" | "4h" | "all";
+type ViewMode = "list" | "heatmap";
+
+// Activity event for sparkline
+type ActivityEvent = {
+  timestamp: number;
+  type: "buy" | "sell";
+  solAmount: number;
+};
+
+type KolPosition = {
+  kolAddress: string;
+  kolName: string;
+  kolEmoji: string;
+  kolAvatar: string | null;
+  kolTwitter: string | null;
+  entryAmountSol: number;
+  entryMc: number;
+  currentValueSol: number;
+  entryTimestamp: number;
+  isBuying: boolean; // Recent activity direction
+  lastTradeTimestamp: number;
+};
+
+type TokenIntel = {
+  mint: string;
+  symbol: string;
+  name: string;
+  image: string;
+  currentMc: number;
+  kolPositions: KolPosition[];
+  totalKolCount: number;
+  totalInvestedSol: number;
+  avgEntryMc: number;
+  firstEntryTimestamp: number;
+  lastActivityTimestamp: number;
+  recentBuys: number; // Buys in last 5 min
+  recentSells: number; // Sells in last 5 min
+  pnlPercent: number; // Aggregate P/L
+  launchpad: string; // pump, raydium, etc.
+  addedAt: number; // When this token was first added to Intel Grid
+  activityHistory: ActivityEvent[]; // For sparkline visualization
+};
+
+// Store for syncing settings between header controls and widget
+const tabStore = new Map<string, MarketCapTab>([["default", "under100k"]]);
+const sortStore = new Map<string, SortOrder>([["default", "activity"]]);
+const minKolsStore = new Map<string, number>([["default", 1]]);
+const timeWindowStore = new Map<string, TimeWindow>([["default", "1h"]]);
+const pinnedTokensStore = new Map<string, Set<string>>([
+  ["default", new Set()],
+]);
+const lockedTokensStore = new Map<string, Map<string, boolean>>([
+  ["default", new Map()],
+]); // mint -> isExpanded when locked
+const viewModeStore = new Map<string, ViewMode>([["default", "list"]]);
+const pauseStore = new Map<string, boolean>([["default", false]]); // Track pause state for header indicator
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const FIVE_MINUTES = 5 * 60 * 1000;
+
+// Excluded wallet addresses (bots that spam trades and disrupt activity ordering)
+const EXCLUDED_WALLETS = new Set([
+  "bwwk17cbhxwwbkzkuyvzxlcnq1yvyafezduwbtm2de6s", // Mayhem Bot - high frequency trading bot
+]);
+
+// =============================================================================
+// Header Controls
+// =============================================================================
+
+export const IntelGridWidgetHeaderControls = memo(
+  ({ widgetId }: { widgetId?: string }) => {
+    const key = widgetId || "default";
+    const [tab, setTab] = useState<MarketCapTab>(
+      tabStore.get(key) || "under100k"
+    );
+    const [sortOrder, setSortOrder] = useState<SortOrder>(
+      sortStore.get(key) || "activity"
+    );
+    const [minKols, setMinKols] = useState<number>(minKolsStore.get(key) || 1);
+    const [timeWindow, setTimeWindow] = useState<TimeWindow>(
+      timeWindowStore.get(key) || "1h"
+    );
+    const [viewMode, setViewMode] = useState<ViewMode>(
+      viewModeStore.get(key) || "list"
+    );
+    const handleTabChange = (value: string) => {
+      const newTab = value as MarketCapTab;
+      setTab(newTab);
+      tabStore.set(key, newTab);
+      window.dispatchEvent(
+        new CustomEvent("intel-grid-tab-change", {
+          detail: { widgetId: key, tab: newTab },
+        })
+      );
+    };
+
+    const handleSortChange = (value: string) => {
+      const newSort = value as SortOrder;
+      setSortOrder(newSort);
+      sortStore.set(key, newSort);
+      window.dispatchEvent(
+        new CustomEvent("intel-grid-sort-change", {
+          detail: { widgetId: key, sort: newSort },
+        })
+      );
+    };
+
+    const handleMinKolsChange = (value: number) => {
+      setMinKols(value);
+      minKolsStore.set(key, value);
+      window.dispatchEvent(
+        new CustomEvent("intel-grid-minkols-change", {
+          detail: { widgetId: key, minKols: value },
+        })
+      );
+    };
+
+    const handleTimeWindowChange = (value: string) => {
+      const newWindow = value as TimeWindow;
+      setTimeWindow(newWindow);
+      timeWindowStore.set(key, newWindow);
+      window.dispatchEvent(
+        new CustomEvent("intel-grid-timewindow-change", {
+          detail: { widgetId: key, timeWindow: newWindow },
+        })
+      );
+    };
+
+    const handleViewModeChange = (mode: ViewMode) => {
+      setViewMode(mode);
+      viewModeStore.set(key, mode);
+      window.dispatchEvent(
+        new CustomEvent("intel-grid-viewmode-change", {
+          detail: { widgetId: key, viewMode: mode },
+        })
+      );
+    };
+
+    return (
+      <div className="flex items-center gap-2">
+        <ButtonToggle
+          value={tab}
+          onValueChange={handleTabChange}
+        >
+          <ButtonToggleItem value="under100k">&lt;100K</ButtonToggleItem>
+          <ButtonToggleItem value="100k-1m">100K-1M</ButtonToggleItem>
+          <ButtonToggleItem value="over1m">&gt;1M</ButtonToggleItem>
+        </ButtonToggle>
+
+        {/* View Mode Toggle */}
+        <div className="flex items-center rounded-md border border-white/10">
+          <Tooltip content="List view">
+            <button
+              onClick={() => handleViewModeChange("list")}
+              className={cn(
+                "p-1.5 transition-colors",
+                viewMode === "list"
+                  ? "bg-bg-tertiary text-text-primary"
+                  : "text-text-tertiary hover:text-text-secondary"
+              )}
+            >
+              <List className="size-3.5" />
+            </button>
+          </Tooltip>
+          <Tooltip content="Heat map view">
+            <button
+              onClick={() => handleViewModeChange("heatmap")}
+              className={cn(
+                "p-1.5 transition-colors",
+                viewMode === "heatmap"
+                  ? "bg-bg-tertiary text-text-primary"
+                  : "text-text-tertiary hover:text-text-secondary"
+              )}
+            >
+              <LayoutGrid className="size-3.5" />
+            </button>
+          </Tooltip>
+        </div>
+
+        <Popover>
+          <PopoverTrigger asChild>
+            <button className="hover:bg-bg-tertiary text-text-secondary hover:text-text-primary rounded p-1.5 transition-colors">
+              <SlidersHorizontal className="size-4" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            side="bottom"
+            align="end"
+            className="w-56"
+            withArrow={false}
+          >
+            <div className="space-y-4">
+              {/* Sort Order */}
+              <div>
+                <div className="text-text-primary mb-2 text-xs font-medium">
+                  Sort by
+                </div>
+                <ButtonToggle
+                  value={sortOrder}
+                  onValueChange={handleSortChange}
+                  className="w-full"
+                >
+                  <ButtonToggleItem
+                    value="activity"
+                    className="flex-1 text-xs"
+                  >
+                    Activity
+                  </ButtonToggleItem>
+                  <ButtonToggleItem
+                    value="relevance"
+                    className="flex-1 text-xs"
+                  >
+                    KOL Count
+                  </ButtonToggleItem>
+                </ButtonToggle>
+              </div>
+
+              {/* Min KOLs Filter */}
+              <div>
+                <div className="text-text-primary mb-2 text-xs font-medium">
+                  Min KOL holders
+                </div>
+                <ButtonToggle
+                  value={String(minKols)}
+                  onValueChange={v => handleMinKolsChange(Number(v))}
+                  className="w-full"
+                >
+                  <ButtonToggleItem
+                    value="1"
+                    className="flex-1 text-xs"
+                  >
+                    1+
+                  </ButtonToggleItem>
+                  <ButtonToggleItem
+                    value="2"
+                    className="flex-1 text-xs"
+                  >
+                    2+
+                  </ButtonToggleItem>
+                  <ButtonToggleItem
+                    value="3"
+                    className="flex-1 text-xs"
+                  >
+                    3+
+                  </ButtonToggleItem>
+                  <ButtonToggleItem
+                    value="5"
+                    className="flex-1 text-xs"
+                  >
+                    5+
+                  </ButtonToggleItem>
+                </ButtonToggle>
+              </div>
+
+              {/* Time Window Filter */}
+              <div>
+                <div className="text-text-primary mb-2 text-xs font-medium">
+                  Time window
+                </div>
+                <ButtonToggle
+                  value={timeWindow}
+                  onValueChange={handleTimeWindowChange}
+                  className="w-full"
+                >
+                  <ButtonToggleItem
+                    value="15m"
+                    className="flex-1 text-xs"
+                  >
+                    15m
+                  </ButtonToggleItem>
+                  <ButtonToggleItem
+                    value="1h"
+                    className="flex-1 text-xs"
+                  >
+                    1h
+                  </ButtonToggleItem>
+                  <ButtonToggleItem
+                    value="4h"
+                    className="flex-1 text-xs"
+                  >
+                    4h
+                  </ButtonToggleItem>
+                  <ButtonToggleItem
+                    value="all"
+                    className="flex-1 text-xs"
+                  >
+                    All
+                  </ButtonToggleItem>
+                </ButtonToggle>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
+    );
+  }
+);
+IntelGridWidgetHeaderControls.displayName = "IntelGridWidgetHeaderControls";
+
+// =============================================================================
+// Pause Indicator (shown next to title)
+// =============================================================================
+
+export const IntelGridPauseIndicator = memo(
+  ({ widgetId }: { widgetId?: string }) => {
+    const key = widgetId || "default";
+    const [isPaused, setIsPaused] = useState<boolean>(
+      pauseStore.get(key) || false
+    );
+
+    // Listen for pause state changes from the widget
+    useEffect(() => {
+      const handlePauseChange = (e: CustomEvent) => {
+        if (e.detail.widgetId === key) {
+          setIsPaused(e.detail.isPaused);
+        }
+      };
+      window.addEventListener("intel-grid-pause-change", handlePauseChange as EventListener);
+      return () => window.removeEventListener("intel-grid-pause-change", handlePauseChange as EventListener);
+    }, [key]);
+
+    return (
+      <div className={cn(
+        "flex items-center rounded-sm px-1 py-0.5 transition-opacity duration-200",
+        "bg-yellow-500/20",
+        isPaused ? "opacity-100" : "opacity-0"
+      )}>
+        <CirclePause className="size-3.5 text-yellow-500" />
+      </div>
+    );
+  }
+);
+IntelGridPauseIndicator.displayName = "IntelGridPauseIndicator";
+
+// =============================================================================
+// Quick Buy Button
+// =============================================================================
+
+type QuickBuyButtonProps = {
+  mint: string;
+  symbol: string;
+  disabled?: boolean;
+};
+
+const QuickBuyButton = memo(
+  ({ mint, symbol, disabled }: QuickBuyButtonProps) => {
+    const { isValidQuickBuy } = useValidateQuickbuyAmount();
+    const quickbuyAmount = usePersistentGlobalStore(
+      useShallow(state => state.userSettings.trading.quickbuyAmount)
+    );
+
+    const { mutate, isPending } = useMarketSwap({ mint });
+
+    const handleQuickBuy = useCallback(
+      (e: React.MouseEvent) => {
+        e.stopPropagation();
+
+        if (!isValidQuickBuy) {
+          toast.custom(toastId => (
+            <Toast
+              onDismiss={() => toast.dismiss(toastId)}
+              title={t`Insufficient SOL balance`}
+              variant="error"
+            />
+          ));
+          return;
+        }
+
+        if (isPending || disabled) return;
+
+        const amount = toLamports(quickbuyAmount, 9);
+        mutate({
+          amount,
+          type: "marketBuy",
+          clientNonce: uuidv4(),
+          tokenSymbol: symbol,
+          amountWithDecimals: quickbuyAmount,
+          tokenMint: mint,
+        });
+      },
+      [
+        isValidQuickBuy,
+        isPending,
+        disabled,
+        quickbuyAmount,
+        mutate,
+        symbol,
+        mint,
+      ]
+    );
+
+    return (
+      <Tooltip content={`Quick buy ${quickbuyAmount} SOL`}>
+        <Button
+          size="xs"
+          intent="primary"
+          onClick={handleQuickBuy}
+          disabled={isPending || disabled}
+          className="gap-1"
+        >
+          <Zap className="size-3" />
+          {isPending ? "..." : "Buy"}
+        </Button>
+      </Tooltip>
+    );
+  }
+);
+QuickBuyButton.displayName = "QuickBuyButton";
+
+// =============================================================================
+// Token Social Icons (uses same component as trading page)
+// =============================================================================
+
+type TokenSocialIconsProps = {
+  mint: string;
+};
+
+const TokenSocialIcons = memo(({ mint }: TokenSocialIconsProps) => {
+  // Fetch all token stats needed for social icons
+  const tokenStats = useTokenStatsValues({
+    mint,
+    properties: [
+      "mint",
+      "symbol",
+      "launchpad",
+      "exchange",
+      "website",
+      "telegram",
+      "twitter",
+      "partner",
+      "created",
+      "has_migrated",
+      "has_graduated",
+      "dex_website",
+      "dex_twitter",
+      "dex_discord",
+      "dex_docs",
+      "dex_telegram",
+      "dex_tiktok",
+      "dex_links",
+    ],
+  });
+
+  const links = useMemo(
+    () =>
+      tokenStats?.mint
+        ? parseLinks(tokenStats)
+        : { socials: [], exchanges: [], launchpads: [] },
+    [tokenStats]
+  );
+
+  if (!tokenStats?.mint) return null;
+
+  return (
+    <TokenExternalIcons
+      links={links}
+      tokenStats={tokenStats}
+      page="xray"
+      analyticsMetadata={{ source: "intel-grid" }}
+      hideLaunchpads={true}
+      hideTimer={true}
+      size="xs"
+    />
+  );
+});
+TokenSocialIcons.displayName = "TokenSocialIcons";
+
+// =============================================================================
+// Token Image with Progress (like X-Ray)
+// =============================================================================
+
+type TokenImageWithProgressProps = {
+  mint: string;
+  symbol: string;
+};
+
+const TokenImageWithProgress = memo(
+  ({ mint, symbol }: TokenImageWithProgressProps) => {
+    const { imgSrc, isCrossOrigin } = useBonkbotImageUrl(mint);
+
+    // Get token stats for progress and launchpad
+    const tokenStats = useTokenStatsValues({
+      mint,
+      properties: ["launchpad", "partner", "has_migrated", "bonding_curve_pct"],
+    });
+
+    const progress = tokenStats?.bonding_curve_pct
+      ? Number(tokenStats.bonding_curve_pct)
+      : 0;
+
+    return (
+      <ProgressAvatar
+        progress={progress}
+        size={48}
+        badgeSize={14}
+        launchpad={tokenStats?.launchpad || undefined}
+        partner={tokenStats?.partner || undefined}
+        hasMigrated={tokenStats?.has_migrated || false}
+        imgSrc={imgSrc}
+        isCrossOrigin={isCrossOrigin}
+        symbol={symbol}
+      />
+    );
+  }
+);
+TokenImageWithProgress.displayName = "TokenImageWithProgress";
+
+// =============================================================================
+// KOL Avatar Stack
+// =============================================================================
+
+type KolAvatarStackProps = {
+  positions: KolPosition[];
+  maxVisible?: number;
+};
+
+const KolAvatarStack = memo(
+  ({ positions, maxVisible = 4 }: KolAvatarStackProps) => {
+    const visible = positions.slice(0, maxVisible);
+    const remaining = positions.length - maxVisible;
+
+    return (
+      <div className="flex items-center">
+        <div className="flex -space-x-2">
+          {visible.map((pos, i) => {
+            const twitterUrl = pos.kolTwitter
+              ? pos.kolTwitter.startsWith("http")
+                ? pos.kolTwitter
+                : `https://x.com/${pos.kolTwitter}`
+              : null;
+
+            const avatar = (
+              <div
+                className="border-bg-primary relative size-6 cursor-pointer overflow-hidden rounded-full border-2"
+                style={{ zIndex: maxVisible - i }}
+              >
+                {pos.kolAvatar ? (
+                  <img
+                    src={pos.kolAvatar}
+                    alt={pos.kolName}
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  <div className="bg-bg-tertiary flex size-full items-center justify-center text-xs">
+                    {pos.kolEmoji || pos.kolName.charAt(0)}
+                  </div>
+                )}
+              </div>
+            );
+
+            // Use XProfileTooltip if Twitter available, otherwise basic Tooltip
+            if (twitterUrl) {
+              return (
+                <XProfileTooltip
+                  key={pos.kolAddress}
+                  profileUrl={twitterUrl}
+                >
+                  {avatar}
+                </XProfileTooltip>
+              );
+            }
+
+            return (
+              <Tooltip
+                key={pos.kolAddress}
+                content={
+                  <div className="text-xs">
+                    <div className="font-semibold">
+                      {pos.kolEmoji} {pos.kolName}
+                    </div>
+                    <div className="text-text-secondary">
+                      {pos.entryAmountSol.toFixed(2)} SOL @{" "}
+                      {formatMc(pos.entryMc)}
+                    </div>
+                  </div>
+                }
+              >
+                {avatar}
+              </Tooltip>
+            );
+          })}
+        </div>
+        {remaining > 0 && (
+          <span className="text-text-secondary ml-1 text-xs">+{remaining}</span>
+        )}
+      </div>
+    );
+  }
+);
+KolAvatarStack.displayName = "KolAvatarStack";
+
+// =============================================================================
+// Token Row
+// =============================================================================
+
+type TokenRowProps = {
+  token: TokenIntel;
+};
+
+// =============================================================================
+// KOL Position Card (expanded view)
+// =============================================================================
+
+type KolPositionCardProps = {
+  position: KolPosition;
+  maxPositionSize: number; // For relative size visualization
+};
+
+const KolPositionCard = memo(
+  ({ position, maxPositionSize }: KolPositionCardProps) => {
+    // Time tick for live updates (every 5 seconds)
+    const timeTick = useTimeTick(5000);
+
+    // Calculate relative position size based on CURRENT VALUE (0-100%)
+    // This shows how much they currently hold, shrinking when they sell
+    const currentHolding = Math.max(0, position.currentValueSol);
+    const positionSizePercent =
+      maxPositionSize > 0 ? (currentHolding / maxPositionSize) * 100 : 0;
+    // Time since last trade (updates with timeTick)
+    const timeSince = useMemo(() => {
+      const diff = Date.now() - position.lastTradeTimestamp;
+      const seconds = Math.floor(diff / 1000);
+      if (seconds < 60) return `${seconds}s ago`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes}m ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours}h ago`;
+      return `${Math.floor(hours / 24)}d ago`;
+    }, [position.lastTradeTimestamp, timeTick]);
+
+    // P/L percentage
+    const pnlPercent =
+      position.entryAmountSol > 0
+        ? ((position.currentValueSol - position.entryAmountSol) /
+            position.entryAmountSol) *
+          100
+        : 0;
+    const isProfit = position.currentValueSol >= position.entryAmountSol;
+
+    // Check if KOL has exited (< 5% of original position remaining)
+    const holdingPercent =
+      position.entryAmountSol > 0
+        ? (position.currentValueSol / position.entryAmountSol) * 100
+        : 0;
+    const hasExited = holdingPercent < 5;
+
+    // Twitter profile URL for tooltip
+    const twitterUrl = position.kolTwitter
+      ? position.kolTwitter.startsWith("http")
+        ? position.kolTwitter
+        : `https://x.com/${position.kolTwitter}`
+      : null;
+
+    const avatarContent = (
+      <div className="size-8 shrink-0 overflow-hidden rounded-full ring-2 ring-white/10">
+        {position.kolAvatar ? (
+          <img
+            src={position.kolAvatar}
+            alt={position.kolName}
+            className="size-full object-cover"
+          />
+        ) : (
+          <div className="bg-bg-tertiary flex size-full items-center justify-center text-sm">
+            {position.kolEmoji || position.kolName.charAt(0)}
+          </div>
+        )}
+      </div>
+    );
+
+    return (
+      <div
+        className={cn(
+          "bg-bg-secondary relative overflow-hidden rounded-lg p-2",
+          hasExited && "opacity-50"
+        )}
+      >
+        {/* Position size background bar - subtle neutral shade */}
+        <div
+          className="absolute inset-y-0 left-0 bg-white/[0.08] transition-all duration-300"
+          style={{ width: `${positionSizePercent}%` }}
+        />
+
+        {/* Content (relative to appear above background bar) */}
+        <div className="relative flex items-center gap-2">
+          {/* Avatar with X profile tooltip */}
+          {twitterUrl ? (
+            <XProfileTooltip profileUrl={twitterUrl}>
+              <div className="cursor-pointer">{avatarContent}</div>
+            </XProfileTooltip>
+          ) : (
+            avatarContent
+          )}
+
+          {/* KOL Info */}
+          <div className="min-w-0 flex-1">
+            {/* Name row with social link */}
+            <div className="flex items-center gap-1.5">
+              {twitterUrl ? (
+                <XProfileTooltip profileUrl={twitterUrl}>
+                  <span
+                    className={cn(
+                      "cursor-pointer truncate text-xs font-medium hover:underline",
+                      hasExited ? "text-text-tertiary" : "text-text-primary"
+                    )}
+                  >
+                    {position.kolEmoji} {position.kolName}
+                  </span>
+                </XProfileTooltip>
+              ) : (
+                <span
+                  className={cn(
+                    "truncate text-xs font-medium",
+                    hasExited ? "text-text-tertiary" : "text-text-primary"
+                  )}
+                >
+                  {position.kolEmoji} {position.kolName}
+                </span>
+              )}
+              {twitterUrl && (
+                <a
+                  href={twitterUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  className="text-text-tertiary transition-colors hover:text-[#1DA1F2]"
+                >
+                  <XIcon className="size-3" />
+                </a>
+              )}
+              {hasExited && (
+                <span className="text-text-tertiary rounded bg-white/5 px-1 py-0.5 text-[9px] uppercase">
+                  Exited
+                </span>
+              )}
+            </div>
+
+            {/* Stats row */}
+            <div className="text-text-tertiary flex items-center gap-2 text-[10px]">
+              <span>Last trade: {timeSince}</span>
+            </div>
+          </div>
+
+          {/* Trade stats on right */}
+          <div className="shrink-0 text-right text-[10px]">
+            {/* Bought */}
+            <div>
+              <span className="text-text-tertiary">Bought </span>
+              <span className="text-text-success">
+                {position.entryAmountSol.toFixed(2)} Sol
+              </span>
+              <span className="text-text-tertiary ml-1">
+                @ {formatMc(position.entryMc)}
+              </span>
+            </div>
+
+            {/* Current value */}
+            <div>
+              <span className="text-text-tertiary">Now </span>
+              <span
+                className={isProfit ? "text-text-success" : "text-text-error"}
+              >
+                {position.currentValueSol.toFixed(2)} Sol
+              </span>
+              <span
+                className={cn(
+                  "ml-1",
+                  isProfit ? "text-text-success" : "text-text-error"
+                )}
+              >
+                ({isProfit ? "+" : ""}
+                {pnlPercent.toFixed(0)}%)
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+);
+KolPositionCard.displayName = "KolPositionCard";
+
+// =============================================================================
+// Activity Sparkline (shows buy/sell activity over last hour as dots)
+// =============================================================================
+
+type ActivitySparklineProps = {
+  activityHistory: ActivityEvent[];
+};
+
+const ActivitySparkline = memo(
+  ({ activityHistory }: ActivitySparklineProps) => {
+    const now = Date.now();
+    const oneHourAgo = now - 60 * 60 * 1000;
+
+    // Get recent events (last hour), limit to last 20 for display
+    const recentEvents = useMemo(() => {
+      return activityHistory.filter(e => e.timestamp > oneHourAgo).slice(-20);
+    }, [activityHistory, oneHourAgo]);
+
+    if (recentEvents.length === 0) return null;
+
+    // Count buys and sells
+    const buys = recentEvents.filter(e => e.type === "buy").length;
+    const sells = recentEvents.filter(e => e.type === "sell").length;
+
+    return (
+      <div className="flex items-center gap-1">
+        {buys > 0 && (
+          <div className="flex items-center gap-0.5">
+            <div className="bg-text-success size-1.5 rounded-full" />
+            <span className="text-text-success text-[9px]">{buys}</span>
+          </div>
+        )}
+        {sells > 0 && (
+          <div className="flex items-center gap-0.5">
+            <div className="bg-text-error size-1.5 rounded-full" />
+            <span className="text-text-error text-[9px]">{sells}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+ActivitySparkline.displayName = "ActivitySparkline";
+
+// =============================================================================
+// Inline Chart Component (with error boundary)
+// =============================================================================
+
+type InlineChartProps = {
+  mint: string;
+  symbol: string;
+  name: string;
+};
+
+class ChartErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; fallback: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
+const InlineChart = memo(({ mint, symbol, name }: InlineChartProps) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(400);
+  const [hasError, setHasError] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const mountTimeRef = useRef(Date.now());
+
+  // Reset and delay render when mint changes (handles list reordering)
+  useEffect(() => {
+    setIsReady(false);
+    setHasError(false);
+    mountTimeRef.current = Date.now();
+    const timer = setTimeout(() => setIsReady(true), 200);
+    return () => clearTimeout(timer);
+  }, [mint, refreshKey]);
+
+
+  // Global error handler for TradingView async errors
+  useEffect(() => {
+    const handleError = (event: ErrorEvent) => {
+      if (
+        event.message?.includes("tradingViewApi") ||
+        event.message?.includes("TradingView")
+      ) {
+        event.preventDefault();
+        setHasError(true);
+      }
+    };
+    window.addEventListener("error", handleError);
+    return () => window.removeEventListener("error", handleError);
+  }, []);
+
+  // Auto-refresh when tab becomes visible (handles backgrounded tabs)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Only refresh if chart has been mounted for more than 30 seconds
+        const timeSinceMount = Date.now() - mountTimeRef.current;
+        if (timeSinceMount > 30000) {
+          setRefreshKey(k => k + 1);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // Measure container width - re-run when mint changes (handles list reordering)
+  useEffect(() => {
+    if (containerRef.current) {
+      const observer = new ResizeObserver(entries => {
+        for (const entry of entries) {
+          const width = entry.contentRect.width;
+          if (width > 0) {
+            setContainerWidth(width);
+          }
+        }
+      });
+      observer.observe(containerRef.current);
+      // Get initial width
+      const initialWidth = containerRef.current.offsetWidth;
+      if (initialWidth > 0) {
+        setContainerWidth(initialWidth);
+      }
+      return () => observer.disconnect();
+    }
+  }, [mint, refreshKey]);
+  
+  const handleRefresh = useCallback(() => {
+    setRefreshKey(k => k + 1);
+  }, []);
+
+  // Don't render if mint is invalid
+  if (!mint || mint === "undefined") {
+    return (
+      <div ref={containerRef} className="flex h-[280px] w-full items-center justify-center bg-bg-secondary text-text-tertiary text-xs">
+        <LoadingSpinner className="size-5" />
+      </div>
+    );
+  }
+
+  // Show error with refresh option
+  if (hasError) {
+    return (
+      <div ref={containerRef} className="flex h-[280px] w-full flex-col items-center justify-center bg-bg-secondary text-text-tertiary text-xs gap-2">
+        <span>Chart unavailable</span>
+        <button
+          onClick={handleRefresh}
+          className="text-blue hover:text-blue/80 underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!isReady) {
+    return (
+      <div
+        ref={containerRef}
+        className="bg-bg-secondary flex h-[280px] w-full items-center justify-center"
+      >
+        <LoadingSpinner className="text-text-tertiary size-5" />
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="relative w-full [&>div]:border-0 [&>div]:rounded-none [&>div]:shadow-none">
+      {/* Refresh button in corner */}
+      <button
+        onClick={handleRefresh}
+        className="absolute top-1 right-1 z-10 p-1 rounded bg-bg-secondary/80 hover:bg-bg-secondary text-text-tertiary hover:text-text-primary transition-colors"
+        title="Refresh chart"
+      >
+        <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M21 12a9 9 0 11-3-6.7M21 4v4h-4" />
+        </svg>
+      </button>
+      <ChartErrorBoundary
+        fallback={
+          <div className="flex h-[280px] w-full flex-col items-center justify-center bg-bg-secondary text-text-tertiary text-xs gap-2">
+            <span>Chart unavailable</span>
+            <button
+              onClick={handleRefresh}
+              className="text-blue hover:text-blue/80 underline"
+            >
+              Retry
+            </button>
+          </div>
+        }
+      >
+        <ChartPreviewTooltipContent
+          key={refreshKey}
+          mint={mint}
+          location="watchlist"
+          tokenStats={{ symbol, name, mint }}
+          width={containerWidth}
+          height={280}
+          timeframes={["1s", "1m", "5m"] as const}
+          defaultResolution="1s"
+        />
+      </ChartErrorBoundary>
+    </div>
+  );
+});
+InlineChart.displayName = "InlineChart";
+
+// =============================================================================
+// Token Card (with expandable KOL list)
+// =============================================================================
+
+type TokenCardProps = TokenRowProps & {
+  isPinnedGlobal: boolean;
+  onTogglePin: (mint: string) => void;
+  isSelected: boolean;
+  onSelect: (mint: string | null, tokenData?: TokenIntel) => void;
+  lockedState: boolean | null; // null = not locked, true = locked expanded, false = locked collapsed
+  onToggleLock: (mint: string, currentExpandedState: boolean) => void;
+};
+
+const TokenCard = memo(({ token, isPinnedGlobal, onTogglePin, isSelected, onSelect, lockedState, onToggleLock }: TokenCardProps) => {
+  const navigate = useNavigate();
+  const [isHovered, setIsHovered] = useState(false);
+  const [justUnpinned, setJustUnpinned] = useState(false);
+  const [isLockHovered, setIsLockHovered] = useState(false);
+  const [justLocked, setJustLocked] = useState(false);
+  const [chartKey, setChartKey] = useState(0);
+  const [isChartVisible, setIsChartVisible] = useState(false);
+  const prevMintRef = useRef(token.mint);
+
+  // Auto-refresh chart if mint changes (handles list reordering edge cases)
+  useEffect(() => {
+    if (prevMintRef.current !== token.mint && isChartVisible) {
+      setChartKey(k => k + 1);
+    }
+    prevMintRef.current = token.mint;
+  }, [token.mint, isChartVisible]);
+
+  // Locked state freezes the card's expanded/collapsed state
+  // Pinned cards behave like normal cards for expansion (just stay at top)
+  const isLocked = lockedState !== null;
+
+  // Time tick for live updates (every 5 seconds)
+  const timeTick = useTimeTick(5000);
+
+  // Expansion is controlled by:
+  // - Locked state: stays expanded/collapsed based on when lock was activated
+  // - Hover: expands on hover (unless just deselected)
+  // Note: Blue (selected) state only affects border color, not expansion
+  const isExpanded = isLocked
+    ? lockedState
+    : (isHovered && !justUnpinned);
+
+  // Check if this is a new token (added within last 2 seconds)
+  const isNewEntry = Date.now() - token.addedAt < 2000;
+
+  // Badge logic (priority: HOT > TRENDING > RISING > NEW) - badges should be RARE
+  const recentActivity = token.recentBuys + token.recentSells;
+  const timeSinceFirstEntry = Date.now() - token.firstEntryTimestamp;
+
+  // Format time since first entry for display
+  const timeSinceFirst = useMemo(() => {
+    const seconds = Math.floor(timeSinceFirstEntry / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+  }, [timeSinceFirstEntry]);
+  
+  // Count KOLs still holding >50% of their original position (strong conviction)
+  const kolsHoldingStrong = token.kolPositions.filter(pos => {
+    const holdingPercent = pos.entryAmountSol > 0 
+      ? (pos.currentValueSol / pos.entryAmountSol) * 100 
+      : 0;
+    return holdingPercent > 50;
+  }).length;
+  
+  // HOT: 7+ KOLs holding >50% - strong conviction, very rare
+  const isHot = kolsHoldingStrong >= 7;
+  
+  // TRENDING: Heavy crowd AND heavy activity AND people staying (not everyone exited)
+  const isTrending = !isHot && token.totalKolCount >= 5 && recentActivity >= 5 && kolsHoldingStrong >= 3;
+  
+  // RISING: Good P/L with meaningful activity AND KOLs still holding (not abandoned)
+  const isRising = !isHot && !isTrending && token.pnlPercent >= 10 && recentActivity >= 3 && token.totalKolCount >= 3 && kolsHoldingStrong >= 2;
+  
+  // NEW: Very fresh (under 3 min) AND already has multiple KOLs interested
+  const isNew = !isHot && !isTrending && !isRising && timeSinceFirstEntry < 3 * 60 * 1000 && token.totalKolCount >= 2;
+
+  // Determine which badge to show (only one)
+  const badge = useMemo(() => {
+    if (isHot) return { label: "HOT", color: "warning" as const };
+    if (isTrending) return { label: "TRENDING", color: "yellow" as const };
+    if (isRising) return { label: "RISING", color: "success" as const };
+    if (isNew) return { label: "NEW", color: "blue" as const };
+    return null;
+  }, [isHot, isTrending, isRising, isNew]);
+
+  // Last KOL trade time (updates with timeTick)
+  const lastKolTrade = useMemo(() => {
+    const lastTrade = Math.max(
+      ...token.kolPositions.map(p => p.lastTradeTimestamp)
+    );
+    const diff = Date.now() - lastTrade;
+    const seconds = Math.floor(diff / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }, [token.kolPositions, timeTick]);
+
+  // P/L color
+  const pnlColor =
+    token.pnlPercent >= 0 ? "text-text-success" : "text-text-error";
+  const pnlSign = token.pnlPercent >= 0 ? "+" : "";
+
+    const handleClick = () => {
+      if (isSelected) {
+        // Deselecting - toggle off (parent handles Vantage event)
+        setJustUnpinned(true);
+        onSelect(token.mint, token);
+      } else {
+        // Selecting - toggle on (parent handles Vantage event)
+        // Reset justUnpinned so card expands while hovered
+        setJustUnpinned(false);
+        onSelect(token.mint, token);
+      }
+    };
+
+    const handleMouseLeave = () => {
+      setIsHovered(false);
+      setJustUnpinned(false); // Reset so next hover will expand
+    };
+
+    // Glow states:
+    // - Selected (blue state): blue glow - highest priority
+    // - Hover on locked/pinned card (not selected): blue glow
+    // - Pinned (not selected, not hovered): green glow
+    // - Locked (not pinned, not selected, not hovered): white glow
+    // - Hover (not locked, not pinned, not selected): dim blue glow
+    const showSelectedGlow = isSelected;
+    const showHoverOnLockedOrPinned =
+      isHovered && !isSelected && (isLocked || isPinnedGlobal);
+    const showPinnedGlow = isPinnedGlobal && !isSelected && !isHovered;
+    const showLockedGlow =
+      isLocked && !isPinnedGlobal && !isSelected && !isHovered;
+    const showHoverGlow =
+      isHovered && !isSelected && !justUnpinned && !isPinnedGlobal && !isLocked;
+
+    const handlePinClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onTogglePin(token.mint);
+    };
+
+    const handleLockClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      // If currently unlocked, we're about to lock - set justLocked to keep filled
+      if (!isLocked) {
+        setJustLocked(true);
+      }
+      onToggleLock(token.mint, isExpanded);
+    };
+
+    const handleNavigateToToken = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      navigate({ to: "/trading/$mint", params: { mint: token.mint } });
+    };
+
+    return (
+      <div
+        className={cn(
+          "bg-bg-tertiary mb-2 cursor-pointer overflow-hidden rounded-lg transition-all duration-200",
+          showHoverGlow &&
+            "ring-blue/20 shadow-[0_0_12px_-4px_rgba(83,177,253,0.2)] ring-1",
+          showSelectedGlow &&
+            "ring-blue/50 shadow-[0_0_14px_-4px_rgba(83,177,253,0.4)] ring-1",
+          showHoverOnLockedOrPinned &&
+            "ring-blue/30 shadow-[0_0_12px_-4px_rgba(83,177,253,0.3)] ring-1",
+          showPinnedGlow &&
+            "shadow-[0_0_16px_-4px_rgba(180,229,89,0.5)] ring-1 ring-[#b4e559]/60",
+          showLockedGlow && "ring-text-secondary/50 ring-1",
+          isNewEntry && "animate-slide-in-left"
+        )}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={handleMouseLeave}
+        onClick={handleClick}
+      >
+        {/* Main card content */}
+        <div className="p-3">
+          <div className="flex gap-3">
+            {/* Token image with progress ring and launchpad badge */}
+            <div onClick={e => e.stopPropagation()}>
+              <ChartPreviewTooltip
+                mint={token.mint}
+                location="watchlist"
+                tokenSymbol={token.symbol}
+                tokenName={token.name}
+                side="right"
+                align="start"
+                width={320}
+                height={280}
+                timeframes={["1s", "1m", "5m"] as const}
+                defaultResolution="1s"
+              >
+                <div className="cursor-pointer">
+                  <TokenImageWithProgress
+                    mint={token.mint}
+                    symbol={token.symbol}
+                  />
+                </div>
+              </ChartPreviewTooltip>
+            </div>
+
+            {/* Token info */}
+            <div className="min-w-0 flex-1">
+              {/* Row 1: Ticker, Name, Badge, Pin */}
+              <div className="flex items-center gap-2">
+                <ChartPreviewTooltip
+                  mint={token.mint}
+                  location="watchlist"
+                  tokenSymbol={token.symbol}
+                  tokenName={token.name}
+                  side="right"
+                  align="start"
+                  width={320}
+                  height={280}
+                  timeframes={["1s", "1m", "5m"] as const}
+                  defaultResolution="1s"
+                >
+                  <span
+                    className="text-text-primary cursor-pointer text-base font-bold hover:underline"
+                    onClick={handleNavigateToToken}
+                  >
+                    {token.symbol}
+                  </span>
+                </ChartPreviewTooltip>
+                <span
+                  className="text-text-secondary cursor-pointer truncate text-sm hover:underline"
+                  onClick={handleNavigateToToken}
+                >
+                  {token.name}
+                </span>
+                {badge && (
+                  <Badge
+                    color={badge.color}
+                    size="xs"
+                    className="h-4 px-1 py-0 text-[9px]"
+                  >
+                    {badge.label}
+                  </Badge>
+                )}
+                {(isPinnedGlobal || isHovered) && (
+                  <Tooltip content={isPinnedGlobal ? "Unpin" : "Pin to top"}>
+                    <button
+                      onClick={handlePinClick}
+                      className={cn(
+                        "group rounded p-0.5 transition-colors",
+                        isPinnedGlobal
+                          ? "text-[#b4e559]"
+                          : "text-text-secondary hover:text-[#b4e559]"
+                      )}
+                    >
+                      <Pin
+                        className={cn(
+                          "size-3",
+                          isPinnedGlobal
+                            ? "fill-current"
+                            : "group-hover:fill-current"
+                        )}
+                      />
+                    </button>
+                  </Tooltip>
+                )}
+                {(isLocked || isHovered) && (
+                  <Tooltip content={isLocked ? "Unlock" : "Lock state"}>
+                    <button
+                      onClick={handleLockClick}
+                      onMouseEnter={() => setIsLockHovered(true)}
+                      onMouseLeave={() => {
+                        setIsLockHovered(false);
+                        setJustLocked(false);
+                      }}
+                      className={cn(
+                        "rounded p-0.5 transition-colors",
+                        isLocked
+                          ? "text-text-primary"
+                          : "text-text-secondary hover:text-text-primary"
+                      )}
+                    >
+                      <Lock
+                        className={cn(
+                          "size-3",
+                          (isLocked
+                            ? justLocked || !isLockHovered
+                            : isLockHovered) && "fill-current"
+                        )}
+                      />
+                    </button>
+                  </Tooltip>
+                )}
+                {(isChartVisible || isHovered) && (
+                  <Tooltip
+                    content={isChartVisible ? "Hide chart" : "Show chart"}
+                  >
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        if (!isChartVisible) {
+                          setChartKey(k => k + 1); // Force fresh chart instance
+                        }
+                        setIsChartVisible(!isChartVisible);
+                      }}
+                      className={cn(
+                        "rounded p-0.5 transition-colors",
+                        isChartVisible
+                          ? "text-blue"
+                          : "text-text-secondary hover:text-blue"
+                      )}
+                    >
+                      <LineChart className="size-3" />
+                    </button>
+                  </Tooltip>
+                )}
+              </div>
+
+              {/* Row 2: Social icons + Activity counts */}
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-text-tertiary text-xs">
+                  {timeSinceFirst}
+                </span>
+                <TokenSocialIcons mint={token.mint} />
+                {token.activityHistory.length > 0 && (
+                  <Tooltip content="Trades in last hour">
+                    <div>
+                      <ActivitySparkline
+                        activityHistory={token.activityHistory}
+                      />
+                    </div>
+                  </Tooltip>
+                )}
+              </div>
+
+              {/* Row 3: Last KOL trade and P/L */}
+              <div className="text-text-tertiary mt-1 flex items-center gap-2 text-xs">
+                <span className="flex items-center gap-1">
+                  Last KOL trade:{" "}
+                  <span className="text-text-secondary">{lastKolTrade}</span>
+                  <span
+                    className={
+                      token.pnlPercent >= 0
+                        ? "text-text-success"
+                        : "text-text-error"
+                    }
+                  >
+                    {token.pnlPercent >= 0 ? "▲" : "▼"}
+                  </span>
+                </span>
+                <span className={cn("font-medium", pnlColor)}>
+                  {pnlSign}
+                  {token.pnlPercent.toFixed(1)}%
+                </span>
+              </div>
+            </div>
+
+            {/* Right side: MC and KOL avatars */}
+            <div className="flex flex-col items-end gap-2">
+              {/* MC with live updates */}
+              <LiveMcDisplay
+                mint={token.mint}
+                fallbackMc={token.currentMc}
+              />
+
+              {/* KOL avatars and buy button */}
+              <div className="flex items-center gap-2">
+                <KolAvatarStack positions={token.kolPositions} />
+                <div onClick={e => e.stopPropagation()}>
+                  <QuickBuyButton
+                    mint={token.mint}
+                    symbol={token.symbol}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Inline Chart */}
+        {isChartVisible && (
+          <div
+            className="border-border-primary border-t"
+            onClick={e => e.stopPropagation()}
+          >
+            <InlineChart
+              key={`${token.mint}-${chartKey}`}
+              mint={token.mint}
+              symbol={token.symbol}
+              name={token.name}
+            />
+          </div>
+        )}
+
+        {/* Expanded KOL positions */}
+        {isExpanded && (
+          <div className="border-border-primary border-t p-2">
+            <div className="grid gap-2">
+              {(() => {
+                const sortedPositions = [...token.kolPositions].sort(
+                  (a, b) => b.lastTradeTimestamp - a.lastTradeTimestamp
+                );
+                // Use current value for max (shows current holdings, not total bought)
+                const maxPosition = Math.max(
+                  ...sortedPositions.map(p => Math.max(0, p.currentValueSol))
+                );
+                return sortedPositions.map(position => (
+                  <KolPositionCard
+                    key={position.kolAddress}
+                    position={position}
+                    maxPositionSize={maxPosition}
+                  />
+                ));
+              })()}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+TokenCard.displayName = "TokenCard";
+
+// =============================================================================
+// Heat Map Cell
+// =============================================================================
+
+type HeatMapCellProps = {
+  token: TokenIntel;
+  onNavigate: (mint: string) => void;
+  size: "lg" | "md" | "sm";
+  isNew?: boolean;
+};
+
+const HeatMapCell = memo(
+  ({
+    token,
+    onNavigate,
+    size,
+    isFlashing,
+    flashType,
+    isNew,
+  }: HeatMapCellProps & {
+    isFlashing?: boolean;
+    flashType?: "buy" | "sell";
+  }) => {
+    // Gradient based on P/L
+    const getGradient = () => {
+      if (token.pnlPercent >= 30)
+        return "from-emerald-500/50 via-emerald-600/40 to-emerald-700/30";
+      if (token.pnlPercent >= 10)
+        return "from-emerald-500/35 via-emerald-600/25 to-emerald-700/15";
+      if (token.pnlPercent >= 0)
+        return "from-emerald-500/20 via-emerald-600/15 to-emerald-700/10";
+      if (token.pnlPercent >= -10)
+        return "from-red-500/20 via-red-600/15 to-red-700/10";
+      if (token.pnlPercent >= -30)
+        return "from-red-500/35 via-red-600/25 to-red-700/15";
+      return "from-red-500/50 via-red-600/40 to-red-700/30";
+    };
+
+    const sizeClasses = {
+      lg: "col-span-2 row-span-2",
+      md: "col-span-1 row-span-1",
+      sm: "col-span-1 row-span-1",
+    };
+
+    return (
+      <ChartPreviewTooltip
+        mint={token.mint}
+        location="watchlist"
+        tokenSymbol={token.symbol}
+        tokenName={token.name}
+        side="right"
+        align="center"
+        width={320}
+        height={280}
+        timeframes={["1s", "1m", "5m"] as const}
+        defaultResolution="1s"
+      >
+        <div
+          className={cn(
+            "relative aspect-square cursor-pointer overflow-hidden transition-all duration-300",
+            "bg-gradient-to-br",
+            getGradient(),
+            sizeClasses[size],
+            "hover:brightness-125",
+            isFlashing &&
+              flashType === "buy" &&
+              "shadow-[0_0_20px_rgba(52,211,153,0.5)] ring-2 ring-emerald-400",
+            isFlashing &&
+              flashType === "sell" &&
+              "shadow-[0_0_20px_rgba(248,113,113,0.5)] ring-2 ring-red-400",
+            isNew && "animate-scale-in"
+          )}
+          onClick={() => onNavigate(token.mint)}
+        >
+          {/* Content */}
+          <div
+            className={cn(
+              "flex h-full flex-col items-center justify-center",
+              size === "lg" ? "gap-1 p-2" : "gap-0.5 p-1"
+            )}
+          >
+            {/* Token image */}
+            <div
+              className={cn(
+                "shrink-0 overflow-hidden rounded-full bg-black/20",
+                size === "lg" ? "size-12" : "size-6"
+              )}
+            >
+              {token.image ? (
+                <img
+                  src={token.image}
+                  alt={token.symbol}
+                  className="size-full object-cover"
+                />
+              ) : (
+                <div className="flex size-full items-center justify-center text-xs font-bold text-white/50">
+                  {token.symbol.charAt(0)}
+                </div>
+              )}
+            </div>
+
+            {/* Symbol */}
+            <span
+              className={cn(
+                "text-center leading-none font-bold text-white",
+                size === "lg" ? "text-base" : "text-[10px]"
+              )}
+            >
+              {token.symbol}
+            </span>
+
+            {/* P/L + MC */}
+            <div className="flex items-center gap-1">
+              <span
+                className={cn(
+                  "font-semibold text-white/90",
+                  size === "lg" ? "text-sm" : "text-[9px]"
+                )}
+              >
+                {token.pnlPercent >= 0 ? "+" : ""}
+                {token.pnlPercent.toFixed(0)}%
+              </span>
+              <span
+                className={cn(
+                  "text-white/60",
+                  size === "lg" ? "text-xs" : "text-[8px]"
+                )}
+              >
+                <LiveMcInline
+                  mint={token.mint}
+                  fallbackMc={token.currentMc}
+                />
+              </span>
+            </div>
+
+            {/* KOL count - only for large */}
+            {size === "lg" && (
+              <span className="text-xs text-white/50">
+                {token.totalKolCount} KOL{token.totalKolCount !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+        </div>
+      </ChartPreviewTooltip>
+    );
+  }
+);
+HeatMapCell.displayName = "HeatMapCell";
+
+// =============================================================================
+// Heat Map View
+// =============================================================================
+
+type HeatMapViewProps = {
+  tokens: TokenIntel[];
+  onNavigate: (mint: string) => void;
+};
+
+const HeatMapView = memo(({ tokens, onNavigate }: HeatMapViewProps) => {
+  // Track previous activity for flash detection
+  const prevActivityRef = useRef<
+    Map<string, { timestamp: number; isBuying: boolean }>
+  >(new Map());
+  const [flashingTokens, setFlashingTokens] = useState<
+    Map<string, "buy" | "sell">
+  >(new Map());
+
+  // Track known tokens for entry animation
+  const knownTokensRef = useRef<Set<string>>(new Set());
+  const [newTokens, setNewTokens] = useState<Set<string>>(new Set());
+
+  // Detect new activity and trigger flashes
+  useEffect(() => {
+    const newFlashes = new Map<string, "buy" | "sell">();
+    const freshTokens = new Set<string>();
+
+    tokens.forEach(token => {
+      // Check if this is a new token
+      if (!knownTokensRef.current.has(token.mint)) {
+        freshTokens.add(token.mint);
+        knownTokensRef.current.add(token.mint);
+      }
+
+      const prev = prevActivityRef.current.get(token.mint);
+      const latestPosition = token.kolPositions.reduce(
+        (latest, pos) =>
+          pos.lastTradeTimestamp > (latest?.lastTradeTimestamp || 0)
+            ? pos
+            : latest,
+        token.kolPositions[0]
+      );
+
+      if (prev && latestPosition) {
+        // Check if there's new activity
+        if (latestPosition.lastTradeTimestamp > prev.timestamp) {
+          newFlashes.set(token.mint, latestPosition.isBuying ? "buy" : "sell");
+        }
+      }
+
+      // Update ref
+      if (latestPosition) {
+        prevActivityRef.current.set(token.mint, {
+          timestamp: latestPosition.lastTradeTimestamp,
+          isBuying: latestPosition.isBuying,
+        });
+      }
+    });
+
+    // Trigger entry animation for new tokens
+    if (freshTokens.size > 0) {
+      setNewTokens(prev => new Set([...prev, ...freshTokens]));
+      setTimeout(() => {
+        setNewTokens(prev => {
+          const next = new Set(prev);
+          freshTokens.forEach(mint => next.delete(mint));
+          return next;
+        });
+      }, 500);
+    }
+
+    if (newFlashes.size > 0) {
+      setFlashingTokens(prev => new Map([...prev, ...newFlashes]));
+
+      // Clear flashes after animation
+      setTimeout(() => {
+        setFlashingTokens(prev => {
+          const next = new Map(prev);
+          newFlashes.forEach((_, mint) => next.delete(mint));
+          return next;
+        });
+      }, 1000);
+    }
+  }, [tokens]);
+
+  if (tokens.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center text-center">
+        <div className="text-text-tertiary mb-2 text-4xl">📡</div>
+        <div className="text-text-secondary text-sm">
+          No KOL activity detected
+        </div>
+      </div>
+    );
+  }
+
+  // Sort by importance for top 2 (KOL count * SOL invested)
+  const byImportance = [...tokens].sort((a, b) => {
+    const aScore = a.totalKolCount * Math.log(a.totalInvestedSol + 1);
+    const bScore = b.totalKolCount * Math.log(b.totalInvestedSol + 1);
+    return bScore - aScore;
+  });
+
+  // Top 2 stay fixed by importance
+  const topTokens = byImportance.slice(0, 2);
+  const topMints = new Set(topTokens.map(t => t.mint));
+
+  // Rest sorted by most recent activity
+  const restTokens = tokens
+    .filter(t => !topMints.has(t.mint))
+    .sort((a, b) => b.lastActivityTimestamp - a.lastActivityTimestamp);
+
+  // Combine: top 2 (large) + rest (small, sorted by activity)
+  const sortedTokens = [...topTokens, ...restTokens];
+
+  // Assign sizes
+  const getSize = (index: number): "lg" | "md" | "sm" => {
+    if (index < 2) return "lg";
+    return "sm";
+  };
+
+  return (
+    <div className="h-full overflow-y-auto p-1">
+      {/* Responsive grid: 3 cols on small, 4 default, 5 on wide */}
+      <div className="grid grid-cols-3 gap-0.5 sm:grid-cols-4 lg:grid-cols-5">
+        {sortedTokens.map((token, index) => (
+          <HeatMapCell
+            key={token.mint}
+            token={token}
+            onNavigate={onNavigate}
+            size={getSize(index)}
+            isFlashing={flashingTokens.has(token.mint)}
+            flashType={flashingTokens.get(token.mint)}
+            isNew={newTokens.has(token.mint)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+});
+HeatMapView.displayName = "HeatMapView";
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+function formatMc(mc: number): string {
+  if (mc >= 1_000_000) return `${(mc / 1_000_000).toFixed(1)}M`;
+  if (mc >= 1_000) return `${(mc / 1_000).toFixed(0)}K`;
+  return mc.toFixed(0);
+}
+
+// Live MC display - reads from market data store for real-time updates
+const LiveMcDisplay = memo(
+  ({ mint, fallbackMc }: { mint: string; fallbackMc: number }) => {
+    // Read live MC from market data store
+    const liveMc = useGlobalStore(
+      useShallow(state => {
+        const map = state.websocketMessages.market_data.data[mint];
+        const data = map?.get("latest");
+        return data?.market_cap_usd
+          ? parseFloat(String(data.market_cap_usd))
+          : null;
+      })
+    );
+
+    const mc = liveMc ?? fallbackMc;
+
+    return (
+      <div className="text-right">
+        <div className="text-text-secondary text-[10px]">MC</div>
+        <div className="text-text-primary font-bold">${formatMc(mc)}</div>
+      </div>
+    );
+  }
+);
+LiveMcDisplay.displayName = "LiveMcDisplay";
+
+// Inline live MC for heat map cells
+const LiveMcInline = memo(
+  ({ mint, fallbackMc }: { mint: string; fallbackMc: number }) => {
+    const liveMc = useGlobalStore(
+      useShallow(state => {
+        const map = state.websocketMessages.market_data.data[mint];
+        const data = map?.get("latest");
+        return data?.market_cap_usd
+          ? parseFloat(String(data.market_cap_usd))
+          : null;
+      })
+    );
+
+    const mc = liveMc ?? fallbackMc;
+    return <>${formatMc(mc)}</>;
+  }
+);
+LiveMcInline.displayName = "LiveMcInline";
+
+// =============================================================================
+// Main Widget
+// =============================================================================
+
+export const IntelGridWidget = memo(({ widgetId }: { widgetId?: string }) => {
+  // Ensure wallet tracker subscription is active
+  useWalletTrackerSubscription();
+  const navigate = useNavigate();
+
+  const key = widgetId || "default";
+  const [activeTab, setActiveTab] = useState<MarketCapTab>(
+    tabStore.get(key) || "under100k"
+  );
+  const [sortOrder, setSortOrder] = useState<SortOrder>(
+    sortStore.get(key) || "activity"
+  );
+  const [minKols, setMinKols] = useState<number>(minKolsStore.get(key) || 1);
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>(
+    timeWindowStore.get(key) || "1h"
+  );
+  const [pinnedTokens, setPinnedTokens] = useState<Set<string>>(
+    () => pinnedTokensStore.get(key) || new Set()
+  );
+  const [lockedTokens, setLockedTokens] = useState<Map<string, boolean>>(
+    () => lockedTokensStore.get(key) || new Map()
+  );
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    viewModeStore.get(key) || "list"
+  );
+
+  // Track which cards are currently selected (blue state) - multiple can be selected
+  // Local state for UI, syncs with shared store
+  const [selectedMints, setSelectedMints] = useState<Set<string>>(new Set());
+
+  // Pause on hover state - freezes the ORDER but keeps data live
+  const [isPaused, setIsPaused] = useState(false);
+  const [pausedOrder, setPausedOrder] = useState<string[]>([]); // Just mint addresses in frozen order
+
+  // Handlers for pause on hover
+  const handleMouseEnter = useCallback(() => {
+    if (isPaused) return;
+    setIsPaused(true);
+    pauseStore.set(key, true);
+    window.dispatchEvent(new CustomEvent("intel-grid-pause-change", {
+      detail: { widgetId: key, isPaused: true }
+    }));
+  }, [isPaused, key]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (!isPaused) return;
+    setIsPaused(false);
+    setPausedOrder([]);
+    pauseStore.set(key, false);
+    window.dispatchEvent(new CustomEvent("intel-grid-pause-change", {
+      detail: { widgetId: key, isPaused: false }
+    }));
+  }, [isPaused, key]);
+
+  // Toggle selection - add or remove from selected set
+  const handleSelectCard = useCallback((mint: string | null, tokenData?: TokenIntel) => {
+    if (mint === null) return;
+
+    setSelectedMints(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(mint)) {
+        // Deselecting - remove from set
+        newSet.delete(mint);
+        // Dispatch remove event to Vantage
+        window.dispatchEvent(new CustomEvent("intel-grid-token-select", {
+          detail: { action: "remove", mint }
+        }));
+      } else {
+        // Selecting - add to set
+        newSet.add(mint);
+        // Dispatch add event to Vantage with token data
+        if (tokenData) {
+          // Filter out exited KOLs (< 5% of original position)
+          const activeHolders = tokenData.kolPositions.filter(kp => {
+            if (kp.entryAmountSol <= 0) return false;
+            const holdingPercent = (kp.currentValueSol / kp.entryAmountSol) * 100;
+            return holdingPercent >= 5;
+          });
+
+          window.dispatchEvent(new CustomEvent("intel-grid-token-select", {
+            detail: {
+              action: "add",
+              mint,
+              token: {
+                mint: tokenData.mint,
+                symbol: tokenData.symbol,
+                image: tokenData.image,
+                holders: activeHolders.map(kp => ({
+                  kolAddress: kp.kolAddress,
+                  kolName: kp.kolName,
+                  amount: kp.currentValueSol,
+                })),
+              }
+            }
+          }));
+        }
+      }
+
+      // If all deselected, clear Vantage completely
+      if (newSet.size === 0) {
+        window.dispatchEvent(new CustomEvent("intel-grid-token-select", {
+          detail: { action: "clear" }
+        }));
+      }
+
+      return newSet;
+    });
+  }, []);
+
+  // Listen for tab changes from header
+  useEffect(() => {
+    const handleTabChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setActiveTab(e.detail.tab);
+      }
+    };
+    window.addEventListener(
+      "intel-grid-tab-change",
+      handleTabChange as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "intel-grid-tab-change",
+        handleTabChange as EventListener
+      );
+  }, [key]);
+
+  // Listen for sort changes from header
+  useEffect(() => {
+    const handleSortChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setSortOrder(e.detail.sort);
+      }
+    };
+    window.addEventListener(
+      "intel-grid-sort-change",
+      handleSortChange as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "intel-grid-sort-change",
+        handleSortChange as EventListener
+      );
+  }, [key]);
+
+  // Listen for minKols changes from header
+  useEffect(() => {
+    const handleMinKolsChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setMinKols(e.detail.minKols);
+      }
+    };
+    window.addEventListener(
+      "intel-grid-minkols-change",
+      handleMinKolsChange as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "intel-grid-minkols-change",
+        handleMinKolsChange as EventListener
+      );
+  }, [key]);
+
+  // Listen for timeWindow changes from header
+  useEffect(() => {
+    const handleTimeWindowChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setTimeWindow(e.detail.timeWindow);
+      }
+    };
+    window.addEventListener(
+      "intel-grid-timewindow-change",
+      handleTimeWindowChange as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "intel-grid-timewindow-change",
+        handleTimeWindowChange as EventListener
+      );
+  }, [key]);
+
+  // Toggle pin handler
+  const handleTogglePin = useCallback(
+    (mint: string) => {
+      setPinnedTokens(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(mint)) {
+          newSet.delete(mint);
+        } else {
+          newSet.add(mint);
+        }
+        pinnedTokensStore.set(key, newSet);
+        return newSet;
+      });
+    },
+    [key]
+  );
+
+  // Toggle lock handler - locks current expanded state
+  const handleToggleLock = useCallback(
+    (mint: string, currentExpandedState: boolean) => {
+      setLockedTokens(prev => {
+        const newMap = new Map(prev);
+        if (newMap.has(mint)) {
+          newMap.delete(mint);
+        } else {
+          newMap.set(mint, currentExpandedState);
+        }
+        lockedTokensStore.set(key, newMap);
+        return newMap;
+      });
+    },
+    [key]
+  );
+
+  // Listen for viewMode changes from header
+  useEffect(() => {
+    const handleViewModeChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setViewMode(e.detail.viewMode);
+      }
+    };
+    window.addEventListener(
+      "intel-grid-viewmode-change",
+      handleViewModeChange as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "intel-grid-viewmode-change",
+        handleViewModeChange as EventListener
+      );
+  }, [key]);
+
+  // Listen for Vantage token select events (when KOL is clicked)
+  useEffect(() => {
+    const handleVantageTokenSelect = (e: CustomEvent<{ mint: string }>) => {
+      const { mint } = e.detail;
+      // Add to selected mints if not already selected
+      setSelectedMints(prev => {
+        if (prev.has(mint)) return prev;
+        const newSet = new Set(prev);
+        newSet.add(mint);
+        return newSet;
+      });
+    };
+    window.addEventListener(
+      "vantage-token-select",
+      handleVantageTokenSelect as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "vantage-token-select",
+        handleVantageTokenSelect as EventListener
+      );
+  }, []);
+
+  // Listen for Vantage token deselect events (when bag is clicked to remove)
+  useEffect(() => {
+    const handleVantageTokenDeselect = (e: CustomEvent<{ mint: string }>) => {
+      const { mint } = e.detail;
+      // Remove from selected mints
+      setSelectedMints(prev => {
+        if (!prev.has(mint)) return prev;
+        const newSet = new Set(prev);
+        newSet.delete(mint);
+        return newSet;
+      });
+    };
+    window.addEventListener(
+      "vantage-token-deselect",
+      handleVantageTokenDeselect as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "vantage-token-deselect",
+        handleVantageTokenDeselect as EventListener
+      );
+  }, []);
+
+  // Listen for Anomalyzer token select events
+  useEffect(() => {
+    const handleAnomalyzerSelect = (e: CustomEvent<{ action: string; mint?: string; walletAddress?: string }>) => {
+      const { action, mint } = e.detail;
+      if (action === "add" && mint) {
+        // Add to selected mints
+        setSelectedMints(prev => {
+          if (prev.has(mint)) return prev;
+          const newSet = new Set(prev);
+          newSet.add(mint);
+          return newSet;
+        });
+      } else if (action === "clear") {
+        // Clear all selections
+        setSelectedMints(new Set());
+      }
+    };
+    window.addEventListener(
+      "anomalyzer-token-select",
+      handleAnomalyzerSelect as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "anomalyzer-token-select",
+        handleAnomalyzerSelect as EventListener
+      );
+  }, []);
+
+  // Navigation handler for heat map
+  const handleNavigateToToken = useCallback(
+    (mint: string) => {
+      navigate({ to: "/trading/$mint", params: { mint } });
+    },
+    [navigate]
+  );
+
+  // Data sources
+  const { kols } = useKols({ socketManager: socketIOManagerPvp });
+  const { data: trackedWalletsData } = useGetTrackedWallets();
+  const {
+    tokenIndex,
+    positionsByToken,
+    selectedTokenMints: sharedSelectedTokens,
+    toggleToken: toggleSharedToken,
+    isHydrated: trenchHydrated,
+  } = useTrenchBenchStore(
+    useShallow(state => ({
+      tokenIndex: state.tokenIndex,
+      positionsByToken: state.positionsByToken,
+      selectedTokenMints: state.selectedTokenMints,
+      toggleToken: state.toggleToken,
+      isHydrated: state.isHydrated,
+    }))
+  );
+  const trenchLastSync = useTrenchBenchStore(state => state.lastSync);
+
+  // Create KOL lookup map
+  const kolsMap = useMemo(() => {
+    const map = new Map<
+      string,
+      Kol & { address: string; twitter: string | null }
+    >();
+    kols?.forEach(kol => {
+      if (kol.address) {
+        map.set(
+          kol.address.toLowerCase(),
+          kol as Kol & { address: string; twitter: string | null }
+        );
+      }
+    });
+    return map;
+  }, [kols]);
+
+  // Create lookup map for tracked wallets
+  const trackedWalletsMap = useMemo(() => {
+    const map = new Map<
+      string,
+      { name: string; emoji: string | null; walletAddress: string }
+    >();
+    trackedWalletsData?.trackedWallets?.forEach(w => {
+      map.set(w.walletAddress.toLowerCase(), {
+        name: w.nickname || `Wallet ${w.walletAddress.slice(0, 4)}...`,
+        emoji: w.emoji || null,
+        walletAddress: w.walletAddress,
+      });
+    });
+    return map;
+  }, [trackedWalletsData]);
+
+  // Get list of KOLs with Twitter handles for profile fetching
+  const kolsWithTwitter = useMemo(
+    () => (kols ?? []).filter(kol => kol.twitter),
+    [kols]
+  );
+
+  // Fetch Twitter profile images for all KOLs
+  const kolTwitterProfiles = useQueries({
+    queries: kolsWithTwitter.map(kol =>
+      xUserProfileQueryOptions(
+        (kol as Kol & { twitter: string | null }).twitter
+      )
+    ),
+  });
+
+  // Create stable avatar data string
+  const kolAvatarDataKey = useMemo(() => {
+    return kolsWithTwitter
+      .map((kol, index) => {
+        const result = kolTwitterProfiles[index];
+        return result?.data?.avatarUrl
+          ? `${kol.name}:${result.data.avatarUrl}`
+          : "";
+      })
+      .filter(Boolean)
+      .join("|");
+  }, [kolsWithTwitter, kolTwitterProfiles]);
+
+  // Map KOL name -> avatar URL
+  const kolAvatarsMap = useMemo(() => {
+    const map = new Map<string, string>();
+    kolsWithTwitter.forEach((kol, index) => {
+      const result = kolTwitterProfiles[index];
+      if (result?.data?.avatarUrl) {
+        map.set(kol.name, result.data.avatarUrl);
+      }
+    });
+    return map;
+  }, [kolAvatarDataKey]);
+
+  const resolvePositionMetadata = useCallback(
+    (address: string) => {
+      const kol = kolsMap.get(address);
+      if (kol) {
+        const avatar = kol.name ? kolAvatarsMap.get(kol.name) ?? null : null;
+        return {
+          name: kol.name || `Wallet ${address.slice(0, 4)}...`,
+          emoji: kol.emoji || "",
+          avatar,
+          twitter: kol.twitter || null,
+        };
+      }
+
+      const tracked = trackedWalletsMap.get(address);
+      if (tracked) {
+        return {
+          name: tracked.name,
+          emoji: tracked.emoji || "",
+          avatar: null,
+          twitter: null,
+        };
+      }
+
+      return {
+        name: `Wallet ${address.slice(0, 4)}...`,
+        emoji: "",
+        avatar: null,
+        twitter: null,
+      };
+    },
+    [kolsMap, trackedWalletsMap, kolAvatarsMap]
+  );
+
+  const tokensFromStore = useMemo(() => {
+    const tokens: TokenIntel[] = [];
+    tokenIndex.forEach(token => {
+      const mintLower = token.mint.toLowerCase();
+      const rawPositions = positionsByToken.get(mintLower) ?? [];
+      const enrichedPositions = rawPositions
+        .filter(pos => !EXCLUDED_WALLETS.has(pos.kolAddress))
+        .map(pos => {
+          const meta = resolvePositionMetadata(pos.kolAddress);
+          return {
+            kolAddress: pos.kolAddress,
+            kolName: meta.name,
+            kolEmoji: meta.emoji,
+            kolAvatar: meta.avatar,
+            kolTwitter: meta.twitter,
+            entryAmountSol: pos.entryAmountSol,
+            entryMc: pos.entryMcUsd,
+            currentValueSol: pos.currentHoldingSol,
+            entryTimestamp: pos.entryTimestamp,
+            isBuying: pos.isBuying,
+            lastTradeTimestamp: pos.lastTradeTimestamp,
+          };
+        });
+
+      const totalEntryMc = enrichedPositions.reduce(
+        (sum, p) => sum + p.entryMc,
+        0
+      );
+      const avgEntryMc =
+        enrichedPositions.length > 0 ? totalEntryMc / enrichedPositions.length : 0;
+      let pnlPercent = 0;
+      if (avgEntryMc > 0) {
+        pnlPercent = ((token.currentMcUsd - avgEntryMc) / avgEntryMc) * 100;
+      }
+
+      tokens.push({
+        mint: token.mint,
+        symbol: token.symbol,
+        name: token.name,
+        image: token.image,
+        currentMc: token.currentMcUsd,
+        kolPositions: enrichedPositions,
+        totalKolCount: enrichedPositions.length,
+        totalInvestedSol: enrichedPositions.reduce(
+          (sum, p) => sum + p.entryAmountSol,
+          0
+        ),
+        avgEntryMc,
+        firstEntryTimestamp: token.firstEntryTimestamp,
+        lastActivityTimestamp: token.lastActivityTimestamp,
+        recentBuys: token.recentBuys,
+        recentSells: token.recentSells,
+        pnlPercent,
+        launchpad: token.launchpad,
+        addedAt: token.addedAt,
+        activityHistory: [...(token.activityHistory ?? [])],
+      });
+    });
+    return tokens;
+  }, [
+    positionsByToken,
+    resolvePositionMetadata,
+    tokenIndex,
+    trenchLastSync,
+  ]);
+
+  const isLoading = !trenchHydrated && tokensFromStore.length === 0;
+
+  const tokenLookup = useMemo(() => {
+    const map = new Map<string, string>();
+    tokensFromStore.forEach(token => {
+      map.set(token.mint.toLowerCase(), token.mint);
+    });
+    return map;
+  }, [tokensFromStore]);
+
+  useEffect(() => {
+    const syncedSelections = new Set<string>();
+    sharedSelectedTokens.forEach(mintLower => {
+      const originalCase = tokenLookup.get(mintLower) ?? mintLower;
+      syncedSelections.add(originalCase);
+    });
+    setSelectedMints(syncedSelections);
+  }, [sharedSelectedTokens, tokenLookup]);
+
+  // Use centralized backfill - shared across all TrenchBench widgets
+  // This triggers the backfill if not already running; data arrives in shared store
+  useTrenchBenchBackfill();
+
+  // Data fetching is now fully centralized in useTrenchBenchBackfill hook
+  // The hook handles both remote and local-api fetches and populates the shared store
+  
+  // Toggle selection handler - uses shared store for cross-widget sync
+  const handleSelectCardShared = useCallback(
+    (mint: string | null, _tokenData?: TokenIntel) => {
+      if (mint === null) return;
+
+      const mintLower = mint.toLowerCase();
+      
+      // Toggle in shared store - this will sync to local state via effect
+      toggleSharedToken(mintLower);
+      
+      // Also update local state immediately for responsive UI
+      setSelectedMints(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(mint)) {
+          newSet.delete(mint);
+        }
+        else {
+          newSet.add(mint);
+        }
+        return newSet;
+      });
+    },
+    [toggleSharedToken]
+  );
+
+  // Legacy local processing removed in favor of shared store subscription
+
+  // Get filtered and sorted tokens
+  const filteredTokens = useMemo(() => {
+    const now = Date.now();
+    const timeWindowMs = {
+      "15m": 15 * 60 * 1000,
+      "1h": 60 * 60 * 1000,
+      "4h": 4 * 60 * 60 * 1000,
+      all: Infinity,
+    }[timeWindow];
+    const cutoffTime = now - timeWindowMs;
+
+    const tokens = tokensFromStore.map(token => ({
+      ...token,
+      kolPositions: token.kolPositions.map(pos => ({ ...pos })),
+      activityHistory: [...token.activityHistory],
+      totalKolCount: token.kolPositions.length,
+      totalInvestedSol: token.kolPositions.reduce(
+        (sum, pos) => sum + pos.entryAmountSol,
+        0
+      ),
+    }));
+
+    const filtered = tokens.filter(token => {
+      const isPinned = pinnedTokens.has(token.mint);
+      if (!isPinned && timeWindow !== "all") {
+        if (token.lastActivityTimestamp < cutoffTime) {
+          return false;
+        }
+      }
+
+      if (token.totalKolCount < minKols) {
+        return false;
+      }
+
+      const hasActivePosition = token.kolPositions.some(pos => {
+        if (pos.entryAmountSol <= 0) return false;
+        const holdingPercent = (pos.currentValueSol / pos.entryAmountSol) * 100;
+        return holdingPercent >= 5;
+      });
+      if (!hasActivePosition && !isPinned) {
+        return false;
+      }
+
+      switch (activeTab) {
+        case "under100k":
+          return token.currentMc < 100_000;
+        case "100k-1m":
+          return token.currentMc >= 100_000 && token.currentMc < 1_000_000;
+        case "over1m":
+          return token.currentMc >= 1_000_000;
+        default:
+          return true;
+      }
+    });
+
+    filtered.sort((a, b) => {
+      const aPinned = pinnedTokens.has(a.mint);
+      const bPinned = pinnedTokens.has(b.mint);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+
+      if (sortOrder === "activity") {
+        if (b.lastActivityTimestamp !== a.lastActivityTimestamp) {
+          return b.lastActivityTimestamp - a.lastActivityTimestamp;
+        }
+        return b.totalKolCount - a.totalKolCount;
+      }
+
+      if (b.totalKolCount !== a.totalKolCount) {
+        return b.totalKolCount - a.totalKolCount;
+      }
+      return b.totalInvestedSol - a.totalInvestedSol;
+    });
+
+    return filtered;
+  }, [activeTab, minKols, pinnedTokens, sortOrder, timeWindow, tokensFromStore]);
+
+  // Capture the ORDER when hovering starts (not the data)
+  useEffect(() => {
+    if (isPaused && pausedOrder.length === 0) {
+      // Capture just the mint order when pausing
+      setPausedOrder(filteredTokens.map(t => t.mint));
+    }
+  }, [isPaused, filteredTokens, pausedOrder.length]);
+
+  // Determine which tokens to display
+  // When paused: use frozen ORDER but map to LIVE data from filteredTokens
+  // This keeps MC, KOL positions etc. updating while preventing reordering
+  const displayTokens = useMemo(() => {
+    if (isPaused && pausedOrder.length > 0) {
+      // Create a map of live token data for quick lookup
+      const tokenMap = new Map(filteredTokens.map(t => [t.mint, t]));
+      // Return tokens in frozen order, but with live data
+      // Filter out any tokens that no longer exist in filteredTokens
+      return pausedOrder
+        .map(mint => tokenMap.get(mint))
+        .filter((t): t is TokenIntel => t !== undefined);
+    }
+    return filteredTokens;
+  }, [isPaused, pausedOrder, filteredTokens]);
+
+  // Hydrate and subscribe to market data for visible tokens (limited to top 50 for broader coverage)
+  const mintsToHydrate = useMemo(
+    () => displayTokens.slice(0, 50).map(t => t.mint),
+    [displayTokens]
+  );
+  useHydrateMarketData(mintsToHydrate);
+  useSubscribeMints(mintsToHydrate); // Subscribe to live price updates
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Token list or Heat Map */}
+      <div 
+        className="hide-scrollbar flex-1 overflow-y-auto"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        {isLoading ? (
+          <div className="flex h-full flex-col items-center justify-center">
+            <LoadingSpinner size="md" />
+            <div className="text-text-tertiary mt-3 text-xs">
+              Loading KOL activity...
+            </div>
+          </div>
+        ) : displayTokens.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-center">
+            <div className="text-text-tertiary mb-2 text-4xl">📡</div>
+            <div className="text-text-secondary text-sm">
+              No KOL activity detected
+            </div>
+            <div className="text-text-tertiary mt-1 text-xs">
+              {activeTab === "under100k" && "in tokens under $100K MC"}
+              {activeTab === "100k-1m" && "in tokens $100K - $1M MC"}
+              {activeTab === "over1m" && "in tokens over $1M MC"}
+            </div>
+          </div>
+        ) : viewMode === "heatmap" ? (
+          <HeatMapView tokens={displayTokens} onNavigate={handleNavigateToToken} />
+        ) : (
+          <div className="p-2">
+            {displayTokens.map(token => (
+              <TokenCard
+                key={token.mint}
+                token={token}
+                isPinnedGlobal={pinnedTokens.has(token.mint)}
+                onTogglePin={handleTogglePin}
+                isSelected={selectedMints.has(token.mint)}
+                onSelect={handleSelectCardShared}
+                lockedState={
+                  lockedTokens.has(token.mint)
+                    ? lockedTokens.get(token.mint)!
+                    : null
+                }
+                onToggleLock={handleToggleLock}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Footer stats */}
+      <div className="border-border-primary bg-bg-secondary flex items-center justify-between border-t px-3 py-1.5 text-xs">
+        <span className="text-text-tertiary">
+          {displayTokens.length} tokens
+        </span>
+        <span className="text-text-tertiary">
+          {displayTokens.reduce((sum, t) => sum + t.totalKolCount, 0)} KOL
+          positions
+        </span>
+      </div>
+    </div>
+  );
+});
+IntelGridWidget.displayName = "IntelGridWidget";

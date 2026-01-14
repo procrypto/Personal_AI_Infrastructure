@@ -1,0 +1,220 @@
+---
+phase: 22-watchlist-style-screener-volume-trends
+plan: 03
+type: execute
+---
+
+<objective>
+Add "Vz" (Volume Delta) indicator to screener - shows buy vs sell pressure at a glance.
+
+Purpose: Simple CVD-inspired metric showing whether buyers or sellers are in control.
+Output: useVolumeVz hook and Vz column in screener tables.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/phases/22-watchlist-style-screener-volume-trends/22-02-SUMMARY.md
+
+# Volume data available in TradingStats (from NATS market_data)
+# trading_stats_5m, trading_stats_1h, trading_stats_6h each have:
+# - buy_volume_sol, buy_volume_usd
+# - sell_volume_sol, sell_volume_usd
+
+@apps/web-terminal/src/hooks/useAutopilot/types.ts
+
+# ScreenerTable to integrate with
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx
+
+# Research findings:
+# - CVD (Cumulative Volume Delta) is industry standard for buy/sell pressure
+# - Formula: Buy Volume - Sell Volume
+# - Positive = buyers dominating, Negative = sellers dominating
+# - Keep it simple for compact screener cell
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create useVolumeVz hook</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useVolumeVz.ts</files>
+  <action>
+    Create a simple hook that calculates "Vz" (Volume Delta) for tokens:
+
+    ```typescript
+    export type VzScore = {
+      // Delta: buy volume - sell volume (positive = buyers winning)
+      delta: number;
+
+      // Direction for display
+      direction: 'strong_buy' | 'buy' | 'neutral' | 'sell' | 'strong_sell';
+
+      // RVOL: relative volume vs baseline (e.g., 2.3 = 2.3x normal)
+      rvol: number;
+
+      // Is volume elevated? (rvol > 1.5)
+      isHot: boolean;
+    };
+    ```
+
+    Simple calculation using 1h stats:
+    ```typescript
+    // Delta = buy - sell (in SOL for consistency)
+    const buyVol = Number(stats_1h?.buy_volume_sol ?? 0);
+    const sellVol = Number(stats_1h?.sell_volume_sol ?? 0);
+    const delta = buyVol - sellVol;
+    const totalVol = buyVol + sellVol;
+
+    // Direction based on delta as % of total
+    const deltaPercent = totalVol > 0 ? delta / totalVol : 0;
+    const direction =
+      deltaPercent > 0.3 ? 'strong_buy' :
+      deltaPercent > 0.1 ? 'buy' :
+      deltaPercent < -0.3 ? 'strong_sell' :
+      deltaPercent < -0.1 ? 'sell' :
+      'neutral';
+
+    // RVOL: 1h volume vs 6h average per hour
+    const vol6hPerHour = Number(stats_6h?.buy_volume_sol ?? 0) +
+                         Number(stats_6h?.sell_volume_sol ?? 0)) / 6;
+    const rvol = vol6hPerHour > 0 ? totalVol / vol6hPerHour : 1;
+
+    // Hot if volume is 1.5x+ normal
+    const isHot = rvol >= 1.5;
+    ```
+
+    Hook signature:
+    ```typescript
+    export function useVolumeVz(
+      tokens: AutopilotTokenWithPrices[]
+    ): Map<string, VzScore>
+    ```
+
+    Get volume data from token's market_data (already enriched via useAutopilotTokensWithPrices).
+
+  </action>
+  <verify>TypeScript compiles, hook returns Map with Vz scores</verify>
+  <done>useVolumeVz hook created with delta and rvol calculations</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create VzCell component</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/vz-cell.tsx</files>
+  <action>
+    Create compact cell showing Vz indicator:
+
+    ```tsx
+    type VzCellProps = {
+      vz: VzScore | undefined;
+    };
+
+    export function VzCell({ vz }: VzCellProps) {
+      if (!vz) return <span className="text-text-tertiary">-</span>;
+
+      // Arrow based on direction
+      const arrow = {
+        strong_buy: '▲▲',
+        buy: '▲',
+        neutral: '–',
+        sell: '▼',
+        strong_sell: '▼▼',
+      }[vz.direction];
+
+      // Color based on direction
+      const color = {
+        strong_buy: 'text-text-success',
+        buy: 'text-text-success',
+        neutral: 'text-text-tertiary',
+        sell: 'text-text-error',
+        strong_sell: 'text-text-error',
+      }[vz.direction];
+
+      return (
+        <div className={cn("flex items-center gap-0.5 text-xs font-medium", color)}>
+          <span>{arrow}</span>
+          {vz.isHot && (
+            <span className="text-[9px] opacity-70">{vz.rvol.toFixed(1)}x</span>
+          )}
+        </div>
+      );
+    }
+    ```
+
+    Display logic:
+    - Always show arrow (▲▲, ▲, –, ▼, ▼▼)
+    - Show RVOL multiplier only when hot (1.5x+)
+    - Green for buy pressure, red for sell pressure, gray for neutral
+
+  </action>
+  <verify>Component renders arrows and colors correctly</verify>
+  <done>VzCell displays buy/sell pressure with optional RVOL</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Add Vz column to ScreenerTable</name>
+  <files>
+    apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx
+    apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+  </files>
+  <action>
+    1. Add vzMap prop to ScreenerTable:
+       ```typescript
+       type ScreenerTableProps = {
+         tokens: AutopilotTokenWithPrices[];
+         columnType: 'watchlist' | 'trending' | 'whales';
+         signalStrengthMap: Map<string, SignalStrength>;
+         vzMap: Map<string, VzScore>;
+         title: string;
+         icon: React.ElementType;
+       };
+       ```
+
+    2. Add Vz column after 1h % column:
+       ```typescript
+       columnHelper.display({
+         id: 'vz',
+         header: 'Vz',
+         cell: ({ row }) => <VzCell vz={vzMap.get(row.original.mint)} />,
+         size: 45,
+         enableSorting: false,
+       }),
+       ```
+
+    3. In autopilot-widget.tsx:
+       - Import and call useVolumeVz with all tokens
+       - Pass vzMap to each ScreenerTable
+
+    4. Export useVolumeVz from hooks/useAutopilot/index.ts
+
+  </action>
+  <verify>`bun dev` - Vz column appears with arrows</verify>
+  <done>Vz column integrated showing buy/sell pressure</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run typecheck` passes
+- [ ] `bun dev` shows Vz column in all three screener tables
+- [ ] Arrows display correctly (▲▲/▲/–/▼/▼▼)
+- [ ] Colors match direction (green=buy, red=sell, gray=neutral)
+- [ ] RVOL shows when volume is hot (1.5x+)
+</verification>
+
+<success_criteria>
+
+- useVolumeVz hook calculates delta and rvol from market data
+- VzCell displays compact buy/sell pressure indicator
+- Vz column added to all three screener tables
+- Phase 22 complete
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/22-watchlist-style-screener-volume-trends/22-03-SUMMARY.md`
+</output>

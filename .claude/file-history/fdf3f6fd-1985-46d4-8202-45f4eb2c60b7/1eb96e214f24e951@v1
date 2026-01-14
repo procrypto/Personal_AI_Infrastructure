@@ -1,0 +1,164 @@
+---
+phase: 01-backend-protocol
+plan: 01
+type: execute
+---
+
+<objective>
+Complete Phase 1 Backend Protocol by adding LOIS compatibility documentation to all WebSocket message types.
+
+Purpose: Enable future LOIS/live trading integration by documenting how autopilot data types map to LOIS conventions.
+Output: Documented types in both backend and frontend with LOIS integration markers.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+**Backend types (token-analysis-autopilot repo):**
+@/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts
+
+**Frontend types (this repo):**
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+
+**Implementation already complete:**
+- Backend WebSocket server with all event types and broadcast methods
+- CLI run loop integration broadcasting positions, signals, stats, config, strategies
+- Command handlers for all frontend controls
+- Frontend types mirroring backend types
+- Frontend WebSocket client and connection handler
+
+**LOIS Gate requirement from roadmap:**
+> Phase 1: Add LOIS compatibility comments to data types and TriggerEvent
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add LOIS compatibility comments to backend types</name>
+  <files>/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts</files>
+  <action>
+Add LOIS compatibility documentation comments to all data interfaces in websocket-server.ts:
+
+1. Add file-level comment block explaining LOIS integration path
+2. For each interface (PositionData, SignalData, MarketStatusData, StatsData, ConfigData, StrategiesData, TokenListData), add:
+   - `// LOIS COMPATIBLE: [yes/partial/no]` marker
+   - Brief note on how this maps to LOIS TriggerEvent or differs from LOIS conventions
+   - For partial compatibility, note what would need to change for live trading
+
+Key mappings to document:
+- SignalData.signalType → LOIS TriggerEvent types
+- PositionData → LOIS position format (paper vs live differences)
+- ConfigData.mode → paper/live mode implications
+
+Do NOT modify any actual type definitions or logic - documentation only.
+  </action>
+  <verify>grep -c "LOIS" /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts shows at least 6 occurrences</verify>
+  <done>All backend data interfaces have LOIS compatibility comments</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add LOIS compatibility comments to frontend types</name>
+  <files>apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts</files>
+  <action>
+Mirror the LOIS documentation from backend to frontend types.ts:
+
+1. Add file-level comment explaining LOIS integration readiness
+2. For each interface, add matching LOIS compatibility markers
+3. Note that frontend types intentionally mirror backend for consistency
+
+Key documentation points:
+- AutopilotSignal.signalType maps to LOIS TriggerEvent
+- AutopilotPositionEntry is paper-trading only (no execution IDs)
+- AutopilotConfig.mode controls paper vs live (live not yet implemented)
+
+Do NOT modify any actual type definitions - documentation only.
+  </action>
+  <verify>grep -c "LOIS" apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts shows at least 4 occurrences</verify>
+  <done>All frontend data interfaces have LOIS compatibility comments</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Verify type alignment and create integration notes</name>
+  <files>apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts</files>
+  <action>
+Add a documentation block at the end of frontend types.ts that:
+
+1. Confirms type alignment between frontend and backend
+2. Lists any intentional differences and why
+3. Documents the data flow: backend → WebSocket → frontend store → NATS (for P&L)
+4. Notes what would change for LOIS live trading integration
+
+Format as a JSDoc block that serves as integration reference for PUM3 team.
+
+Example structure:
+```
+/**
+ * LOIS INTEGRATION NOTES
+ * ======================
+ *
+ * Type Alignment:
+ * - Frontend types mirror backend websocket-server.ts exactly
+ * - [any differences noted here]
+ *
+ * Data Flow:
+ * - [document the flow]
+ *
+ * Live Trading Changes:
+ * - [what would need to change]
+ */
+```
+  </action>
+  <verify>grep "LOIS INTEGRATION NOTES" apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts returns match</verify>
+  <done>Integration notes block added documenting type alignment and LOIS path</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] Backend websocket-server.ts has LOIS markers on all data interfaces
+- [ ] Frontend types.ts has matching LOIS markers
+- [ ] Integration notes block exists in frontend types
+- [ ] No type definitions were modified (documentation only)
+- [ ] TypeScript compilation still passes: `cd apps/web-terminal && npx tsc --noEmit`
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- LOIS compatibility documented for future live trading integration
+- Phase 1 LOIS Gate satisfied per roadmap
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-backend-protocol/01-01-SUMMARY.md` with:
+
+# Phase 1 Plan 1: LOIS Compatibility Documentation Summary
+
+**[Substantive one-liner about what was documented]**
+
+## Accomplishments
+- LOIS compatibility markers added to backend types
+- LOIS compatibility markers added to frontend types
+- Integration notes documented for PUM3 team
+
+## Files Modified
+- `token-analysis-autopilot/src/websocket-server.ts` - LOIS documentation
+- `apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts` - LOIS documentation
+
+## Decisions Made
+[Any decisions about LOIS mapping conventions]
+
+## Issues Encountered
+[Any type misalignments discovered, or "None"]
+
+## Next Step
+Phase 1 complete, ready for Phase 2: Frontend Connection
+</output>

@@ -1,0 +1,123 @@
+# web-terminal-frontend - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2025-01-10
+- **Last updated**: 2025-01-10
+- **Discovery depth**: Standard
+- **Branch**: main-ui (production)
+- **Version**: 1.1.2
+- **Documentation quality**: Good (has docs/ folder with API/WS reference)
+
+---
+
+## System Identity
+
+**What it is**: React 19 frontend for BONKbot Web Terminal trading platform.
+
+**What it does**:
+- Provides trading interface (swaps, limit orders, DCA)
+- Displays real-time market data via WebSocket
+- Manages multi-wallet portfolios
+- Token discovery and analysis (XRay, trending)
+- Alert system (Sentinel) and risk monitoring (Warzone)
+
+**Key insight**: This is the user-facing layer that consumes BOTH bonkbot (user ops) and web-terminal (market data).
+
+---
+
+## Architecture Highlights
+
+### Stack
+- React 19 + TypeScript + Vite
+- TanStack Router (file-based)
+- Zustand (24 slices) + React Query
+- Tailwind + Radix UI
+- NATS WebSocket for real-time
+
+### Monorepo
+```
+apps/web-terminal/    → Main app
+packages/ui/          → Shared components
+packages/pvp/         → PvP features
+packages/xray-bubbles → Visualization
+```
+
+### State Pattern
+- **Zustand**: UI state, WebSocket message batching, optimistic updates
+- **React Query**: Server state, API caching, mutations
+- **Separation**: Memory store (24 slices) vs Persistent store
+
+---
+
+## Key Capabilities
+
+### For Product/Growth
+| Feature | User Value |
+|---------|------------|
+| Trading Page | Core trading experience |
+| Portfolio | Track holdings, PnL |
+| Discovery | Find trending tokens |
+| XRay | Analyze tokens deeply |
+| AutoStrat | Set-and-forget DCA |
+| Wallet Tracking | Follow smart money |
+| Sentinel | Custom alerts |
+
+### Pages (23)
+Dashboard, Trading, Portfolio, Discovery, XRay, Warzone, Sentinel, Wallet, Settings, Security, Rewards, etc.
+
+---
+
+## Integration Map
+
+### APIs Consumed
+| API | Base | Purpose |
+|-----|------|---------|
+| bonkbot | `/v1` | Auth, swaps, orders, wallets |
+| web-terminal | `/data` | Market data, discovery, search |
+
+### WebSocket Topics
+- `market_data.{mint}` - Prices
+- `trades_2.{mint}.*` - Live trades
+- `pnl_v2.{user}.{wallet}` - Portfolio updates
+- `sol_price` - SOL/USD
+
+### External
+- DexScreener (fallback data)
+- BubbleMap (holder visualization)
+- Solana RPC (wallet signatures)
+
+---
+
+## Working Here
+
+### Quick Start
+```bash
+bun install
+bun run dev
+```
+
+### Common Locations
+| Task | Path |
+|------|------|
+| Add page | `src/pages/` + `src/routes/` |
+| Add API | `src/api/` |
+| Add WS topic | `src/websocket/` |
+| Add store | `src/store/memoryStore/` |
+
+### Conventions
+- File-based routing (TanStack)
+- Orval for API client generation
+- Lingui for i18n
+- Test IDs on all interactive elements
+
+---
+
+## Session Notes
+
+*Accumulated learnings:*
+
+- Uses git worktrees: main-ui (prod), develop-ui (dev), feat-* (features)
+- Has good internal docs in docs/ folder
+- Orval generates API client from OpenAPI spec
+- 24 Zustand slices - each feature gets its own
+- WebSocket batching prevents render thrashing

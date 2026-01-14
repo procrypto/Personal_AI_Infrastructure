@@ -1,0 +1,174 @@
+# Context for nanochat-data-pipeline
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Data pipeline for creating custom training data for NanoChat LLM fine-tuning. Extracts Q&A pairs from SQL databases, code repositories, Slack conversations, Notion documentation, and other sources using Claude API. Produces JSONL training files compatible with NanoChat's SFT training.
+
+**Critical constraint**: Training data quality directly impacts model behavior - validate all outputs before training.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Runtime | Python 3.10+ with uv | Package management |
+| AI | Claude API (anthropic) | Q&A generation |
+| Data Sources | ClickHouse, BigQuery, PostgreSQL | SQL extraction |
+| Storage | HuggingFace Hub, GCS | Dataset versioning |
+| Other | Slack SDK, GitPython | Source extraction |
+
+### Project Structure
+
+```
+extractors/           # Data source extractors
+  sql_extractor.py      # PostgreSQL, BigQuery, Clickhouse
+  code_extractor.py     # Python repos (AST parsing)
+  docs_extractor.py     # Markdown, text files
+
+samplers/             # Domain-specific samplers
+  clickhouse_sampler.py           # ClickHouse connection
+  bigquery_sampler.py             # BigQuery connection
+  query_log_extractor.py          # Real analyst queries
+  codebase_training_generator.py  # Multi-language code repos
+  slack_training_generator.py     # Slack conversations
+  notion_training_generator.py    # Notion docs
+
+generators/           # Synthetic data generation
+  qa_generator.py       # Domain Q&A using Claude
+
+scripts/              # CLI tools
+  extract_all.py        # Main extraction pipeline
+  validate_data.py      # Data quality checks
+  combine_training.py   # Combine & dedupe JSONL
+  upload_to_huggingface.py
+  load_training_data.py
+
+output/               # Generated JSONL (gitignored)
+```
+
+## Capabilities
+
+### Current Training Data (2,770 examples)
+
+| Source | Count | Notes |
+|--------|-------|-------|
+| SQL Q&A | 938 | query_log + batch2 + batch3 |
+| Code Q&A | 1,099 | Rust/TypeScript repos |
+| Docs Q&A | 102 | API docs, Dataform SQL |
+| Slack Q&A | 609 | Technical channels |
+| Other | 109 | Schema Q&A |
+
+### Output Format (NanoChat JSONL)
+
+```json
+{"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
+```
+
+### Data Storage
+
+- **HuggingFace**: `victoremnm/bonkbot-training-data` (private)
+- **GCS Backup**: `gs://nanochat-training-data/v1/`
+
+## Working in This Repo
+
+### Environment Setup
+
+```bash
+# Required
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional (for specific sources)
+export POSTGRES_URL=postgresql://...
+export CLICKHOUSE_HOST=localhost
+export BIGQUERY_PROJECT=my-project
+export SLACK_BOT_TOKEN=xoxb-...
+export NOTION_TOKEN=secret_...
+```
+
+### Common Tasks
+
+#### Extract from Code Repos
+
+```bash
+uv run python -m samplers.codebase_training_generator /path/to/repo rust
+```
+
+#### Extract from Slack
+
+```bash
+uv run python -m samplers.slack_training_generator --list
+uv run python -m samplers.slack_training_generator eng-help,data-questions
+```
+
+#### Validate Output
+
+```bash
+uv run python -m scripts.validate_data output/*.jsonl
+uv run python -m scripts.validate_data output/*.jsonl --fix  # Auto-fix issues
+```
+
+#### Combine All Data
+
+```bash
+uv run python -m scripts.combine_training
+```
+
+#### Upload to HuggingFace
+
+```bash
+uv run python -m scripts.upload_to_huggingface
+```
+
+### Finding Code
+
+| Task | Path |
+|------|------|
+| Add new extractor | `extractors/` |
+| Add new sampler | `samplers/` |
+| CLI commands | `scripts/` |
+| Generated data | `output/` |
+
+### Things to Avoid
+
+- Training on unvalidated data (always run validate_data.py)
+- Including PII (emails, phone numbers, API keys)
+- Hitting Claude API rate limits (add delays for large extractions)
+- Loading large repos without `--max-files` limit
+
+## Related Documentation
+
+- [CLAUDE.md](CLAUDE.md) - Comprehensive project guide
+- [README.md](README.md) - Quick start
+- [PROGRESS.md](PROGRESS.md) - Training progress tracking
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| BonkBot repos | Code for training data |
+| ClickHouse | Analyst query logs |
+| BigQuery | Schema information |
+| Slack | Team conversations |
+| Notion | Documentation |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| nanochat-deploy | Trained model |
+| HuggingFace | Dataset hosting |
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] Best channels for Slack extraction
+- [ ] Priority repos for code extraction
+- [ ] Quality thresholds for training data
+- [ ] Model evaluation criteria
+-->

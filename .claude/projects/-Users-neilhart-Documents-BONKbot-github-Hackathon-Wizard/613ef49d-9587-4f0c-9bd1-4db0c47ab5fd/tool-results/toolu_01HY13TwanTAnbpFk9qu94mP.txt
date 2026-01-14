@@ -1,0 +1,27 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   453→        // Try direct SOL data first, fallback to deriving from token prices
+   454→        const solData = marketDataCache.get(SOL_MINT);
+   455→        const marketFilterResult = marketFilter.check(solData, undefined, marketDataCache);
+   456→
+   457→        // Fetch 1m candles for open positions (needed for Williams TSL)
+   458→        // Only fetch for positions we have open - this enables trailing stop
+   459→        const candleDataMap = new Map<string, import('./api/types.js').OHLCV[]>();
+   460→        for (const trade of openTrades) {
+   461→          try {
+   462→            // Fetch last 50 1m candles (enough for 3/3 fractal detection)
+   463→            const candles = await localApi.getOHLCV(trade.mint, '1m', { countback: 50 });
+   464→            if (candles.length > 0) {
+   465→              candleDataMap.set(trade.mint, candles);
+   466→            }
+   467→          } catch {
+   468→            // OHLCV not available for this token - TSL won't work but TP/SL will
+   469→          }
+   470→        }
+   471→
+   472→        // Check magic exits (TP at resistance, SL at support break, TSL at fractal)
+   473→        // Magic exits still run even in CAUTION mode (structure-based exits are always valid)
+   474→        const magicExitResults = await magicExits.executeExits(marketDataCache, true, candleDataMap);
+   475→
+   476→        // Handle market dump - exit all positions
+   477→        let marketDumpExits: typeof magicExitResults = [];
+   478→        if (marketFilterResult.exitAll) {

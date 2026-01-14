@@ -1,0 +1,79 @@
+---
+phase: 08-vantage-settings
+plan: 01
+type: execute
+---
+
+<objective>
+Ensure Vantage widget default circles is 50 and persist user choice to localStorage.
+
+Purpose: Better default UX (50 circles is more performant) and user preferences survive page refresh.
+Output: Vantage maxBubbles defaults to 50 and persists to localStorage.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Change default maxBubbles to 50 and add localStorage persistence</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx</files>
+  <action>
+    1. Find the useState for maxBubbles (currently line ~1054): `const [maxBubbles, setMaxBubbles] = useState(500);`
+    2. Replace with localStorage-aware initialization:
+       ```typescript
+       const [maxBubbles, setMaxBubbles] = useState(() => {
+         const stored = localStorage.getItem('vantage-maxBubbles');
+         return stored ? parseInt(stored, 10) : 50;
+       });
+       ```
+    3. Add useEffect to persist changes to localStorage (after the existing useEffect that syncs maxBubblesRef):
+       ```typescript
+       // Persist maxBubbles to localStorage
+       useEffect(() => {
+         localStorage.setItem('vantage-maxBubbles', String(maxBubbles));
+       }, [maxBubbles]);
+       ```
+    Note: Place the persistence useEffect near the existing maxBubblesRef sync effect for code locality.
+  </action>
+  <verify>grep -n "vantage-maxBubbles\|useState.*50" apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx</verify>
+  <done>maxBubbles defaults to 50 (or localStorage value), changes persist to localStorage</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Verify TypeScript compiles</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/vantage-widget.tsx</files>
+  <action>Run TypeScript check to ensure no type errors introduced</action>
+  <verify>cd /Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-dash-pauls-preload-data && bunx tsc --noEmit 2>&1 | head -20</verify>
+  <done>No new TypeScript errors</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] Default maxBubbles is 50 (not 500)
+- [ ] localStorage 'vantage-maxBubbles' is read on component mount
+- [ ] localStorage 'vantage-maxBubbles' is written on slider change
+- [ ] TypeScript compiles without errors
+</verification>
+
+<success_criteria>
+
+- Vantage widget defaults to 50 circles
+- User's circle preference survives page refresh
+- No TypeScript errors
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/08-vantage-settings/08-01-SUMMARY.md`
+</output>

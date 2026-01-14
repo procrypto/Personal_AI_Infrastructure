@@ -1,0 +1,105 @@
+---
+phase: 22-watchlist-style-screener-volume-trends
+plan: 03
+subsystem: ui
+tags: [react, hooks, volume, cvd, trading-indicators]
+
+requires:
+  - phase: 22-02
+    provides: Screener table layout with signal indicators
+provides:
+  - useVolumeVz hook for buy/sell pressure calculation
+  - VzCell component for volume delta display
+  - Vz column in all screener tables
+affects: [screener, trading-signals]
+
+tech-stack:
+  added: []
+  patterns:
+    - CVD-inspired volume delta calculation (buy - sell)
+    - RVOL relative volume comparison (1h vs 6h average)
+
+key-files:
+  created:
+    - apps/web-terminal/src/hooks/useAutopilot/useVolumeVz.ts
+    - apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/vz-cell.tsx
+  modified:
+    - apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx
+    - apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+    - apps/web-terminal/src/hooks/useAutopilot/index.ts
+
+key-decisions:
+  - "Use 1h stats for delta calculation (balance between noise and responsiveness)"
+  - "RVOL threshold at 1.5x for 'hot' volume indicator"
+  - "Direction thresholds: >30% = strong, >10% = mild"
+
+patterns-established:
+  - "Volume Delta (Vz): buy_vol - sell_vol as % of total"
+  - "RVOL: 1h volume / (6h volume / 6)"
+
+issues-created: []
+
+duration: 4min
+completed: 2026-01-09
+---
+
+# Phase 22 Plan 03: Vz Volume Indicator Summary
+
+**CVD-inspired "Vz" indicator showing buy vs sell pressure with RVOL hot volume highlighting**
+
+## Performance
+
+- **Duration:** 4 min
+- **Started:** 2026-01-09T06:31:43Z
+- **Completed:** 2026-01-09T06:35:55Z
+- **Tasks:** 3
+- **Files modified:** 5
+
+## Accomplishments
+
+- Created useVolumeVz hook calculating delta and relative volume from trading_stats
+- Built VzCell component with arrow-based direction display (▲▲/▲/–/▼/▼▼)
+- Integrated Vz column into all three screener tables (Watchlist, Trending, Whales)
+- Phase 22 complete - watchlist-style screener with signal indicators and volume trends
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Create useVolumeVz hook** - `169606ae4` (feat)
+2. **Task 2: Create VzCell component** - `03d28a6b3` (feat)
+3. **Task 3: Add Vz column to ScreenerTable** - `fb33b4be0` (feat)
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/useVolumeVz.ts` - Hook calculating Vz scores from market data
+- `apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/vz-cell.tsx` - Compact cell with arrows and RVOL
+- `apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx` - Added vzMap prop and Vz column
+- `apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx` - Integrated useVolumeVz hook
+- `apps/web-terminal/src/hooks/useAutopilot/index.ts` - Exported useVolumeVz and VzScore
+
+## Decisions Made
+
+- **Delta calculation from 1h stats:** Balance between responsiveness (5m too noisy) and stability (6h too slow)
+- **Direction thresholds:** >30% delta = strong signal, >10% = mild, <10% = neutral
+- **RVOL hot threshold:** 1.5x normal volume highlights elevated activity
+- **Hook accesses discovery tokens directly:** Cleanest approach since AutopilotTokenWithPrices doesn't include raw trading stats
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Next Phase Readiness
+
+- Phase 22 complete with all 3 plans executed
+- Screener now has: signal confluence indicators (plan 02) + volume delta column (plan 03)
+- Ready for milestone review or next phase
+
+---
+
+_Phase: 22-watchlist-style-screener-volume-trends_
+_Completed: 2026-01-09_

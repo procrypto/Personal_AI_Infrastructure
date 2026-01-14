@@ -1,0 +1,84 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { useState, useEffect, useCallback, useRef } from "react";
+     3→import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+     4→import { Bot, AlertTriangle, TrendingUp, TrendingDown, Activity, Zap, Target, ShieldAlert, Clock } from "lucide-react";
+     5→import { cn } from "@/lib/utils";
+     6→
+     7→// Types matching the backend WebSocket events
+     8→interface PositionData {
+     9→  mint: string;
+    10→  symbol: string;
+    11→  action: "buy" | "sell";
+    12→  entryPriceSol: number;
+    13→  currentPriceSol: number;
+    14→  positionSizeSol: number;
+    15→  pnlPercent: number;
+    16→  pnlSol: number;
+    17→  entryTime: number;
+    18→}
+    19→
+    20→interface SignalData {
+    21→  timestamp: number;
+    22→  mint: string;
+    23→  symbol: string;
+    24→  signalType: "magic_buy" | "magic_exit" | "dump_exit" | "rule_signal";
+    25→  action: "buy" | "sell" | "close";
+    26→  reason: string;
+    27→  pnlPercent?: number;
+    28→  entryType?: string;
+    29→}
+    30→
+    31→interface MarketStatusData {
+    32→  state: "NORMAL" | "CAUTION" | "DUMP";
+    33→  solPriceChangePercent: number;
+    34→  blockEntries: boolean;
+    35→  exitAll: boolean;
+    36→}
+    37→
+    38→interface StatsData {
+    39→  totalTrades: number;
+    40→  openTrades: number;
+    41→  closedTrades: number;
+    42→  wins: number;
+    43→  losses: number;
+    44→  winRate: number;
+    45→  totalPnlSol: number;
+    46→  totalPnlUsd: number;
+    47→  avgPnlPercent: number;
+    48→}
+    49→
+    50→interface ScanTickData {
+    51→  timestamp: number;
+    52→  scanNumber: number;
+    53→  tokenCount: number;
+    54→  openPositions: number;
+    55→}
+    56→
+    57→type AutopilotEvent =
+    58→  | { type: "position_update"; positions: PositionData[] }
+    59→  | { type: "signal"; signal: SignalData }
+    60→  | { type: "market_status"; status: MarketStatusData }
+    61→  | { type: "stats_update"; stats: StatsData }
+    62→  | { type: "scan_tick"; tick: ScanTickData };
+    63→
+    64→// WebSocket hook for autopilot backend
+    65→function useAutopilotWebSocket(wsUrl: string = "ws://localhost:8765") {
+    66→  const [positions, setPositions] = useState<PositionData[]>([]);
+    67→  const [signals, setSignals] = useState<SignalData[]>([]);
+    68→  const [marketStatus, setMarketStatus] = useState<MarketStatusData>({
+    69→    state: "NORMAL",
+    70→    solPriceChangePercent: 0,
+    71→    blockEntries: false,
+    72→    exitAll: false,
+    73→  });
+    74→  const [stats, setStats] = useState<StatsData>({
+    75→    totalTrades: 0,
+    76→    openTrades: 0,
+    77→    closedTrades: 0,
+    78→    wins: 0,
+    79→    losses: 0,
+    80→    winRate: 0,
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

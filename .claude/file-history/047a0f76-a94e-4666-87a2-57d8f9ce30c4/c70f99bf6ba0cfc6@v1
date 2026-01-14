@@ -1,0 +1,430 @@
+/**
+ * Wallet Tracker Endpoints
+ *
+ * Fetches trades and summary stats for tracked wallets.
+ *
+ * ⚠️  This fetches PRODUCTION data. Strict limits are enforced.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, buildInList, isSolanaPubkey, clamp } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants — Strict Limits
+// =============================================================================
+
+const MAX_TRADERS = 50;
+const MAX_LIMIT = 100;
+const DEFAULT_LIMIT = 30;
+const TOKEN_IMAGE_MAX_LEN = 512;
+
+const MINUTE_IN_NANO = 60n * 1_000_000_000n;
+const HOUR_IN_NANO = 60n * MINUTE_IN_NANO;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type TimeRange = "30m" | "1h" | "2h" | "12h" | "24h";
+
+type WalletTrackerTradesRequest = {
+    trader: string;
+    time_range?: TimeRange;
+};
+
+type WalletTrackerSummaryRequest = {
+    trader: string;
+    limit?: string;
+};
+
+type TradeRow = {
+    pool: string;
+    mint: string;
+    direction: string;
+    maker: string;
+    sol_amount: string;
+    token_amount: string;
+    sol_amount_usd: string;
+    is_dev: boolean;
+    is_insider: boolean;
+    is_sniper: boolean;
+    is_traders_first_buy: boolean;
+    is_bundler: boolean;
+    is_hard_bundler: boolean;
+    platform: string;
+    signature: string;
+    timestamp: string;
+    slot: string;
+    slot_timestamp: string;
+    market_cap_sol: string;
+    market_cap_usd: string;
+    token_symbol: string;
+    exchange: string;
+    launchpad: string | null;
+    partner: string | null;
+    token_name: string;
+    token_image: string;
+    fee_percentage: string | null;
+    token_created: string | null;
+    token_graduated: string | null;
+};
+
+type SummaryRow = {
+    mint: string;
+    address: string;
+    token_symbol: string;
+    exchange: string;
+    launchpad: string;
+    partner: string;
+    token_name: string;
+    token_image: string;
+    fee_percentage: string;
+    buy_transactions: string;
+    sell_transactions: string;
+    buy_amount_sol: string;
+    sell_amount_sol: string;
+    buy_amount_usd: string;
+    sell_amount_usd: string;
+    buy_token_amount: string;
+    remaining_tokens: string;
+    current_invested_tokens: string;
+    current_sold_tokens: string;
+    current_average_entry_price_sol: string;
+    current_average_entry_price_usd: string;
+    current_average_entry_mc_sol: string;
+    current_average_entry_mc_usd: string;
+    timestamp: string;
+};
+
+type TradesResponse =
+    | { ok: true; trades: TradeRow[]; count: number }
+    | { ok: false; error: string };
+
+type SummaryResponse =
+    | { ok: true; summary: SummaryRow[]; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+const getTimeRangeNano = (range: TimeRange): bigint => {
+    const now = BigInt(Date.now()) * 1_000_000n;
+    switch (range) {
+        case "30m":
+            return now - 30n * MINUTE_IN_NANO;
+        case "1h":
+            return now - HOUR_IN_NANO;
+        case "2h":
+            return now - 2n * HOUR_IN_NANO;
+        case "12h":
+            return now - 12n * HOUR_IN_NANO;
+        case "24h":
+            return now - 24n * HOUR_IN_NANO;
+        default:
+            return now - 2n * HOUR_IN_NANO;
+    }
+};
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerWalletTrackerRoutes = (app: Elysia) => {
+    // -------------------------------------------------------------------------
+    // GET /local-api/wallet_tracker/trades
+    // -------------------------------------------------------------------------
+    app.get("/wallet-tracker/trades", async ({ query }) => {
+        const validation = validateWalletTrackerTradesRequest(query as WalletTrackerTradesRequest);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildWalletTrackerTradesSql(validation.traders, validation.startTimestamp);
+
+        console.log(
+            `[wallet_tracker/trades] Querying ${validation.traders.length} wallets, range=${validation.timeRange}`
+        );
+
+        const result = await clickhouseQuery<TradeRow>(sql);
+
+        return formatWalletTrackerTradesResponse(result);
+    });
+
+    // -------------------------------------------------------------------------
+    // GET /local-api/wallet_tracker/summary_all
+    // -------------------------------------------------------------------------
+    app.get("/local-api/wallet_tracker/summary_all", async ({ query }) => {
+        const validation = validateWalletTrackerSummaryRequest(query as WalletTrackerSummaryRequest);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildWalletTrackerSummarySql(validation.traders, validation.limit);
+
+        console.log(`[wallet_tracker/summary_all] Querying ${validation.traders.length} wallets, limit=${validation.limit}`);
+
+        const result = await clickhouseQuery<SummaryRow>(sql);
+
+        return formatWalletTrackerSummaryResponse(result);
+    });
+
+    // -------------------------------------------------------------------------
+    // GET /local-api/wallet_tracker/summary_all_v2
+    // Mirrors prod summary_all_v2; adds token_image truncation for safety.
+    // -------------------------------------------------------------------------
+    app.get("/local-api/wallet_tracker/summary_all_v2", async ({ query }) => {
+        const validation = validateWalletTrackerSummaryRequest(query as WalletTrackerSummaryRequest);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildWalletTrackerSummarySql(validation.traders, validation.limit);
+
+        console.log(
+            `[wallet_tracker/summary_all_v2] Querying ${validation.traders.length} wallets, limit=${validation.limit}`
+        );
+
+        const result = await clickhouseQuery<SummaryRow>(sql);
+
+        return formatWalletTrackerSummaryResponseV2(result);
+    });
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+export const validateWalletTrackerTradesRequest = (
+    req: WalletTrackerTradesRequest
+):
+    | { ok: true; traders: string[]; timeRange: TimeRange; startTimestamp: bigint }
+    | { ok: false; error: string } => {
+    if (!req.trader) {
+        return { ok: false, error: "Missing 'trader' parameter" };
+    }
+
+    const traders = req.trader.split(",").filter(isSolanaPubkey).slice(0, MAX_TRADERS);
+    if (traders.length === 0) {
+        return { ok: false, error: "No valid trader addresses provided" };
+    }
+
+    const timeRange = req.time_range ?? "2h";
+    const startTimestamp = getTimeRangeNano(timeRange);
+
+    return { ok: true, traders, timeRange, startTimestamp };
+};
+
+export const buildWalletTrackerTradesSql = (traders: string[], startTimestamp: bigint): string => {
+    return `
+        SELECT
+            pool,
+            mint,
+            direction,
+            maker,
+            sol_amount,
+            token_amount,
+            sol_amount_usd,
+            is_dev,
+            is_insider,
+            is_sniper,
+            is_traders_first_buy,
+            is_bundler,
+            is_hard_bundler,
+            platform,
+            signature,
+            timestamp,
+            slot,
+            slot_timestamp,
+            market_cap_sol,
+            market_cap_usd,
+            token_symbol,
+            exchange,
+            launchpad,
+            partner,
+            token_name,
+            token_image,
+            fee_percentage,
+            token_created,
+            token_graduated
+        FROM materializer_trades_recent_1d
+        WHERE maker IN (${buildInList(traders)})
+          AND timestamp >= ${startTimestamp.toString()}
+        ORDER BY timestamp DESC
+        LIMIT ${DEFAULT_LIMIT}
+    `;
+};
+
+export const formatWalletTrackerTradesResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<TradeRow>>>
+): TradesResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    console.log(`[wallet_tracker/trades] Returned ${result.data.length} trades`);
+
+    return {
+        ok: true,
+        trades: result.data,
+        count: result.data.length,
+    };
+};
+
+export const validateWalletTrackerSummaryRequest = (
+    req: WalletTrackerSummaryRequest
+):
+    | { ok: true; traders: string[]; limit: number }
+    | { ok: false; error: string } => {
+    if (!req.trader) {
+        return { ok: false, error: "Missing 'trader' parameter" };
+    }
+
+    const traders = req.trader.split(",").filter(isSolanaPubkey).slice(0, MAX_TRADERS);
+    if (traders.length === 0) {
+        return { ok: false, error: "No valid trader addresses provided" };
+    }
+
+    const limit = clamp(
+        req.limit ? parseInt(req.limit, 10) : DEFAULT_LIMIT,
+        1,
+        MAX_LIMIT
+    );
+
+    return { ok: true, traders, limit };
+};
+
+export const buildWalletTrackerSummarySql = (traders: string[], limit: number): string => {
+    return `
+        WITH summary AS (
+            SELECT
+                mint,
+                argMaxMerge(token_symbol_state) as token_symbol,
+                argMaxMerge(exchange_state) as exchange,
+                argMaxMerge(launchpad_state) as launchpad,
+                argMaxMerge(partner_state) as partner,
+                argMaxMerge(token_name_state) as token_name,
+                argMaxMerge(token_image_state) as token_image,
+                argMaxMerge(fee_percentage_state) as fee_percentage,
+                sumMerge(buy_transactions_state) as buy_transactions,
+                sumMerge(sell_transactions_state) as sell_transactions,
+                sumMerge(buy_amount_sol_state) as buy_amount_sol,
+                sumMerge(sell_amount_sol_state) as sell_amount_sol,
+                sumMerge(buy_amount_usd_state) as buy_amount_usd,
+                sumMerge(sell_amount_usd_state) as sell_amount_usd,
+                sumMerge(buy_token_amount_state) as buy_token_amount,
+                maxMerge(max_timestamp_state) as l_timestamp
+            FROM wallet_tracker_holder_trade_stats_7d
+            WHERE
+                timestamp_seconds >= toUInt32(now() - INTERVAL 24 HOUR)
+            AND
+                address IN (${buildInList(traders)})
+            GROUP BY mint
+            ORDER BY l_timestamp DESC
+            LIMIT ${limit}
+        ),
+        holders AS (
+            SELECT
+                mint,
+                sum(remaining_tokens) AS remaining_tokens,
+                sum(current_invested_tokens) AS total_invested_tokens,
+                sum(current_sold_tokens) AS total_sold_tokens,
+                IF(sum(current_invested_tokens) != 0,
+                    toDecimal128(sum(current_average_entry_price_sol * current_invested_tokens), 9) / sum(current_invested_tokens),
+                    toDecimal128(0, 9)
+                ) AS avg_entry_price_sol,
+                IF(sum(current_invested_tokens) != 0,
+                    toDecimal128(sum(current_average_entry_price_usd * current_invested_tokens), 9) / sum(current_invested_tokens),
+                    toDecimal128(0, 9)
+                ) AS avg_entry_price_usd,
+                IF(sum(current_invested_tokens) != 0,
+                    toDecimal128(sum(current_average_entry_mc_sol * current_invested_tokens), 9) / sum(current_invested_tokens),
+                    toDecimal128(0, 9)
+                ) AS avg_entry_mc_sol,
+                IF(sum(current_invested_tokens) != 0,
+                    toDecimal128(sum(current_average_entry_mc_usd * current_invested_tokens), 9) / sum(current_invested_tokens),
+                    toDecimal128(0, 9)
+                ) AS avg_entry_mc_usd
+            FROM materializer_holder_by_address_latest FINAL
+            WHERE address IN (${buildInList(traders)})
+              AND mint IN (SELECT mint FROM summary)
+            GROUP BY mint
+        )
+        SELECT
+            summary.mint as mint,
+            'aggregate' as address,
+            token_symbol,
+            exchange,
+            launchpad,
+            partner,
+            token_name,
+            token_image,
+            fee_percentage,
+            buy_transactions,
+            sell_transactions,
+            buy_amount_sol,
+            sell_amount_sol,
+            buy_amount_usd,
+            sell_amount_usd,
+            buy_token_amount,
+            COALESCE(holders.remaining_tokens, 0) as remaining_tokens,
+            COALESCE(holders.total_invested_tokens, 0) as current_invested_tokens,
+            COALESCE(holders.total_sold_tokens, 0) as current_sold_tokens,
+            COALESCE(holders.avg_entry_price_sol, 0) as current_average_entry_price_sol,
+            COALESCE(holders.avg_entry_price_usd, 0) as current_average_entry_price_usd,
+            COALESCE(holders.avg_entry_mc_sol, 0) as current_average_entry_mc_sol,
+            COALESCE(holders.avg_entry_mc_usd, 0) as current_average_entry_mc_usd,
+            l_timestamp as timestamp
+        FROM summary
+        LEFT JOIN holders ON summary.mint = holders.mint
+        ORDER BY l_timestamp DESC
+    `;
+};
+
+export const formatWalletTrackerSummaryResponse = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<SummaryRow>>>
+): SummaryResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    console.log(`[wallet_tracker/summary_all] Returned ${result.data.length} summaries`);
+
+    return {
+        ok: true,
+        summary: result.data,
+        count: result.data.length,
+    };
+};
+
+export const formatWalletTrackerSummaryResponseV2 = (
+    result: Awaited<ReturnType<typeof clickhouseQuery<SummaryRow>>>
+): SummaryResponse => {
+    if (!result.success) {
+        return {
+            ok: false,
+            error: result.error,
+        };
+    }
+
+    const trimmed = result.data.map(row => ({
+        ...row,
+        token_image: row.token_image ? row.token_image.slice(0, TOKEN_IMAGE_MAX_LEN) : "",
+    }));
+
+    console.log(`[wallet_tracker/summary_all_v2] Returned ${trimmed.length} summaries`);
+
+    return {
+        ok: true,
+        summary: trimmed,
+        count: trimmed.length,
+    };
+};
+
+

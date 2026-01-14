@@ -1,0 +1,275 @@
+/**
+ * QA Coordination Hub - Core Types
+ *
+ * Type definitions for the QA coordination system that transforms qa-tools
+ * into the human coordination layer for QA at BONKbot.
+ *
+ * Three modes supported:
+ * - Pre-release QA: Linear view triggers → Slack thread replies
+ * - Ceremony QA: Deployment smoke test coordination
+ * - Alert-triggered QA: Grafana alerts → tester attention
+ */
+
+// ============================================================================
+// Type Unions (using union types for better tree-shaking and JSON compatibility)
+// ============================================================================
+
+/** Ticket priority levels */
+export type TicketPriority = 'urgent' | 'high' | 'normal' | 'low';
+
+/** Ticket lifecycle status */
+export type TicketStatus = 'pending' | 'claimed' | 'in_progress' | 'blocked' | 'passed' | 'failed';
+
+/** Source of the QA ticket */
+export type TicketSource = 'linear_view' | 'ceremony' | 'alert';
+
+/** Tester availability status */
+export type TesterAvailability = 'available' | 'busy' | 'away' | 'offline';
+
+/** Ceremony session status */
+export type SessionStatus = 'pending' | 'active' | 'completed' | 'failed';
+
+/** Event types for the event bus */
+export type NotificationEvent =
+  | 'ticket:created'
+  | 'ticket:assigned'
+  | 'ticket:claimed'
+  | 'ticket:status_changed'
+  | 'ticket:escalated'
+  | 'session:started'
+  | 'session:completed'
+  | 'alert:triggered';
+
+// ============================================================================
+// Core Entity Interfaces
+// ============================================================================
+
+/** QATicket - represents a ticket requiring QA attention */
+export interface QATicket {
+  /** Linear issue ID */
+  id: string;
+  /** Full Linear URL */
+  linearUrl: string;
+  /** Issue title */
+  title: string;
+  /** Priority level: urgent, high, normal, low */
+  priority: TicketPriority;
+  /** Lifecycle status */
+  status: TicketStatus;
+  /** Tester ID or null if unassigned */
+  assignedTo: string | null;
+  /** ISO timestamp of creation */
+  createdAt: string;
+  /** ISO timestamp of last update */
+  updatedAt: string;
+  /** ISO timestamp when claimed, or null */
+  claimedAt: string | null;
+  /** Slack thread timestamp for replies */
+  slackThreadTs: string | null;
+  /** Slack channel ID */
+  slackChannelId: string | null;
+  /** Source: linear_view, ceremony, or alert */
+  source: TicketSource;
+  /** Flexible metadata for source-specific data */
+  metadata: Record<string, unknown>;
+}
+
+/** TesterProfile - QA tester with assignment scoring data */
+export interface TesterProfile {
+  /** Linear user ID (primary key) */
+  id: string;
+  /** Linear user ID (same as id, for explicit reference) */
+  linearUserId: string;
+  /** Slack user ID for mentions */
+  slackUserId: string;
+  /** Display name */
+  displayName: string;
+  /** Email address */
+  email: string;
+  /** Areas of expertise (tags for matching) */
+  expertise: string[];
+  /** Current availability status */
+  availability: TesterAvailability;
+  /** Count of currently assigned active tickets */
+  currentLoad: number;
+  /** Historical count of completed tickets */
+  totalCompleted: number;
+  /** Average time to complete a ticket in milliseconds */
+  avgCompletionTimeMs: number;
+  /** ISO timestamp of last activity */
+  lastActiveAt: string;
+}
+
+/** LinearMessage - maps Linear's Slack message to ticket ID */
+export interface LinearMessage {
+  /** Slack message timestamp (unique identifier) */
+  slackMessageTs: string;
+  /** Slack channel ID */
+  slackChannelId: string;
+  /** Linear issue ID this message refers to */
+  linearIssueId: string;
+  /** ISO timestamp when we captured the mapping */
+  capturedAt: string;
+}
+
+/** QASession - ceremony QA session for deployment coordination */
+export interface QASession {
+  /** Unique session ID */
+  id: string;
+  /** Ceremony Tracker ID */
+  ceremonyId: string;
+  /** Session status */
+  status: SessionStatus;
+  /** Checklist items to verify */
+  checklist: ChecklistItem[];
+  /** ISO timestamp when session started, or null */
+  startedAt: string | null;
+  /** ISO timestamp when session completed, or null */
+  completedAt: string | null;
+  /** List of assigned tester IDs */
+  testers: string[];
+}
+
+/** ChecklistItem - individual item in a ceremony QA checklist */
+export interface ChecklistItem {
+  /** Unique item ID */
+  id: string;
+  /** Description of what to verify */
+  description: string;
+  /** Item status */
+  status: 'pending' | 'passed' | 'failed' | 'skipped';
+  /** Tester ID who verified, or null */
+  verifiedBy: string | null;
+  /** ISO timestamp of verification, or null */
+  verifiedAt: string | null;
+  /** Optional notes from verifier */
+  notes: string | null;
+}
+
+// ============================================================================
+// Event Payload Interfaces (for type-safe event bus)
+// ============================================================================
+
+/** Payload for ticket:created event */
+export interface TicketCreatedPayload {
+  ticket: QATicket;
+}
+
+/** Payload for ticket:assigned event */
+export interface TicketAssignedPayload {
+  ticket: QATicket;
+  tester: TesterProfile;
+  /** Whether assignment was automatic (vs manual claim) */
+  autoAssigned: boolean;
+}
+
+/** Payload for ticket:claimed event (same shape as assigned) */
+export interface TicketClaimedPayload {
+  ticket: QATicket;
+  tester: TesterProfile;
+  autoAssigned: false;
+}
+
+/** Payload for ticket:status_changed event */
+export interface TicketStatusChangedPayload {
+  ticket: QATicket;
+  previousStatus: TicketStatus;
+  /** Tester ID or 'system' */
+  changedBy: string;
+}
+
+/** Payload for ticket:escalated event */
+export interface TicketEscalatedPayload {
+  ticket: QATicket;
+  escalationLevel: 'warning_24h' | 'critical_48h';
+  hoursSinceCreated: number;
+}
+
+/** Payload for session:started event */
+export interface SessionStartedPayload {
+  session: QASession;
+}
+
+/** Payload for session:completed event */
+export interface SessionCompletedPayload {
+  session: QASession;
+  passedCount: number;
+  failedCount: number;
+}
+
+/** Payload for alert:triggered event */
+export interface AlertTriggeredPayload {
+  alertName: string;
+  alertUrl: string;
+  severity: 'warning' | 'critical';
+  metric: string;
+  currentValue: number;
+  threshold: number;
+}
+
+/** Union of all event payloads */
+export type EventPayload =
+  | TicketCreatedPayload
+  | TicketAssignedPayload
+  | TicketClaimedPayload
+  | TicketStatusChangedPayload
+  | TicketEscalatedPayload
+  | SessionStartedPayload
+  | SessionCompletedPayload
+  | AlertTriggeredPayload;
+
+// ============================================================================
+// Type Guards
+// ============================================================================
+
+/**
+ * Type guard to check if an unknown object is a QATicket
+ */
+export function isQATicket(obj: unknown): obj is QATicket {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'id' in obj &&
+    'status' in obj &&
+    'source' in obj &&
+    'linearUrl' in obj
+  );
+}
+
+/**
+ * Type guard to check if an unknown object is a TesterProfile
+ */
+export function isTesterProfile(obj: unknown): obj is TesterProfile {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'linearUserId' in obj &&
+    'slackUserId' in obj &&
+    'expertise' in obj
+  );
+}
+
+/**
+ * Type guard to check if an unknown object is a QASession
+ */
+export function isQASession(obj: unknown): obj is QASession {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'id' in obj &&
+    'ceremonyId' in obj &&
+    'checklist' in obj
+  );
+}
+
+/**
+ * Type guard to check if an unknown object is a LinearMessage
+ */
+export function isLinearMessage(obj: unknown): obj is LinearMessage {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'slackMessageTs' in obj &&
+    'linearIssueId' in obj
+  );
+}

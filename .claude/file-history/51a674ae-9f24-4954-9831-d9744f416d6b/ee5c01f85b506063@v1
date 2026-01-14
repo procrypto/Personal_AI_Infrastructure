@@ -1,0 +1,222 @@
+/**
+ * Linear Webhook Handler
+ *
+ * Handles incoming Linear webhook events with signature verification.
+ * Uses LinearWebhooks class from @linear/sdk for signature + timestamp validation.
+ *
+ * CRITICAL: Use raw body string (not re-serialized JSON) for signature verification.
+ *
+ * Usage:
+ *   const rawBody = await request.text();
+ *   const signature = request.headers.get('linear-signature');
+ *   const payload = JSON.parse(rawBody);
+ *
+ *   if (!verifyLinearWebhook(rawBody, signature!, payload.webhookTimestamp)) {
+ *     return new Response('Invalid signature', { status: 401 });
+ *   }
+ *
+ *   await handleLinearWebhook(payload);
+ */
+
+import { LinearWebhooks } from '@linear/sdk';
+
+// ============================================================================
+// Types (see types.ts for full definitions)
+// ============================================================================
+
+/** Linear webhook action types */
+type LinearWebhookAction = 'create' | 'update' | 'remove';
+
+/** Linear webhook resource types */
+type LinearResourceType =
+  | 'Issue'
+  | 'Comment'
+  | 'Project'
+  | 'Cycle'
+  | 'IssueLabel'
+  | 'Reaction';
+
+/** Issue data from webhook payload */
+interface IssueWebhookData {
+  id: string;
+  number: number;
+  title: string;
+  priority: number;
+  stateId: string;
+  assigneeId?: string;
+  teamId: string;
+  labelIds: string[];
+  description?: string;
+}
+
+/** Linear webhook payload structure */
+interface LinearWebhookPayload {
+  action: LinearWebhookAction;
+  type: LinearResourceType;
+  webhookId: string;
+  webhookTimestamp: number;
+  createdAt: string;
+  organizationId: string;
+  url?: string;
+  actor?: {
+    id: string;
+    type: 'user' | 'application';
+    name: string;
+    email?: string;
+  };
+  data: IssueWebhookData | Record<string, unknown>;
+  updatedFrom?: Record<string, unknown>;
+}
+
+// ============================================================================
+// Webhook Verification
+// ============================================================================
+
+let webhookVerifier: LinearWebhooks | null = null;
+
+/**
+ * Get or create the webhook verifier singleton.
+ * @throws Error if LINEAR_WEBHOOK_SECRET is not configured
+ */
+function getWebhookVerifier(): LinearWebhooks {
+  if (!webhookVerifier) {
+    const secret = process.env.LINEAR_WEBHOOK_SECRET;
+    if (!secret) {
+      throw new Error(
+        'LINEAR_WEBHOOK_SECRET not configured. Set LINEAR_WEBHOOK_SECRET environment variable.'
+      );
+    }
+    webhookVerifier = new LinearWebhooks(secret);
+  }
+  return webhookVerifier;
+}
+
+/**
+ * Verify a Linear webhook signature.
+ *
+ * CRITICAL: Pass the raw body string, NOT re-serialized JSON.
+ * The signature is computed on the exact bytes sent by Linear.
+ *
+ * @param rawBody - Raw request body string (use request.text(), not request.json())
+ * @param signature - Value from 'linear-signature' header
+ * @param timestamp - webhookTimestamp from parsed payload
+ * @returns true if signature is valid and timestamp is within acceptable window
+ */
+export function verifyLinearWebhook(
+  rawBody: string,
+  signature: string,
+  timestamp: number
+): boolean {
+  try {
+    const verifier = getWebhookVerifier();
+    return verifier.verify(rawBody, signature, timestamp);
+  } catch (error) {
+    console.error('Linear webhook verification error:', error);
+    return false;
+  }
+}
+
+/**
+ * Reset the webhook verifier singleton (for testing).
+ */
+export function resetWebhookVerifier(): void {
+  webhookVerifier = null;
+}
+
+// ============================================================================
+// Webhook Handler
+// ============================================================================
+
+/**
+ * Result of handling a webhook
+ */
+export interface WebhookHandlerResult {
+  handled: boolean;
+  action?: LinearWebhookAction;
+  resourceType?: LinearResourceType;
+  resourceId?: string;
+  message?: string;
+}
+
+/**
+ * Handle a verified Linear webhook payload.
+ *
+ * Currently handles Issue events:
+ * - create: Could create a new ticket (but initial creation comes from Slack in Phase 3)
+ * - update: Dispatches status change events
+ * - remove: Could mark ticket as removed
+ *
+ * Note: The "view-add" trigger comes from Linear's native Slack notifications,
+ * not from webhooks. This handler processes subsequent issue updates.
+ *
+ * @param payload - Parsed webhook payload (verify signature first!)
+ * @returns Result indicating what was done
+ */
+export async function handleLinearWebhook(
+  payload: LinearWebhookPayload
+): Promise<WebhookHandlerResult> {
+  const { action, type, data } = payload;
+
+  // Only handle Issue events for now
+  if (type !== 'Issue') {
+    return {
+      handled: false,
+      action,
+      resourceType: type,
+      message: `Ignoring ${type} webhook (only Issue events handled)`,
+    };
+  }
+
+  const issueData = data as IssueWebhookData;
+
+  switch (action) {
+    case 'create':
+      // Note: Initial ticket creation comes from Slack listener (Phase 3).
+      // This webhook fires when issues are created in Linear directly.
+      // For now, log and return - full integration in later phases.
+      console.log(
+        `[Linear Webhook] Issue created: ${issueData.id} - ${issueData.title}`
+      );
+      return {
+        handled: true,
+        action,
+        resourceType: type,
+        resourceId: issueData.id,
+        message: `Issue created: ${issueData.title}`,
+      };
+
+    case 'update':
+      // Issue was updated - could be status change, assignment, etc.
+      // The updatedFrom field tells us what changed.
+      // Full status change handling will be implemented with ticket store integration.
+      console.log(
+        `[Linear Webhook] Issue updated: ${issueData.id} - ${issueData.title}`
+      );
+      return {
+        handled: true,
+        action,
+        resourceType: type,
+        resourceId: issueData.id,
+        message: `Issue updated: ${issueData.title}`,
+      };
+
+    case 'remove':
+      // Issue was deleted
+      console.log(`[Linear Webhook] Issue removed: ${issueData.id}`);
+      return {
+        handled: true,
+        action,
+        resourceType: type,
+        resourceId: issueData.id,
+        message: `Issue removed: ${issueData.id}`,
+      };
+
+    default:
+      return {
+        handled: false,
+        action,
+        resourceType: type,
+        message: `Unknown action: ${action}`,
+      };
+  }
+}

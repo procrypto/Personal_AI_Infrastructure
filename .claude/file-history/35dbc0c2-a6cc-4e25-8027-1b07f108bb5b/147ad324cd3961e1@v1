@@ -1,0 +1,76 @@
+/**
+ * useAutopilotDataForwarder
+ *
+ * Subscribes to NATS market data in store and forwards to CLI backend.
+ * Only forwards data for mints that are in positions or screener token list.
+ */
+
+import { useEffect, useRef } from "react";
+import {
+  useGlobalStore,
+  useShallow,
+} from "@/store/memoryStore/useGlobalStore";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import {
+  toMarketDataFeed,
+  toCvdFeed,
+} from "@/websocket/autopilot/feedAdapters";
+import type { MarketDataMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+
+export function useAutopilotDataForwarder() {
+  // Track which mints we care about (positions + screener tokens)
+  const positionMints = useGlobalStore(
+    useShallow((state) => Array.from(state.autopilot.positions.keys()))
+  );
+
+  // Get token list mints from autopilot store
+  const tokenListMints = useGlobalStore(
+    useShallow((state) => {
+      const tokenList = state.autopilot.tokenList;
+      const mints = new Set<string>();
+      tokenList.watchlist.forEach((t) => mints.add(t.mint));
+      tokenList.trending.forEach((t) => mints.add(t.mint));
+      tokenList.whales.forEach((t) => mints.add(t.mint));
+      return Array.from(mints);
+    })
+  );
+
+  // Combine all relevant mints
+  const relevantMints = useRef(new Set<string>());
+  useEffect(() => {
+    relevantMints.current = new Set([...positionMints, ...tokenListMints]);
+  }, [positionMints, tokenListMints]);
+
+  // Subscribe to market_data store changes and forward
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      (state) => state.websocketMessages.market_data.data,
+      (marketDataMap) => {
+        // Forward data for relevant mints only
+        for (const [mint, dataMap] of Object.entries(marketDataMap)) {
+          if (!relevantMints.current.has(mint)) continue;
+          if (!dataMap) continue;
+
+          // Get most recent market data
+          const entries = Array.from(dataMap.values());
+          const latest = entries[entries.length - 1] as
+            | MarketDataMessage
+            | undefined;
+          if (!latest) continue;
+
+          // Forward market data
+          autopilotWebsocket.sendFeed(toMarketDataFeed(latest));
+
+          // Forward CVD if we have trading stats
+          const cvdFeed = toCvdFeed(mint, latest);
+          if (cvdFeed) {
+            autopilotWebsocket.sendFeed(cvdFeed);
+          }
+        }
+      },
+      { equalityFn: (a, b) => a === b } // Reference equality for performance
+    );
+
+    return unsubscribe;
+  }, []);
+}

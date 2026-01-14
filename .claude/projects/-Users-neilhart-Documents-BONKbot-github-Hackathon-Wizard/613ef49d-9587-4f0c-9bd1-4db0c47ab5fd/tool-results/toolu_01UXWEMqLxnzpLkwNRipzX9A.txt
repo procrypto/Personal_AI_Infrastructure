@@ -1,0 +1,65 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/README.md has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   376→```
+   377→
+   378→---
+   379→
+   380→## Williams Fractal Trailing Stop (TSL)
+   381→
+   382→Trails stop loss to the SECOND most recent VALID fractal low, giving trades room to breathe while protecting profits.
+   383→
+   384→### Why Second Most Recent Valid?
+   385→
+   386→1. **Most recent fractal** might be too close (normal pullback could stop out)
+   387→2. **Valid only** - fractals invalidated by subsequent lower lows are discarded
+   388→3. **Second-to-last** represents more significant support that actually held
+   389→
+   390→### Fractal Detection
+   391→
+   392→A Williams fractal low is a bar where the low is the lowest of surrounding bars:
+   393→
+   394→```
+   395→With 3/3 settings (7-bar window):
+   396→  Bar:  1    2    3   [4]   5    6    7
+   397→  Low: 1.05 1.03 1.02 1.00 1.01 1.03 1.04
+   398→                      ↑ Lowest of all 7 bars = fractal low
+   399→```
+   400→
+   401→Fractal is confirmed 3 bars after it occurs (rightBars delay).
+   402→
+   403→### Valid Fractal Filtering
+   404→
+   405→A fractal low is **invalid** if followed by a LOWER fractal low (support was broken):
+   406→
+   407→```
+   408→Fractal lows: $1.00 → $1.02 → $1.05 → $1.03
+   409→                                ↑
+   410→                         $1.03 < $1.05, so $1.05 is invalidated
+   411→
+   412→Valid lows: $1.00 → $1.02 → $1.03
+   413→Second most recent = $1.02
+   414→Trail stop = $1.02
+   415→```
+   416→
+   417→### Configuration
+   418→
+   419→```typescript
+   420→{
+   421→  enabled: true,
+   422→  leftBars: 3,              // Bars to left of fractal
+   423→  rightBars: 3,             // Bars to right (confirmation delay)
+   424→  triggerBufferPercent: 0.1 // 0.1% buffer below stop
+   425→}
+   426→```
+   427→
+   428→### How It Works
+   429→
+   430→1. Fetch 1m candles for open positions (last 50 bars)
+   431→2. Detect all Williams fractal lows
+   432→3. Filter to valid fractals only (not invalidated by lower lows)
+   433→4. Trail stop to second most recent valid fractal
+   434→5. Stop only moves UP, never down
+   435→6. Exit when price closes below trailing stop
+   436→
+   437→---
+   438→
+   439→## Run Loop Output

@@ -1,0 +1,143 @@
+---
+phase: 02-dual-path-engine
+plan: 01
+subsystem: signal-processing
+tags: [signalprocessor, rule-engine, fast-path, typescript]
+
+requires:
+  - phase: 01-data-reception
+    provides: TokenMarketData validation and normalization
+provides:
+  - SignalProcessor class for fast signal generation
+  - requiresOHLCV field for rule classification
+  - Dual-path architecture foundation
+affects: [02-02, 02-03, websocket-integration]
+
+tech-stack:
+  added: []
+  patterns: [fast-path-processing, rule-classification]
+
+key-files:
+  created: [src/signal/processor.ts, src/signal/index.ts]
+  modified: [src/rules/types.ts, src/rules/rotations.ts, src/rules/templates.ts]
+
+key-decisions:
+  - "Simple rules filter by requiresOHLCV !== true"
+  - "Complex rules marked with requiresOHLCV: true"
+
+patterns-established:
+  - "Fast path: validate → normalize → filter → execute"
+  - "Rule classification via requiresOHLCV field"
+
+issues-created: []
+
+duration: 5min
+completed: 2026-01-09
+---
+
+# Phase 02 Plan 01: SignalProcessor Class Summary
+
+**SignalProcessor with fast-path processing for simple rules, requiresOHLCV field for rule classification**
+
+## Performance
+
+- **Duration:** 5 min
+- **Started:** 2026-01-09T06:11:13Z
+- **Completed:** 2026-01-09T06:16:19Z
+- **Tasks:** 2 (+ 1 blocker fix)
+- **Files modified:** 5
+
+## Objective
+
+Create SignalProcessor class with pre-computed metrics path for simple rules.
+
+Enable fast, synchronous signal generation from incoming market data without API calls.
+
+## Tasks Completed
+
+### Task 1: Create SignalProcessor class ✅
+**Commit:** ccc2ef6
+
+Created `src/signal/processor.ts` with:
+- SignalProcessor class accepting RuleEngine instance
+- `processMarketData(data: TokenMarketData): Signal[]` method
+- Validates incoming data using validateTokenMarketData
+- Normalizes data using normalizeTokenMarketData
+- Returns array of signals (empty if validation fails)
+- No async, no API calls - keeps latency under 100ms
+
+Exported from `src/signal/index.ts` barrel file.
+
+### Task 2: Add simple rule filtering ✅
+**Commit:** 08f8ad6
+
+Added rule filtering to run only simple rules:
+- Added `requiresOHLCV?: boolean` field to RuleConfig interface in types.ts
+- Updated SignalProcessor to filter rules via engine.getRules()
+- Filters to only rules where config.requiresOHLCV !== true
+- Marked RotationsRuleConfig, BreakoutRuleConfig, and MACrossoverRuleConfig with requiresOHLCV: true
+- Simple rules (price_change, volume_spike, buy_sell_ratio, trader_count) can now run with market data only
+
+### Blocker Fix: Update rotations templates ✅
+**Commit:** 02a671b
+
+Fixed TypeScript compilation errors:
+- Added requiresOHLCV: true to RotationsRuleConfig instances in templates.ts
+- Applied Rule 3 (Auto-fix blockers) - required to proceed
+
+## Files Created/Modified
+
+**Created:**
+- `src/signal/processor.ts` - SignalProcessor class implementation
+- `src/signal/index.ts` - Barrel export file
+
+**Modified:**
+- `src/rules/types.ts` - Added requiresOHLCV field to RuleConfig
+- `src/rules/rotations.ts` - Added requiresOHLCV: true to DEFAULT_ROTATIONS_CONFIG
+- `src/rules/templates.ts` - Added requiresOHLCV: true to rotation template configs
+
+## Verification Results
+
+✅ TypeScript compilation successful (no errors in modified files)
+✅ All tests pass (62/62 tests in validator.test.ts and normalizer.test.ts)
+✅ src/signal/processor.ts exists with SignalProcessor class
+✅ src/signal/index.ts exports SignalProcessor
+✅ RuleConfig has requiresOHLCV field
+
+## Deviations from Plan
+
+**Rule 3 - Auto-fix blockers:**
+- Found missing requiresOHLCV field in templates.ts after initial implementation
+- Fixed immediately to unblock TypeScript compilation
+- Also marked BreakoutRuleConfig and MACrossoverRuleConfig as requiring OHLCV (logical extension)
+
+## Architecture Notes
+
+### Fast Path Design
+The SignalProcessor implements the "fast path" for signal generation:
+1. **Validate** - Quick validation of incoming market data
+2. **Normalize** - Lowercase mint, fill defaults
+3. **Filter** - Only run simple rules (no OHLCV required)
+4. **Execute** - Synchronous rule evaluation
+5. **Return** - Array of signals
+
+### Rule Classification
+Rules are now classified into two categories:
+- **Simple rules** (requiresOHLCV !== true): Can evaluate with TokenMarketData alone
+  - price_change
+  - volume_spike
+  - buy_sell_ratio
+  - trader_count
+
+- **Complex rules** (requiresOHLCV === true): Require OHLCV candle data
+  - rotations
+  - breakout
+  - ma_crossover
+
+This enables the dual-path architecture:
+- **Fast path:** SignalProcessor for simple rules (sub-100ms)
+- **Slow path:** RuleEngine.analyzeToken() for complex rules (API calls required)
+
+## Next Steps
+
+Phase 02-02: Integrate SignalProcessor into WebSocket server for real-time signal generation.

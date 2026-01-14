@@ -1,0 +1,113 @@
+---
+phase: 03-interface-cleanup-cutover
+plan: 01
+type: execute
+---
+
+<objective>
+Create LOIS-ready interface types and refactor SignalProcessor to clean interface boundaries.
+
+Purpose: Enable future Rust reimplementation by defining minimal, language-agnostic interfaces.
+Output: `src/types/lois.ts` with clean types, SignalProcessor implementing explicit interface.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context (dependency graph):
+@.planning/phases/02-dual-path-engine/02-01-SUMMARY.md
+@.planning/phases/02-dual-path-engine/02-03-SUMMARY.md
+
+# Key files to modify/reference:
+@src/signal/processor.ts
+@src/signal/integration.ts
+@src/rules/types.ts
+@src/api/types.ts
+
+**Tech stack available:** vitest, TypeScript strict mode
+**Established patterns:** Dual-path processing, pipeline factory pattern, ValidationResult pattern
+**Constraining decisions:**
+- Phase 02-01: "Simple rules filter by requiresOHLCV !== true"
+- Phase 02-03: "Pipeline factory pattern: createSignalPipeline(engine, options)"
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create LOIS-ready interface types</name>
+  <files>src/types/lois.ts, src/types/index.ts</files>
+  <action>
+Create `src/types/lois.ts` with minimal, Rust-mappable interfaces:
+
+1. **ISignal** - Core signal output (mirrors existing Signal but explicit interface)
+   - ruleId, mint, type ('buy'|'sell'|'alert'), strength (0-1), reason, timestamp
+   - No `data: Record<string, any>` - use typed metadata or omit for LOIS
+
+2. **ISignalProcessor** - Processor contract
+   - processMarketData(data: IMarketDataInput): ISignal[]
+   - processOHLCV(mint: string, ohlcv: IOHLCVCandle[]): ISignal[]
+
+3. **IMarketDataInput** - Minimal market data input (subset of TokenMarketData)
+   - mint, price, volume metrics needed by simple rules
+   - No optional fields with complex defaults
+
+4. **IOHLCVCandle** - Single candle (maps to existing OHLCV)
+   - timestamp, open, high, low, close, volume
+
+5. **ISignalPipeline** - Pipeline contract
+   - handleDataFeed(message: IDataFeedMessage): ISignal[]
+   - onSignal(callback: (signal: ISignal) => void): void
+
+Create `src/types/index.ts` to re-export all LOIS types.
+
+Design principle: These types should map 1:1 to Rust structs. No TypeScript-specific patterns (discriminated unions are OK - Rust has enums).
+  </action>
+  <verify>tsc --noEmit passes, types importable from 'src/types'</verify>
+  <done>LOIS interface types defined, documented, and exported</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Refactor SignalProcessor to implement interface</name>
+  <files>src/signal/processor.ts</files>
+  <action>
+1. Import ISignalProcessor from src/types/lois.ts
+2. Add `implements ISignalProcessor` to SignalProcessor class
+3. Ensure method signatures match interface exactly
+4. If existing methods have extra parameters, keep them but ensure interface methods work standalone
+5. Add JSDoc noting this implements the LOIS-ready interface
+
+Do NOT change internal logic - only add interface compliance.
+Do NOT break existing callers in integration.ts.
+  </action>
+  <verify>tsc --noEmit passes, existing tests pass (npm test)</verify>
+  <done>SignalProcessor implements ISignalProcessor, all tests pass</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `tsc --noEmit` passes without errors
+- [ ] `npm test` passes all existing tests
+- [ ] Types importable: `import { ISignalProcessor, ISignal } from './types'`
+- [ ] SignalProcessor class has `implements ISignalProcessor`
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- LOIS interfaces cleanly separated from implementation
+- Existing functionality unchanged
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-interface-cleanup-cutover/03-01-SUMMARY.md`
+</output>

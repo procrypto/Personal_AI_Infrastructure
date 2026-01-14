@@ -1,0 +1,136 @@
+---
+phase: 04-gcp-integration
+plan: 01
+type: execute
+---
+
+<objective>
+Simplify environment configuration from local/beta/prod to local/remote, and create deployment documentation.
+
+Purpose: Reduce complexity by collapsing beta/prod into a single "remote" mode that uses whatever ClickHouse credentials are deployed with.
+Output: Simplified config.ts, unified workflow, and DEPLOYMENT.md checklist for GCP setup.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase context:
+@.planning/phases/03-ci-cd-pipeline/03-01-SUMMARY.md
+@.planning/phases/03-ci-cd-pipeline/03-02-SUMMARY.md
+
+# Current config and workflows:
+@src/config.ts
+@.github/workflows/deploy.yml
+@.github/workflows/deploy-prod.yml
+
+**Decision (user):** Simplify from 3 environments (local/beta/prod) to 2 (local/remote)
+**Rationale:** Beta and prod are identical in behavior - only credentials differ. The distinction adds complexity without value.
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Simplify config.ts to local/remote</name>
+  <files>src/config.ts</files>
+  <action>
+Refactor config.ts to use two environments instead of three:
+
+1. Change Environment type from `"local" | "beta" | "prod"` to `"local" | "remote"`
+2. Update getEnvironment() to return "remote" for any non-local value of APP_ENV
+3. Replace isBeta() and isProd() with single isRemote() helper
+4. Update getClickHouseConfig() to use "remote" instead of checking beta/prod separately
+5. Update assertConfig() error messages to reference "remote" instead of beta/prod
+6. Update all console.log messages to use "remote" terminology
+
+Keep TBKM_CLICKHOUSE_* for local, generic CLICKHOUSE_* for remote (no change to credential source logic).
+  </action>
+  <verify>bun run src/config.ts (syntax check - should fail cleanly due to assertConfig but no TypeScript errors)</verify>
+  <done>Environment type is local|remote, helpers updated, error messages updated</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Consolidate workflows into single deploy.yml</name>
+  <files>.github/workflows/deploy.yml, .github/workflows/deploy-prod.yml</files>
+  <action>
+Update workflows for simplified environment model:
+
+1. Update deploy.yml:
+   - Change APP_ENV from "beta" to "remote" in env_vars
+   - Keep the rest unchanged (main branch trigger, bonkbotbeta project)
+
+2. Update deploy-prod.yml:
+   - Change APP_ENV from "prod" to "remote" in env_vars
+   - Keep the rest unchanged (v* tag trigger, data-backend-prod project)
+
+Both workflows now deploy with APP_ENV=remote. The only difference is:
+- deploy.yml: main branch → bonkbotbeta
+- deploy-prod.yml: v* tags → data-backend-prod
+
+This preserves the deployment separation while simplifying the app's environment model.
+  </action>
+  <verify>grep -r "APP_ENV=" .github/workflows/ (should show APP_ENV=remote in both files)</verify>
+  <done>Both workflows use APP_ENV=remote, deployment targets unchanged</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Create DEPLOYMENT.md checklist</name>
+  <files>DEPLOYMENT.md</files>
+  <action>
+Create deployment checklist documentation:
+
+1. **Prerequisites** section:
+   - GCP project access (admin or delegated to Arthur)
+   - GitHub repo OIDC setup
+   - ClickHouse credentials for each environment
+
+2. **GCP Setup Checklist** (for each project):
+   - [ ] Create Workload Identity Pool (gcloud command)
+   - [ ] Create OIDC provider with GitHub attribute mapping
+   - [ ] Create github-actions service account
+   - [ ] Grant roles: Cloud Run Admin, Artifact Registry Writer, Service Account User
+   - [ ] Bind WIF pool to service account
+   - [ ] Create Artifact Registry repository
+   - [ ] Create secrets in Secret Manager: CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, CLICKHOUSE_SERVICE_ID
+   - [ ] Grant Cloud Run default SA access to secrets
+
+3. **Workflow Configuration**:
+   - Document TODO placeholders in deploy.yml and deploy-prod.yml
+   - Explain workload_identity_provider format: `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER`
+   - Explain service_account format
+
+4. **Verification**:
+   - How to test WIF auth locally: `gcloud auth login --cred-file=...`
+   - How to trigger test deployment
+   - Expected Cloud Run service URL
+
+Keep concise - checklist format, not prose.
+  </action>
+  <verify>cat DEPLOYMENT.md | head -30 (documentation exists with checklist structure)</verify>
+  <done>DEPLOYMENT.md created with prerequisites, GCP checklist, workflow config, verification steps</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run --bun src/config.ts` runs without TypeScript errors (will exit due to missing creds, but no syntax errors)
+- [ ] Both workflows have APP_ENV=remote
+- [ ] DEPLOYMENT.md exists with actionable checklist
+</verification>
+
+<success_criteria>
+- config.ts uses local/remote (not local/beta/prod)
+- Both workflows deploy with APP_ENV=remote
+- DEPLOYMENT.md provides clear path for GCP setup
+- No TypeScript errors
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/04-gcp-integration/04-01-SUMMARY.md`
+</output>

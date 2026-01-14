@@ -1,0 +1,29 @@
+/**
+ * useAutopilotWhaleForwarder
+ *
+ * Forwards whale moves from Discovery API to autopilot backend.
+ * Separate from useAutopilotDataForwarder because whales come from
+ * API polling (useWhaleMoves) not WebSocket store.
+ */
+import { useEffect, useRef } from "react";
+import { useWhaleMoves } from "@/api/discovery/useWhaleMoves";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import { toWhaleFeed } from "@/websocket/autopilot/feedAdapters";
+
+export function useAutopilotWhaleForwarder() {
+  const { data: whaleMoves } = useWhaleMoves();
+  const lastSentRef = useRef<number>(0);
+  const THROTTLE_MS = 15000; // Match API polling interval
+
+  useEffect(() => {
+    if (!whaleMoves?.length) return;
+    if (!autopilotWebsocket.isConnected) return;
+
+    const now = Date.now();
+    if (now - lastSentRef.current < THROTTLE_MS) return;
+
+    const feed = toWhaleFeed(whaleMoves);
+    autopilotWebsocket.sendFeed(feed);
+    lastSentRef.current = now;
+  }, [whaleMoves]);
+}

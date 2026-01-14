@@ -1,0 +1,130 @@
+     1→/**
+     2→ * Test Trading Loop
+     3→ *
+     4→ * End-to-end test: config -> analysis -> trigger -> P&L
+     5→ */
+     6→
+     7→import { configStore } from './config/index.js';
+     8→import { RuleEngine, createPriceChangeRule, createVolumeSpikeRule } from './rules/index.js';
+     9→import { localApi } from './api/index.js';
+    10→import { paperTracker, createTrigger } from './trading/index.js';
+    11→
+    12→async function testTradingLoop() {
+    13→  console.log('╔══════════════════════════════════════════════════════════════╗');
+    14→  console.log('║  TRADING LOOP TEST                                           ║');
+    15→  console.log('╚══════════════════════════════════════════════════════════════╝\n');
+    16→
+    17→  const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'; // BONK
+    18→
+    19→  // Load config and trading data
+    20→  await configStore.load();
+    21→  await paperTracker.load();
+    22→
+    23→  // Clear previous test data
+    24→  paperTracker.clearAll();
+    25→
+    26→  // Create engine with sensitive rules
+    27→  const engine = new RuleEngine({ api: localApi });
+    28→  engine.addRule(createPriceChangeRule('test-price', 'Price Move Test', {
+    29→    timeframe: '5m',
+    30→    threshold: 0.1, // Very low - should trigger
+    31→    direction: 'both',
+    32→    type: 'both',
+    33→  }));
+    34→  engine.addRule(createVolumeSpikeRule('test-volume', 'Volume Test', {
+    35→    timeframe: '5m',
+    36→    multiplier: 0.5, // Very low - should trigger
+    37→    type: 'both',
+    38→  }));
+    39→
+    40→  // Create trigger
+    41→  const trigger = createTrigger({
+    42→    enabled: true,
+    43→    mode: 'paper',
+    44→    defaultPositionSizeSol: 0.1,
+    45→    maxPositionSizeSol: 1,
+    46→    cooldownMs: 0, // No cooldown for testing
+    47→    onOppositeSignal: 'close',
+    48→  });
+    49→
+    50→  console.log('1. Analyzing token...');
+    51→  const signals = await engine.analyzeToken(mint);
+    52→  const result = engine.aggregateSignals(signals);
+    53→
+    54→  console.log(`   Action: ${result.action.toUpperCase()}`);
+    55→  console.log(`   Confidence: ${(result.confidence * 100).toFixed(0)}%`);
+    56→  console.log(`   Signals: ${signals.length}`);
+    57→
+    58→  if (result.action === 'hold') {
+    59→    console.log('\n   No trade triggered (action is HOLD)');
+    60→    return;
+    61→  }
+    62→
+    63→  console.log('\n2. Triggering trade...');
+    64→  const marketData = await localApi.getMarketData(mint);
+    65→
+    66→  const triggerResult = await trigger.trigger({
+    67→    mint,
+    68→    symbol: marketData.symbol,
+    69→    action: result.action,
+    70→    priceSol: marketData.price_sol,
+    71→    priceUsd: marketData.price_usd,
+    72→    ruleSetId: 'test',
+    73→    signals,
+    74→    confidence: result.confidence,
+    75→  });
+    76→
+    77→  if (!triggerResult.triggered) {
+    78→    console.log(`   Trade not triggered: ${triggerResult.reason}`);
+    79→    return;
+    80→  }
+    81→
+    82→  console.log(`   Trade created: ${triggerResult.trade?.id}`);
+    83→
+    84→  console.log('\n3. Checking open trades...');
+    85→  const openTrades = paperTracker.getOpenTrades();
+    86→  console.log(`   Open trades: ${openTrades.length}`);
+    87→  for (const trade of openTrades) {
+    88→    console.log(`   - ${trade.action} ${trade.symbol} @ ${trade.entryPriceSol} SOL`);
+    89→  }
+    90→
+    91→  console.log('\n4. Simulating price change and closing trade...');
+    92→  // Simulate a small price movement for P&L calculation
+    93→  const exitPrice = marketData.price_sol * 1.02; // +2%
+    94→  const exitPriceUsd = marketData.price_usd * 1.02;
+    95→
+    96→  const closed = paperTracker.closeTrade(
+    97→    triggerResult.trade!.id,
+    98→    exitPrice,
+    99→    exitPriceUsd
+   100→  );
+   101→
+   102→  if (closed) {
+   103→    console.log(`   Closed trade: ${closed.symbol}`);
+   104→    console.log(`   Entry: ${closed.entryPriceSol} SOL`);
+   105→    console.log(`   Exit: ${closed.exitPriceSol} SOL`);
+   106→    console.log(`   P&L: ${closed.pnlPercent?.toFixed(2)}% (${closed.pnlSol?.toFixed(6)} SOL)`);
+   107→  }
+   108→
+   109→  console.log('\n5. Final stats...');
+   110→  const stats = paperTracker.getStats();
+   111→  console.log(`   Total trades: ${stats.totalTrades}`);
+   112→  console.log(`   Wins: ${stats.wins} | Losses: ${stats.losses}`);
+   113→  console.log(`   Win rate: ${(stats.winRate * 100).toFixed(1)}%`);
+   114→  console.log(`   Total P&L: ${stats.totalPnlSol.toFixed(6)} SOL`);
+   115→
+   116→  // Save trading data
+   117→  await paperTracker.save();
+   118→
+   119→  console.log('\n═══════════════════════════════════════════════════════════════');
+   120→  console.log('Full loop test complete!');
+   121→  console.log('  Config -> Analysis -> Trigger -> P&L Update');
+   122→  console.log('═══════════════════════════════════════════════════════════════\n');
+   123→}
+   124→
+   125→testTradingLoop().catch(console.error);
+   126→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

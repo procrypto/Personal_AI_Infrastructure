@@ -1,0 +1,49 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/templates.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   198→export function listTemplates(): string[] {
+   199→  return Object.keys(templates);
+   200→}
+   201→
+   202→/**
+   203→ * Format a rule as a compact string
+   204→ * Examples: price +1%/5m, vol 2x/5m, ratio 1.5:1/5m, 50+30 traders/5m
+   205→ */
+   206→export function formatRuleCompact(rule: AnyRuleConfig): string {
+   207→  const tf = rule.ruleType !== 'breakout' && rule.ruleType !== 'ma_crossover'
+   208→    ? `/${(rule as any).timeframe}`
+   209→    : '';
+   210→
+   211→  switch (rule.ruleType) {
+   212→    case 'price_change': {
+   213→      const r = rule as any;
+   214→      const dir = r.direction === 'up' ? '+' : r.direction === 'down' ? '-' : '+-';
+   215→      return `price ${dir}${r.threshold}%${tf}`;
+   216→    }
+   217→    case 'volume_spike': {
+   218→      const r = rule as any;
+   219→      return `vol ${r.multiplier}x${tf}`;
+   220→    }
+   221→    case 'buy_sell_ratio': {
+   222→      const r = rule as any;
+   223→      return `ratio ${r.minRatio}:1${tf}`;
+   224→    }
+   225→    case 'trader_count': {
+   226→      const r = rule as any;
+   227→      const buyers = r.minBuyers ? `+${r.minBuyers}` : '';
+   228→      return `${r.minTraders}${buyers} traders${tf}`;
+   229→    }
+   230→    case 'breakout': {
+   231→      const r = rule as any;
+   232→      return `breakout ${r.breakoutPercent}%/${r.lookbackCandles}c`;
+   233→    }
+   234→    case 'ma_crossover': {
+   235→      const r = rule as any;
+   236→      return `ma ${r.fastPeriod}x${r.slowPeriod}`;
+   237→    }
+   238→    default:
+   239→      return '?';
+   240→  }
+   241→}
+   242→
+   243→/**
+   244→ * Get compact summary of a template
+   245→ */

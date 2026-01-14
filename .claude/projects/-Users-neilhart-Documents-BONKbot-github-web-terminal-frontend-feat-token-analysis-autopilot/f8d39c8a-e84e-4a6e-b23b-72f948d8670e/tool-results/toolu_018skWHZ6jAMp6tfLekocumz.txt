@@ -1,0 +1,275 @@
+The file /Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/.planning/phases/22-watchlist-style-screener-volume-trends/22-02-PLAN.md has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+     1→---
+     2→phase: 22-watchlist-style-screener-volume-trends
+     3→plan: 02
+     4→type: execute
+     5→---
+     6→
+     7→<objective>
+     8→Replace current TokenRow/TokenListColumn with TanStack React Table layout - hybrid approach preserving current styling while adopting sorting and interaction patterns.
+     9→
+    10→Purpose: Keep our curved cells, confluence colors, column icons, compact fonts while adding sorting, proper row coloring, and hover states from Watchlist table.
+    11→Output: Three screener columns using table layout with independent sorting, alternating grey rows (when no signal), preserved confluence highlighting.
+    12→</objective>
+    13→
+    14→<execution_context>
+    15→~/.claude/get-shit-done/workflows/execute-phase.md
+    16→~/.claude/get-shit-done/templates/summary.md
+    17→~/.claude/get-shit-done/references/checkpoints.md
+    18→</execution_context>
+    19→
+    20→<context>
+    21→@.planning/PROJECT.md
+    22→@.planning/ROADMAP.md
+    23→@.planning/phases/22-watchlist-style-screener-volume-trends/22-01-SUMMARY.md
+    24→
+    25→# Watchlist widget reference (pattern for sorting, row hover)
+    26→
+    27→@apps/web-terminal/src/ui/dashboard/widgets/watchlist-widget-table-view.tsx
+    28→
+    29→# Table component (alternating rows pattern: odd:bg-bg-tertiary even:bg-bg-primary-hover)
+    30→
+    31→@apps/web-terminal/src/components/table/table.tsx
+    32→
+    33→# Shared cell components to reuse
+    34→
+    35→@apps/web-terminal/src/ui/discovery/lists/shared/cells/symbol-cell.tsx
+    36→@apps/web-terminal/src/ui/discovery/lists/shared/cells/mcap-cell.tsx
+    37→@apps/web-terminal/src/ui/discovery/lists/shared/cells/price-change-cell.tsx
+    38→
+    39→# Current screener implementation to replace
+    40→
+    41→@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+    42→
+    43→# Token management patterns
+    44→
+    45→@apps/web-terminal/src/components/watchlist-toggle/watchlist-toggle.tsx
+    46→@apps/web-terminal/src/pages/XRayPage/XRayTokensList/XRayListItem/XRayListItem.tsx (hideToken pattern)
+    47→
+    48→# Blacklist store for hide functionality
+    49→
+    50→# Uses: usePersistentGlobalStore -> state.blacklist.addToBlacklist/isBlacklisted
+    51→
+    52→# Design decisions for this plan
+    53→
+    54→**PRESERVE from current implementation:**
+    55→- Curved cells (rounded corners on first/last cells)
+    56→- Confluence colors (signal-based green/red backgrounds from Phase 17)
+    57→- Column header icons (Eye/Flame/Wallet for list names)
+    58→- Current font sizes (more compact than Watchlist)
+    59→
+    60→**ADOPT from Watchlist table:**
+    61→- Heading structure (same height, clickable for sort)
+    62→- Sorting options (all columns: Token, MCap, 1h%)
+    63→- Independent sorting state per screener column
+    64→- Row hover highlighting (individual row highlight)
+    65→
+    66→**NEW row coloring logic:**
+    67→- When NO confluence signal → alternating greys (odd:bg-bg-tertiary even:bg-bg-primary-hover)
+    68→- When HAS confluence signal → green/red background (current behavior)
+    69→- Always: individual row highlight on hover (hover:bg-bg-quartiary)
+    70→</context>
+    71→
+    72→<tasks>
+    73→
+    74→<task type="auto">
+    75→  <name>Task 1: Create ScreenerTable component with sorting</name>
+    76→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx</files>
+    77→  <action>
+    78→    Create a new ScreenerTable component - hybrid of current styling + Watchlist table structure:
+    79→
+    80→    1. Use @tanstack/react-table with createColumnHelper<ScreenerTokenData>()
+    81→    2. Configure columns (ALL SORTABLE):
+    82→       - **Token** (Symbol): 100px width, sortable by symbol
+    83→       - **MCap**: 70px width, sortable by market cap
+    84→       - **1h %**: 60px width, sortable by price change
+    85→       - **Action**: 32px width - WatchlistToggle OR HideButton based on column type
+    86→
+    87→    3. Sorting:
+    88→       - Use getSortedRowModel()
+    89→       - All columns have enableSorting: true
+    90→       - Each ScreenerTable instance has its own independent sorting state
+    91→       - Clickable headers with sort direction indicators
+    92→
+    93→    4. Row styling (CRITICAL - hybrid logic):
+    94→       ```typescript
+    95→       // Determine row background based on signal presence
+    96→       const getRowClassName = (row: Row<ScreenerTokenData>, index: number, signalStrength?: SignalStrength) => {
+    97→         const hasSignal = signalStrength && signalStrength.type !== 'none';
+    98→
+    99→         return cn(
+   100→           // Always: hover highlight
+   101→           "hover:bg-bg-quartiary cursor-pointer transition-colors",
+   102→           // Curved cells preserved via tableCellClassName
+   103→           // If NO signal: alternating greys
+   104→           !hasSignal && (index % 2 === 0 ? "bg-bg-tertiary" : "bg-bg-primary-hover"),
+   105→           // If HAS signal: confluence color applied via style prop (not className)
+   106→         );
+   107→       };
+   108→       ```
+   109→
+   110→    5. Signal background (inline style when has confluence):
+   111→       - Use same opacity logic from current TokenRow
+   112→       - Apply via style={{ backgroundColor: ... }} NOT className
+   113→
+   114→    6. Cell styling:
+   115→       - tableCellClassName: "bg-inherit first:rounded-l last:rounded-r" (preserve curved cells)
+   116→
+   117→    7. Props interface:
+   118→       ```typescript
+   119→       type ScreenerTableProps = {
+   120→         tokens: ScreenerTokenData[];
+   121→         columnType: 'watchlist' | 'trending' | 'whales';
+   122→         signalStrengthMap: Map<string, SignalStrength>;
+   123→         title: string;
+   124→         icon: React.ElementType;
+   125→         iconColor: string;
+   126→       };
+   127→       ```
+   128→
+   129→    8. Header: Include icon + title + count like current TokenListColumn header
+   130→
+   131→    Keep current compact font sizes (text-xs for data, text-[10px] for labels).
+   132→    Do NOT include Volume or Liquidity columns.
+   133→
+   134→  </action>
+   135→  <verify>TypeScript compiles, component renders without errors</verify>
+   136→  <done>ScreenerTable component created with sorting, hybrid row styling</done>
+   137→</task>
+   138→
+   139→<task type="auto">
+   140→  <name>Task 2: Create HideTokenButton component</name>
+   141→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/hide-token-button.tsx</files>
+   142→  <action>
+   143→    Create a HideTokenButton component following X-Ray's pattern:
+   144→
+   145→    1. Use `usePersistentGlobalStore` blacklist functions:
+   146→       - `state.blacklist.addToBlacklist(mint)`
+   147→       - `state.blacklist.isBlacklisted(mint)`
+   148→
+   149→    2. UI: Small X or EyeOff icon button (similar to WatchlistToggle size)
+   150→       - Icon: Use `X` from lucide-react (or `EyeOff` if X looks too aggressive)
+   151→       - Size: `size-4` to match WatchlistToggle
+   152→       - Tooltip: "Hide token" / "Unhide token"
+   153→
+   154→    3. onClick handler:
+   155→       - Prevent event propagation (don't navigate)
+   156→       - Toggle blacklist state
+   157→       - Show toast confirmation
+   158→
+   159→    4. Props:
+   160→       ```typescript
+   161→       type HideTokenButtonProps = {
+   162→         mint: string;
+   163→         symbol: string;
+   164→       };
+   165→       ```
+   166→
+   167→    Note: Hidden tokens view is deferred to future phase.
+   168→
+   169→  </action>
+   170→  <verify>Component renders, click toggles blacklist state</verify>
+   171→  <done>HideTokenButton created following X-Ray blacklist pattern</done>
+   172→</task>
+   173→
+   174→<task type="auto">
+   175→  <name>Task 3: Replace TokenListColumn with ScreenerTable</name>
+   176→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+   177→  <action>
+   178→    Update the Screener section to use new ScreenerTable:
+   179→
+   180→    1. Replace the three TokenListColumn usages with ScreenerTable:
+   181→       ```tsx
+   182→       <ScreenerTable
+   183→         tokens={tokenList.watchlist}
+   184→         columnType="watchlist"
+   185→         signalStrengthMap={signalStrengthMap}
+   186→         title="Watchlist"
+   187→         icon={Eye}
+   188→         iconColor="text-text-info"
+   189→       />
+   190→       ```
+   191→
+   192→    2. For Watchlist column: action column shows WatchlistToggle
+   193→    3. For Trending/Whales columns: action column shows HideTokenButton
+   194→
+   195→    4. Filter out blacklisted tokens from trending/whales:
+   196→       ```typescript
+   197→       const { isBlacklisted } = usePersistentGlobalStore(...);
+   198→       const visibleTrendingTokens = tokenList.trending.filter(t => !isBlacklisted(t.mint));
+   199→       const visibleWhalesTokens = tokenList.whales.filter(t => !isBlacklisted(t.mint));
+   200→       ```
+   201→
+   202→    5. Remove old TokenRow and TokenListColumn components
+   203→
+   204→    6. Preserve the three-column grid layout:
+   205→       ```tsx
+   206→       <div className="grid min-h-0 flex-1 grid-cols-3 gap-2 overflow-hidden">
+   207→       ```
+   208→
+   209→  </action>
+   210→  <verify>`npm run dev` - screener displays with new table layout</verify>
+   211→  <done>Screener uses ScreenerTable for all three columns</done>
+   212→</task>
+   213→
+   214→<task type="checkpoint:human-verify" gate="blocking">
+   215→  <what-built>Hybrid table layout preserving curved cells + confluence colors, adding sorting + alternating rows</what-built>
+   216→  <how-to-verify>
+   217→    1. Run: `npm run dev`
+   218→    2. Open Autopilot widget in dashboard
+   219→    3. Verify screener columns show table layout with:
+   220→       - Token, MCap, 1h %, Action columns
+   221→       - Column headers with Eye/Flame/Wallet icons preserved
+   222→       - Clickable headers for sorting
+   223→    4. Test sorting:
+   224→       - Click Token header - sorts by symbol
+   225→       - Click MCap header - sorts by market cap
+   226→       - Click 1h % header - sorts by price change
+   227→       - Each column sorts independently
+   228→    5. Verify row styling:
+   229→       - Rows WITHOUT signal: alternating grey backgrounds
+   230→       - Rows WITH signal: green/red confluence background
+   231→       - All rows: highlight on hover
+   232→    6. Verify preserved styling:
+   233→       - Curved cells (rounded corners on first/last)
+   234→       - Compact font sizes (same as before)
+   235→       - Signal background intensity based on confluence count
+   236→    7. Test interactions:
+   237→       - Click star in Watchlist column - toggles watchlist
+   238→       - Click X in Trending/Whales - hides token
+   239→       - Click row - navigates to trading page
+   240→  </how-to-verify>
+   241→  <resume-signal>Type "approved" to continue, or describe issues to fix</resume-signal>
+   242→</task>
+   243→
+   244→</tasks>
+   245→
+   246→<verification>
+   247→Before declaring plan complete:
+   248→- [ ] `npm run typecheck` passes
+   249→- [ ] `npm run dev` shows screener with table layout
+   250→- [ ] All three columns display correctly with sorting
+   251→- [ ] Sorting works independently per column
+   252→- [ ] Row coloring: alternating greys when no signal, confluence colors when signal
+   253→- [ ] Hover highlight on all rows
+   254→- [ ] Curved cells preserved
+   255→- [ ] Compact font sizes preserved
+   256→- [ ] Token management controls work (star, hide)
+   257→- [ ] Row click navigation works
+   258→</verification>
+   259→
+   260→<success_criteria>
+   261→
+   262→- ScreenerTable component created with independent sorting per column
+   263→- HideTokenButton component created with blacklist integration
+   264→- All three screener columns use new table layout
+   265→- Hybrid row styling: alternating greys (no signal) + confluence colors (has signal)
+   266→- Preserved: curved cells, compact fonts, column icons, signal backgrounds
+   267→- Added: sorting on all columns, row hover highlight
+   268→- Human verified the visual result
+   269→</success_criteria>
+   270→
+   271→<output>
+   272→After completion, create `.planning/phases/22-watchlist-style-screener-volume-trends/22-02-SUMMARY.md`
+   273→</output>
+   274→

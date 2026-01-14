@@ -1,0 +1,212 @@
+# Deployment Guide
+
+GCP Cloud Run deployment for trenchbench-api with multi-region production.
+
+## Architecture Overview
+
+| Environment | Trigger | GCP Project | Region(s) | Service Name(s) |
+|-------------|---------|-------------|-----------|-----------------|
+| Beta | Push to `main` | bonkbotbeta | europe-west3 | trenchbench-api |
+| Production | Push `v*` tag | data-backend-prod | asia-southeast1, europe-west3, us-east4 | trenchbench-api-{asia,eu,usa} |
+
+**Artifact Registry:** `europe-west4-docker.pkg.dev` (build once, deploy to all regions)
+
+## Pre-Deploy Checklist
+
+Before first deployment, verify:
+
+### 1. GCP Infrastructure (Already Configured)
+- [x] Workload Identity Federation pools created
+- [x] Service accounts with required roles
+- [x] Artifact Registry repositories created
+
+### 2. Secrets Created in Secret Manager
+
+**Beta (bonkbotbeta) - 4 secrets:**
+```
+clickhouse-beta-eu-ro-uri
+clickhouse-beta-eu-ro-user
+clickhouse-beta-eu-ro-password
+twitter-api-key
+```
+
+**Production (data-backend-prod) - 10 secrets:**
+```
+# Asia region
+clickhouse-prod-asia-ro-uri
+clickhouse-prod-asia-ro-user
+clickhouse-prod-asia-ro-password
+
+# EU region
+clickhouse-prod-eu-ro-uri
+clickhouse-prod-eu-ro-user
+clickhouse-prod-eu-ro-password
+
+# USA region
+clickhouse-prod-usa-ro-uri
+clickhouse-prod-usa-ro-user
+clickhouse-prod-usa-ro-password
+
+# Shared
+twitter-api-key
+```
+
+### 3. Ready to Deploy
+- [ ] All secrets created with correct values
+- [ ] Push to main (beta) or create version tag (prod)
+
+## Secret Manager Setup
+
+### Beta Secrets (bonkbotbeta)
+
+```bash
+PROJECT_ID="bonkbotbeta"
+
+# ClickHouse credentials (EU region)
+echo -n "https://your-clickhouse-host:8443" | gcloud secrets create "clickhouse-beta-eu-ro-uri" \
+  --project="$PROJECT_ID" --data-file=-
+
+echo -n "your_username" | gcloud secrets create "clickhouse-beta-eu-ro-user" \
+  --project="$PROJECT_ID" --data-file=-
+
+echo -n "your_password" | gcloud secrets create "clickhouse-beta-eu-ro-password" \
+  --project="$PROJECT_ID" --data-file=-
+
+# Twitter API key
+echo -n "your_twitter_api_key" | gcloud secrets create "twitter-api-key" \
+  --project="$PROJECT_ID" --data-file=-
+
+# Grant Cloud Run access to secrets
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+
+for SECRET in clickhouse-beta-eu-ro-uri clickhouse-beta-eu-ro-user clickhouse-beta-eu-ro-password twitter-api-key; do
+  gcloud secrets add-iam-policy-binding "$SECRET" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+done
+```
+
+### Production Secrets (data-backend-prod)
+
+```bash
+PROJECT_ID="data-backend-prod"
+
+# Create secrets for each region
+for REGION in asia eu usa; do
+  echo -n "https://clickhouse-${REGION}-host:8443" | gcloud secrets create "clickhouse-prod-${REGION}-ro-uri" \
+    --project="$PROJECT_ID" --data-file=-
+
+  echo -n "your_${REGION}_username" | gcloud secrets create "clickhouse-prod-${REGION}-ro-user" \
+    --project="$PROJECT_ID" --data-file=-
+
+  echo -n "your_${REGION}_password" | gcloud secrets create "clickhouse-prod-${REGION}-ro-password" \
+    --project="$PROJECT_ID" --data-file=-
+done
+
+# Twitter API key (shared across regions)
+echo -n "your_twitter_api_key" | gcloud secrets create "twitter-api-key" \
+  --project="$PROJECT_ID" --data-file=-
+
+# Grant Cloud Run access
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+
+for SECRET in $(gcloud secrets list --project="$PROJECT_ID" --format='value(name)'); do
+  gcloud secrets add-iam-policy-binding "$SECRET" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+done
+```
+
+## Workflow Configuration
+
+Workflows are pre-configured with WIF credentials. No placeholders to replace.
+
+**Beta (`deploy.yml`):**
+- WIF Provider: `projects/1034486134720/locations/global/workloadIdentityPools/github-actions-auth-pool/providers/github`
+- Service Account: `bonkbot-github-actions@bonkbotbeta.iam.gserviceaccount.com`
+
+**Production (`deploy-prod.yml`):**
+- WIF Provider: `projects/145759184861/locations/global/workloadIdentityPools/github-actions-auth-pool/providers/github`
+- Service Account: `web-terminal@data-backend-prod.iam.gserviceaccount.com`
+
+## Triggering Deployments
+
+### Beta Deployment
+```bash
+git push origin main
+```
+Deploys to: `trenchbench-api` in europe-west3
+
+### Production Deployment
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
+Deploys to 3 regions in parallel:
+- `trenchbench-api-asia` in asia-southeast1
+- `trenchbench-api-eu` in europe-west3
+- `trenchbench-api-usa` in us-east4
+
+### Manual Production Deployment
+Use GitHub Actions "workflow_dispatch" to trigger prod deployment without a tag.
+
+## Verification
+
+### Check Beta Deployment
+```bash
+gcloud run services describe trenchbench-api \
+  --project="bonkbotbeta" \
+  --region="europe-west3" \
+  --format="value(status.url)"
+```
+
+### Check Production Deployments
+```bash
+# All three regions
+for REGION in asia-southeast1 europe-west3 us-east4; do
+  SUFFIX=$(echo $REGION | sed 's/asia-southeast1/asia/; s/europe-west3/eu/; s/us-east4/usa/')
+  echo "=== $REGION ==="
+  gcloud run services describe "trenchbench-api-${SUFFIX}" \
+    --project="data-backend-prod" \
+    --region="$REGION" \
+    --format="value(status.url)"
+done
+```
+
+### Health Check
+```bash
+# Beta
+curl -s https://trenchbench-api-HASH.europe-west3.run.app/health | jq
+
+# Production (each region)
+curl -s https://trenchbench-api-eu-HASH.europe-west3.run.app/health | jq
+```
+
+## Local Development
+
+Uses standard ClickHouse credentials:
+
+```bash
+cp env.example .env
+# Edit .env with your credentials:
+# CLICKHOUSE_URL=https://your-host:8443
+# CLICKHOUSE_USER=your_user
+# CLICKHOUSE_PASSWORD=your_password
+
+bun dev
+```
+
+## Credential Pattern
+
+The app uses standard ClickHouse client credentials:
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `CLICKHOUSE_URL` | ClickHouse server URL (e.g., `https://host:8443`) |
+| `CLICKHOUSE_USER` | Username for authentication |
+| `CLICKHOUSE_PASSWORD` | Password for authentication |
+| `TWITTER_API_KEY` | Twitter API key for proxy endpoint |
+
+Local defaults (if not set): `http://localhost:8123`, `default`, empty password.

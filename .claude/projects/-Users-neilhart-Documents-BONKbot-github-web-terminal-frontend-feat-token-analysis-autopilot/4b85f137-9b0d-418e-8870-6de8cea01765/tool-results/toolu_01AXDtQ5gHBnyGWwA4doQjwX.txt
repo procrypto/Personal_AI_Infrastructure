@@ -1,0 +1,81 @@
+/// <reference types="vitest" />
+import react from "@vitejs/plugin-react";
+import path from "path";
+import { defineConfig } from "vitest/config";
+
+/**
+ * Dedicated Vitest config - minimal plugins for fast test execution
+ * Avoids loading heavy Vite plugins (Sentry, Lingui, TanStack Router, etc.)
+ */
+export default defineConfig({
+  plugins: [
+    // React plugin with babel config for lingui and decorators support
+    react({
+      babel: {
+        plugins: [
+          "@lingui/babel-plugin-lingui-macro",
+          ["@babel/plugin-proposal-decorators", { legacy: true }],
+        ],
+      },
+    }),
+  ],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  // Cache directory for Vite transforms (used by vitest)
+  cacheDir: "./node_modules/.cache/vitest",
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./src/test-setup.ts"],
+    // Disable CSS processing (major speedup - CSS isn't needed for unit tests)
+    css: false,
+    globals: true,
+    // Use single-threaded execution for small test suites (20 files, ~150 tests)
+    // This avoids worker spawn overhead while maintaining test isolation
+    // For larger test suites, consider removing singleThread to enable parallelism
+    pool: "threads",
+    poolOptions: {
+      threads: {
+        singleThread: true,
+        isolate: true,
+      },
+    },
+    // Explicit test file patterns
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // Exclude directories that don't contain tests (speeds up collection)
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.turbo/**",
+      "**/*.config.*",
+      "**/routeTree.gen.ts",
+      "**/public/**",
+      "**/api/openapi/generated/**",
+      "**/locales/**",
+    ],
+    // Dependency optimization
+    deps: {
+      moduleDirectories: ["node_modules"],
+      optimizer: {
+        web: {
+          enabled: true,
+          include: ["react-tweet"],
+        },
+      },
+    },
+    // Test execution settings
+    testTimeout: 10000,
+    // Don't set watch here - let CLI control it:
+    // - `vitest run` = no watch (CI)
+    // - `vitest` = watch mode (dev)
+    // - `vitest --ui` = UI mode with watch
+    // Reporter with summary (default shows test counts, duration breakdown)
+    reporters: ["default"],
+    // Disable type checking (tsc handles this separately)
+    typecheck: {
+      enabled: false,
+    },
+  },
+});

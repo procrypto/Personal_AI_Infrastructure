@@ -1,0 +1,96 @@
+/**
+ * useAutopilotData
+ *
+ * Main hook for accessing autopilot data from the Zustand store.
+ * Provides all autopilot data plus a sendCommand function for controls.
+ *
+ * Returns derived stats that compute totalPnlSol from live position data
+ * instead of using the static backend value.
+ */
+
+import { useMemo } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { useAutopilotPositions } from "./useAutopilotPositions";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+
+/**
+ * Main hook for accessing all autopilot data.
+ * Returns positions with live P&L, signals, stats, and controls.
+ */
+export const useAutopilotData = () => {
+  // Positions with live P&L from NATS market data
+  const positions = useAutopilotPositions();
+
+  // Calculate total P&L from positions (derived, real-time)
+  const derivedTotalPnlSol = useMemo(() => {
+    return positions.reduce((sum, pos) => sum + (pos.pnlSol ?? 0), 0);
+  }, [positions]);
+
+  // All other data from autopilot store
+  const {
+    isConnected,
+    signals,
+    marketStatus,
+    stats,
+    scanTick,
+    lastAnalysis,
+    tokenList,
+    config,
+    strategies,
+  } = useGlobalStore(
+    useShallow(state => ({
+      isConnected: state.autopilot.isConnected,
+      signals: state.autopilot.signals,
+      marketStatus: state.autopilot.marketStatus,
+      stats: state.autopilot.stats,
+      scanTick: state.autopilot.scanTick,
+      lastAnalysis: state.autopilot.lastAnalysis,
+      tokenList: state.autopilot.tokenList,
+      config: state.autopilot.config,
+      strategies: state.autopilot.strategies,
+    }))
+  );
+
+  /**
+   * Send a command to the autopilot backend.
+   */
+  const sendCommand = (command: AutopilotCommand) => {
+    autopilotWebsocket.sendCommand(command);
+  };
+
+  return {
+    // Connection status
+    isConnected,
+
+    // Positions with live P&L (calculated from NATS market data)
+    positions,
+
+    // Signals history
+    signals,
+
+    // Market status (SOL dump protection)
+    marketStatus,
+
+    // Trading statistics
+    stats,
+
+    // Scan metadata
+    scanTick,
+
+    // Last analyzed token (for debugging/visibility)
+    lastAnalysis,
+
+    // Token lists by source
+    tokenList,
+
+    // Configuration
+    config,
+
+    // Available and active strategies
+    strategies,
+
+    // Command sender
+    sendCommand,
+  };
+};

@@ -1,0 +1,1206 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+     3→import { createPortal } from "react-dom";
+     4→import SolanaIcon from "@/assets/icons/solana.svg";
+     5→import {
+     6→  Bot,
+     7→  AlertTriangle,
+     8→  TrendingUp,
+     9→  TrendingDown,
+    10→  Activity,
+    11→  Target,
+    12→  ShieldAlert,
+    13→  Clock,
+    14→  Eye,
+    15→  Flame,
+    16→  Wallet,
+    17→  Settings,
+    18→  RefreshCw,
+    19→  Power,
+    20→  Layers,
+    21→  CheckCircle2,
+    22→  Circle,
+    23→  X,
+    24→  Bug,
+    25→} from "lucide-react";
+    26→import { cn } from "@/lib/utils";
+    27→import { Switch } from "@/components/switch";
+    28→import { Tooltip } from "@/components/tooltip";
+    29→import { useAutopilotSubscription } from "@/hooks/useSubscriptions/useAutopilotSubscription";
+    30→import {
+    31→  useAutopilotData,
+    32→  useTokenSignalStrength,
+    33→  useTimeAgo,
+    34→  type AutopilotPositionWithPnL,
+    35→  type AutopilotTokenWithPrices,
+    36→  type SignalStrength,
+    37→} from "@/hooks/useAutopilot";
+    38→import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+    39→import type {
+    40→  AutopilotMarketStatus,
+    41→  AutopilotConfig,
+    42→  AutopilotStrategies,
+    43→  AutopilotStats,
+    44→} from "@/store/memoryStore/slices/autopilot-store/types";
+    45→import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+    46→
+    47→// Market Status Badge Component
+    48→const MarketStatusBadge = ({ status }: { status: AutopilotMarketStatus }) => {
+    49→  const stateConfig = {
+    50→    NORMAL: {
+    51→      color: "text-text-success",
+    52→      icon: Activity,
+    53→      label: "NORMAL",
+    54→    },
+    55→    CAUTION: {
+    56→      color: "text-text-warning",
+    57→      icon: AlertTriangle,
+    58→      label: "CAUTION",
+    59→    },
+    60→    DUMP: {
+    61→      color: "text-text-error",
+    62→      icon: ShieldAlert,
+    63→      label: "DUMP",
+    64→    },
+    65→  };
+    66→
+    67→  const config = stateConfig[status.state];
+    68→  const Icon = config.icon;
+    69→  const solPrice = status.solPriceUsd ?? 0;
+    70→
+    71→  return (
+    72→    <div className="flex items-center gap-2">
+    73→      {/* SOL Price Display */}
+    74→      <div className="text-text-primary flex items-center gap-1 text-xs">
+    75→        <SolanaIcon className="h-4 w-4" />
+    76→        <span>${solPrice.toFixed(2)}</span>
+    77→      </div>
+    78→      {/* Change Indicator */}
+    79→      <div className={cn("flex items-center gap-1", config.color)}>
+    80→        <Icon className="h-3.5 w-3.5" />
+    81→        <span className="text-xs font-semibold">
+    82→          {Math.abs(status.solPriceChangePercent).toFixed(2)}%
+    83→        </span>
+    84→      </div>
+    85→    </div>
+    86→  );
+    87→};
+    88→
+    89→// Scan Countdown Component - shows live countdown to next scan
+    90→const ScanCountdown = ({
+    91→  scanTimestamp,
+    92→  intervalMs,
+    93→}: {
+    94→  scanTimestamp: number | null;
+    95→  intervalMs: number;
+    96→}) => {
+    97→  const [countdown, setCountdown] = useState<number | null>(null);
+    98→
+    99→  useEffect(() => {
+   100→    if (scanTimestamp === null) {
+   101→      setCountdown(null);
+   102→      return;
+   103→    }
+   104→
+   105→    const calculateCountdown = () => {
+   106→      const nextScanTime = scanTimestamp + intervalMs;
+   107→      const remaining = Math.round((nextScanTime - Date.now()) / 1000);
+   108→      return remaining;
+   109→    };
+   110→
+   111→    // Initial calculation
+   112→    setCountdown(calculateCountdown());
+   113→
+   114→    // Update every second
+   115→    const intervalId = setInterval(() => {
+   116→      setCountdown(calculateCountdown());
+   117→    }, 1000);
+   118→
+   119→    return () => clearInterval(intervalId);
+   120→  }, [scanTimestamp, intervalMs]);
+   121→
+   122→  if (scanTimestamp === null) {
+   123→    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+   124→  }
+   125→
+   126→  if (countdown === null) {
+   127→    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+   128→  }
+   129→
+   130→  if (countdown <= 0) {
+   131→    return <span className="text-text-turbo text-[10px]">Scanning...</span>;
+   132→  }
+   133→
+   134→  return (
+   135→    <span className="text-text-secondary text-[10px]">Next: {countdown}s</span>
+   136→  );
+   137→};
+   138→
+   139→// Position Card Component - handles nullable P&L from NATS market data
+   140→const PositionCard = ({ position }: { position: AutopilotPositionWithPnL }) => {
+   141→  const isProfit = (position.pnlPercent ?? 0) >= 0;
+   142→  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+   143→  const hasMarketData = position.pnlPercent !== null;
+   144→
+   145→  return (
+   146→    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+   147→      <div className="flex items-center gap-3">
+   148→        <div
+   149→          className={cn(
+   150→            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+   151→            hasMarketData
+   152→              ? isProfit
+   153→                ? "bg-bg-success-primary text-text-success"
+   154→                : "bg-bg-error-primary text-text-error"
+   155→              : "bg-bg-tertiary text-text-secondary"
+   156→          )}
+   157→        >
+   158→          {hasMarketData ? (
+   159→            isProfit ? (
+   160→              <TrendingUp className="h-4 w-4" />
+   161→            ) : (
+   162→              <TrendingDown className="h-4 w-4" />
+   163→            )
+   164→          ) : (
+   165→            <Activity className="h-4 w-4 animate-pulse" />
+   166→          )}
+   167→        </div>
+   168→        <div>
+   169→          <span className="text-text-primary text-sm font-medium">
+   170→            ${position.symbol}
+   171→          </span>
+   172→          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+   173→            <Clock className="h-3 w-3" />
+   174→            {holdTime}m
+   175→          </div>
+   176→        </div>
+   177→      </div>
+   178→      <div className="text-right">
+   179→        {hasMarketData ? (
+   180→          <>
+   181→            <div
+   182→              className={cn(
+   183→                "text-sm font-semibold",
+   184→                isProfit ? "text-text-success" : "text-text-error"
+   185→              )}
+   186→            >
+   187→              {isProfit ? "+" : ""}
+   188→              {position.pnlPercent!.toFixed(2)}%
+   189→            </div>
+   190→            <div className="text-text-secondary text-[10px]">
+   191→              {position.positionSizeSol.toFixed(2)} SOL
+   192→            </div>
+   193→          </>
+   194→        ) : (
+   195→          <>
+   196→            <div className="text-text-tertiary animate-pulse text-sm font-semibold">
+   197→              Loading...
+   198→            </div>
+   199→            <div className="text-text-secondary text-[10px]">
+   200→              {position.positionSizeSol.toFixed(2)} SOL
+   201→            </div>
+   202→          </>
+   203→        )}
+   204→      </div>
+   205→    </div>
+   206→  );
+   207→};
+   208→
+   209→// Format market cap for display - shows readable values like "$234K" or "$1.2M"
+   210→const formatMarketCap = (mcap: number | undefined): string => {
+   211→  if (mcap === undefined) return "-";
+   212→  if (mcap >= 1_000_000) return `$${(mcap / 1_000_000).toFixed(1)}M`;
+   213→  if (mcap >= 1_000) return `$${(mcap / 1_000).toFixed(0)}K`;
+   214→  return `$${mcap.toFixed(0)}`;
+   215→};
+   216→
+   217→// Flash duration in ms - how long the bright flash lasts
+   218→const FLASH_DURATION_MS = 100;
+   219→
+   220→// Map confluence count to background opacity (using brand palette)
+   221→// Uses more of the 11 shade variations: 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950
+   222→// Flash = 0.7 (brightest bg, text still readable), highest confluence = 0.5
+   223→function getSignalOpacity(
+   224→  confluenceCount: number,
+   225→  isFlashing: boolean
+   226→): number {
+   227→  if (isFlashing) return 0.7; // 700 - brightest background under text
+   228→  if (confluenceCount >= 6) return 0.5; // 500 - highest confluence
+   229→  if (confluenceCount === 5) return 0.4; // 400
+   230→  if (confluenceCount === 4) return 0.35; // between 300-400
+   231→  if (confluenceCount === 3) return 0.3; // 300
+   232→  if (confluenceCount === 2) return 0.2; // 200
+   233→  if (confluenceCount === 1) return 0.1; // 100
+   234→  return 0;
+   235→}
+   236→
+   237→// Token Row Component with signal background indicators
+   238→// Background color based on confluence count using brand palette
+   239→const TokenRow = ({
+   240→  token,
+   241→  signalStrength,
+   242→}: {
+   243→  token: AutopilotTokenWithPrices;
+   244→  signalStrength?: SignalStrength;
+   245→}) => {
+   246→  const change = token.change1h ?? 0;
+   247→  const isPositive = change >= 0;
+   248→
+   249→  // Track flash state - when true, show brighter background
+   250→  const [isFlashing, setIsFlashing] = useState(false);
+   251→
+   252→  // Time since last signal
+   253→  const timeAgo = useTimeAgo(signalStrength?.latestTimestamp);
+   254→
+   255→  // Trigger flash when new signal arrives
+   256→  useEffect(() => {
+   257→    if (signalStrength?.isNew && signalStrength.type !== "none") {
+   258→      setIsFlashing(true);
+   259→      const timer = setTimeout(() => {
+   260→        setIsFlashing(false);
+   261→      }, FLASH_DURATION_MS);
+   262→      return () => clearTimeout(timer);
+   263→    }
+   264→  }, [
+   265→    signalStrength?.isNew,
+   266→    signalStrength?.latestTimestamp,
+   267→    signalStrength?.type,
+   268→  ]);
+   269→
+   270→  // Calculate background style using brand colors
+   271→  // Success (buy): --success-950 rgb(180, 229, 89)
+   272→  // Error (sell): --error-950 (using standard error red)
+   273→  const signalStyle = useMemo(() => {
+   274→    if (!signalStrength || signalStrength.type === "none") {
+   275→      return undefined;
+   276→    }
+   277→
+   278→    const opacity = getSignalOpacity(
+   279→      signalStrength.confluenceCount,
+   280→      isFlashing
+   281→    );
+   282→
+   283→    if (signalStrength.type === "buy") {
+   284→      // Use success color from brand palette
+   285→      return {
+   286→        backgroundColor: `rgba(180, 229, 89, ${opacity})`,
+   287→      };
+   288→    } else {
+   289→      // Use error color from brand palette
+   290→      return {
+   291→        backgroundColor: `rgba(239, 68, 68, ${opacity})`,
+   292→      };
+   293→    }
+   294→  }, [signalStrength, isFlashing]);
+   295→
+   296→  // Determine if we have a signal background (affects base styling)
+   297→  const hasSignalBg = signalStrength && signalStrength.type !== "none";
+   298→
+   299→  return (
+   300→    <div
+   301→      className={cn(
+   302→        "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+   303→        // Smooth transition for background changes
+   304→        "transition-colors duration-200",
+   305→        // Only apply default bg if no signal and no position
+   306→        !hasSignalBg && !token.hasPosition && "bg-bg-tertiary/30",
+   307→        // Position styling takes precedence over signal
+   308→        token.hasPosition &&
+   309→          "border-border-turbo-primary bg-bg-turbo-primary border"
+   310→      )}
+   311→      style={!token.hasPosition ? signalStyle : undefined}
+   312→    >
+   313→      <div className="flex items-center gap-2">
+   314→        <span className="text-text-primary font-medium">${token.symbol}</span>
+   315→        {token.hasPosition && (
+   316→          <span className="text-text-turbo text-[8px] font-semibold">OPEN</span>
+   317→        )}
+   318→        {/* Signal stats: direction, count, time */}
+   319→        {hasSignalBg && signalStrength && (
+   320→          <span
+   321→            className={cn(
+   322→              "flex items-center gap-1 text-[9px]",
+   323→              signalStrength.type === "buy"
+   324→                ? "text-text-success"
+   325→                : "text-text-error"
+   326→            )}
+   327→          >
+   328→            {signalStrength.type === "buy" ? "▲" : "▼"}
+   329→            <span className="font-semibold">
+   330→              {signalStrength.confluenceCount}
+   331→            </span>
+   332→            <span className="text-text-tertiary">{timeAgo}</span>
+   333→          </span>
+   334→        )}
+   335→      </div>
+   336→      <div className="flex items-center gap-3">
+   337→        <span className="text-text-secondary">
+   338→          {formatMarketCap(token.marketCapUsd)}
+   339→        </span>
+   340→        <span
+   341→          className={cn(
+   342→            "font-medium",
+   343→            isPositive ? "text-text-success" : "text-text-error"
+   344→          )}
+   345→        >
+   346→          {isPositive ? "+" : ""}
+   347→          {change.toFixed(1)}%
+   348→        </span>
+   349→      </div>
+   350→    </div>
+   351→  );
+   352→};
+   353→
+   354→// Token List Column Component - for three-column layout
+   355→const TokenListColumn = ({
+   356→  title,
+   357→  icon: Icon,
+   358→  tokens,
+   359→  iconColor,
+   360→  signalStrengthMap,
+   361→}: {
+   362→  title: string;
+   363→  icon: React.ElementType;
+   364→  tokens: AutopilotTokenWithPrices[];
+   365→  iconColor: string;
+   366→  signalStrengthMap: Map<string, SignalStrength>;
+   367→}) => {
+   368→  // Sort tokens: buy signals (green) first, sell signals (red) second, then rest
+   369→  const sortedTokens = useMemo(() => {
+   370→    return [...tokens].sort((a, b) => {
+   371→      const sigA = signalStrengthMap.get(a.mint);
+   372→      const sigB = signalStrengthMap.get(b.mint);
+   373→
+   374→      const typeA = sigA?.type ?? "none";
+   375→      const typeB = sigB?.type ?? "none";
+   376→
+   377→      // Priority: buy (0) > sell (1) > none (2)
+   378→      const priorityA = typeA === "buy" ? 0 : typeA === "sell" ? 1 : 2;
+   379→      const priorityB = typeB === "buy" ? 0 : typeB === "sell" ? 1 : 2;
+   380→
+   381→      // Sort by signal type priority first
+   382→      if (priorityA !== priorityB) return priorityA - priorityB;
+   383→
+   384→      // Within same type, sort by confluence count (higher first)
+   385→      if (typeA !== "none" && typeB !== "none") {
+   386→        const countA = sigA?.confluenceCount ?? 0;
+   387→        const countB = sigB?.confluenceCount ?? 0;
+   388→        if (countA !== countB) return countB - countA;
+   389→      }
+   390→
+   391→      // For no-signal tokens, sort by hasPosition
+   392→      if (a.hasPosition && !b.hasPosition) return -1;
+   393→      if (!a.hasPosition && b.hasPosition) return 1;
+   394→
+   395→      return 0;
+   396→    });
+   397→  }, [tokens, signalStrengthMap]);
+   398→
+   399→  return (
+   400→    <div className="flex min-h-0 flex-1 flex-col">
+   401→      <div className="text-text-secondary mb-1.5 flex items-center gap-1.5 text-[10px] font-medium">
+   402→        <Icon className={cn("h-3 w-3", iconColor)} />
+   403→        {title} ({tokens.length})
+   404→      </div>
+   405→      {tokens.length === 0 ? (
+   406→        <div className="text-text-tertiary border-border-primary/30 rounded border border-dashed p-2 text-center text-[10px]">
+   407→          No tokens
+   408→        </div>
+   409→      ) : (
+   410→        <div className="min-h-0 flex-1 space-y-1 overflow-auto">
+   411→          {sortedTokens.map(token => (
+   412→            <TokenRow
+   413→              key={token.mint}
+   414→              token={token}
+   415→              signalStrength={signalStrengthMap.get(token.mint)}
+   416→            />
+   417→          ))}
+   418→        </div>
+   419→      )}
+   420→    </div>
+   421→  );
+   422→};
+   423→
+   424→// Draggable Hook for Settings Panel
+   425→const useDraggable = () => {
+   426→  const [position, setPosition] = useState<{ x: number; y: number } | null>(
+   427→    null
+   428→  );
+   429→  const [isDragging, setIsDragging] = useState(false);
+   430→  const dragStartRef = useRef({ x: 0, y: 0 });
+   431→  const positionStartRef = useRef({ x: 0, y: 0 });
+   432→  const elementRef = useRef<HTMLDivElement>(null);
+   433→
+   434→  const handleMouseDown = useCallback(
+   435→    (e: React.MouseEvent) => {
+   436→      e.preventDefault();
+   437→      const element = elementRef.current;
+   438→      if (!element) return;
+   439→
+   440→      const rect = element.getBoundingClientRect();
+   441→      const currentPos = position ?? { x: rect.left, y: rect.top };
+   442→
+   443→      setIsDragging(true);
+   444→      dragStartRef.current = { x: e.clientX, y: e.clientY };
+   445→      positionStartRef.current = currentPos;
+   446→
+   447→      if (!position) {
+   448→        setPosition(currentPos);
+   449→      }
+   450→    },
+   451→    [position]
+   452→  );
+   453→
+   454→  useEffect(() => {
+   455→    if (!isDragging) return;
+   456→
+   457→    const handleMouseMove = (e: MouseEvent) => {
+   458→      const deltaX = e.clientX - dragStartRef.current.x;
+   459→      const deltaY = e.clientY - dragStartRef.current.y;
+   460→      setPosition({
+   461→        x: positionStartRef.current.x + deltaX,
+   462→        y: positionStartRef.current.y + deltaY,
+   463→      });
+   464→    };
+   465→
+   466→    const handleMouseUp = () => setIsDragging(false);
+   467→
+   468→    document.addEventListener("mousemove", handleMouseMove);
+   469→    document.addEventListener("mouseup", handleMouseUp);
+   470→
+   471→    return () => {
+   472→      document.removeEventListener("mousemove", handleMouseMove);
+   473→      document.removeEventListener("mouseup", handleMouseUp);
+   474→    };
+   475→  }, [isDragging]);
+   476→
+   477→  return { position, isDragging, handleMouseDown, elementRef };
+   478→};
+   479→
+   480→// Settings Panel Component - draggable floating overlay
+   481→const SettingsPanel = ({
+   482→  isOpen,
+   483→  onClose,
+   484→  config,
+   485→  strategies,
+   486→  sendCommand,
+   487→}: {
+   488→  isOpen: boolean;
+   489→  onClose: () => void;
+   490→  config: AutopilotConfig;
+   491→  strategies: AutopilotStrategies;
+   492→  sendCommand: (cmd: AutopilotCommand) => void;
+   493→}) => {
+   494→  const { position, isDragging, handleMouseDown, elementRef } = useDraggable();
+   495→
+   496→  if (!isOpen) return null;
+   497→
+   498→  const style = position
+   499→    ? {
+   500→        position: "fixed" as const,
+   501→        left: position.x,
+   502→        top: position.y,
+   503→        zIndex: 9999,
+   504→      }
+   505→    : { position: "absolute" as const, right: 12, top: 48, zIndex: 50 };
+   506→
+   507→  const panel = (
+   508→    <div
+   509→      ref={elementRef}
+   510→      className="bg-bg-secondary border-border-primary min-w-[200px] rounded-lg border shadow-xl"
+   511→      style={style}
+   512→    >
+   513→      {/* Draggable Header */}
+   514→      <div
+   515→        className={cn(
+   516→          "border-border-primary flex items-center justify-between border-b px-3 py-2",
+   517→          isDragging ? "cursor-grabbing" : "cursor-grab"
+   518→        )}
+   519→        onMouseDown={handleMouseDown}
+   520→      >
+   521→        <span className="text-[10px] font-semibold tracking-wide text-white/60 uppercase select-none">
+   522→          Settings
+   523→        </span>
+   524→        <button
+   525→          onClick={onClose}
+   526→          onMouseDown={e => e.stopPropagation()}
+   527→          className="text-text-secondary hover:text-text-primary transition-colors"
+   528→        >
+   529→          <X className="h-3.5 w-3.5" />
+   530→        </button>
+   531→      </div>
+   532→
+   533→      {/* Settings Content */}
+   534→      <div className="space-y-2 p-3">
+   535→        {/* Auto Sources Toggle */}
+   536→        <div className="flex items-center justify-between">
+   537→          <div className="flex items-center gap-2">
+   538→            <Eye className="text-text-info h-3.5 w-3.5" />
+   539→            <span className="text-[11px] text-white/70">Auto Sources</span>
+   540→          </div>
+   541→          <Switch
+   542→            size="sm"
+   543→            checked={config.autoSourcesEnabled}
+   544→            onCheckedChange={checked =>
+   545→              sendCommand({ command: "toggle_sources", enabled: checked })
+   546→            }
+   547→          />
+   548→        </div>
+   549→
+   550→        {/* Sub-toggles when Auto Sources enabled */}
+   551→        {config.autoSourcesEnabled && (
+   552→          <>
+   553→            <div className="flex items-center justify-between pl-4">
+   554→              <div className="flex items-center gap-2">
+   555→                <Flame className="text-orange h-3 w-3" />
+   556→                <span className="text-[10px] text-white/50">Trending</span>
+   557→              </div>
+   558→              <Switch
+   559→                size="sm"
+   560→                checked={config.trendingEnabled}
+   561→                onCheckedChange={checked =>
+   562→                  sendCommand({ command: "toggle_trending", enabled: checked })
+   563→                }
+   564→              />
+   565→            </div>
+   566→            <div className="flex items-center justify-between pl-4">
+   567→              <div className="flex items-center gap-2">
+   568→                <Wallet className="text-text-success h-3 w-3" />
+   569→                <span className="text-[10px] text-white/50">Whale Moves</span>
+   570→              </div>
+   571→              <Switch
+   572→                size="sm"
+   573→                checked={config.whalesEnabled}
+   574→                onCheckedChange={checked =>
+   575→                  sendCommand({ command: "toggle_whales", enabled: checked })
+   576→                }
+   577→              />
+   578→            </div>
+   579→          </>
+   580→        )}
+   581→
+   582→        {/* Market Filter Toggle */}
+   583→        <div className="flex items-center justify-between">
+   584→          <div className="flex items-center gap-2">
+   585→            <ShieldAlert className="text-purple h-3.5 w-3.5" />
+   586→            <span className="text-[11px] text-white/70">Market Filter</span>
+   587→          </div>
+   588→          <Switch
+   589→            size="sm"
+   590→            checked={config.marketFilterEnabled}
+   591→            onCheckedChange={checked =>
+   592→              sendCommand({ command: "toggle_filter", enabled: checked })
+   593→            }
+   594→          />
+   595→        </div>
+   596→
+   597→        {/* Refresh Sources Button */}
+   598→        <button
+   599→          onClick={() => sendCommand({ command: "refresh_sources" })}
+   600→          className="flex w-full items-center justify-center gap-2 rounded bg-white/5 px-3 py-1.5 text-[11px] text-white/70 transition-colors hover:bg-white/10"
+   601→        >
+   602→          <RefreshCw className="h-3 w-3" />
+   603→          Refresh Sources
+   604→        </button>
+   605→
+   606→        {/* Position Size Display */}
+   607→        <div className="flex items-center justify-between border-t border-white/10 pt-2 text-[10px] text-white/50">
+   608→          <span>Position Size</span>
+   609→          <span>{config.positionSizeSol} SOL</span>
+   610→        </div>
+   611→
+   612→        {/* Strategies section */}
+   613→        <div className="border-t border-white/10 pt-2">
+   614→          <div className="mb-2 flex items-center justify-between">
+   615→            <div className="flex items-center gap-2">
+   616→              <Layers className="h-3.5 w-3.5 text-white/60" />
+   617→              <span className="text-[11px] font-medium text-white/70">
+   618→                Strategies
+   619→              </span>
+   620→            </div>
+   621→            <span
+   622→              className={cn(
+   623→                "rounded px-1.5 py-0.5 text-[9px] font-semibold",
+   624→                strategies.active.length > 0
+   625→                  ? "bg-bg-success-primary text-text-success"
+   626→                  : "bg-white/10 text-white/50"
+   627→              )}
+   628→            >
+   629→              {strategies.active.length} ACTIVE
+   630→            </span>
+   631→          </div>
+   632→          <div className="space-y-1">
+   633→            {strategies.available.map(strategy => {
+   634→              const isActive = new Set(strategies.active).has(strategy.id);
+   635→              return (
+   636→                <button
+   637→                  key={strategy.id}
+   638→                  onClick={() =>
+   639→                    sendCommand({
+   640→                      command: "toggle_strategy",
+   641→                      strategyId: strategy.id,
+   642→                      enabled: !isActive,
+   643→                    })
+   644→                  }
+   645→                  className={cn(
+   646→                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors",
+   647→                    isActive
+   648→                      ? "bg-bg-success-primary text-text-success"
+   649→                      : "bg-white/5 text-white/70 hover:bg-white/10"
+   650→                  )}
+   651→                >
+   652→                  {isActive ? (
+   653→                    <CheckCircle2 className="h-3 w-3 flex-shrink-0" />
+   654→                  ) : (
+   655→                    <Circle className="h-3 w-3 flex-shrink-0 text-white/40" />
+   656→                  )}
+   657→                  <span className="truncate text-[10px]">{strategy.name}</span>
+   658→                </button>
+   659→              );
+   660→            })}
+   661→          </div>
+   662→        </div>
+   663→      </div>
+   664→    </div>
+   665→  );
+   666→
+   667→  return position ? createPortal(panel, document.body) : panel;
+   668→};
+   669→
+   670→// Stats Panel Component
+   671→const StatsPanel = ({
+   672→  stats,
+   673→  unrealizedPnlSol,
+   674→  hasOpenPositions,
+   675→  onCloseAll,
+   676→}: {
+   677→  stats: AutopilotStats;
+   678→  unrealizedPnlSol: number;
+   679→  hasOpenPositions: boolean;
+   680→  onCloseAll: () => void;
+   681→}) => {
+   682→  // Realized = lifetime total minus current unrealized
+   683→  const realizedPnlSol = stats.totalPnlSol - unrealizedPnlSol;
+   684→  const isRealizedProfit = realizedPnlSol >= 0;
+   685→  const isUnrealizedProfit = unrealizedPnlSol >= 0;
+   686→
+   687→  return (
+   688→    <div className="border-border-primary bg-bg-tertiary/30 flex items-center gap-2 rounded-lg border p-3">
+   689→      <div className="grid flex-1 grid-cols-5 gap-2">
+   690→        <div className="text-center">
+   691→          <div className="text-text-primary text-lg font-bold">
+   692→            {stats.closedTrades}
+   693→          </div>
+   694→          <div className="text-text-secondary text-[10px]">Trades</div>
+   695→        </div>
+   696→        <div className="text-center">
+   697→          <div className="text-text-primary text-lg font-bold">
+   698→            {(stats.winRate * 100).toFixed(0)}%
+   699→          </div>
+   700→          <div className="text-text-secondary text-[10px]">Win Rate</div>
+   701→        </div>
+   702→        <div className="text-center">
+   703→          <div className="text-text-primary text-lg font-bold">
+   704→            {stats.wins}W/{stats.losses}L
+   705→          </div>
+   706→          <div className="text-text-secondary text-[10px]">Record</div>
+   707→        </div>
+   708→        <div className="text-center">
+   709→          <div
+   710→            className={cn(
+   711→              "text-lg font-bold",
+   712→              isRealizedProfit ? "text-text-success" : "text-text-error"
+   713→            )}
+   714→          >
+   715→            {isRealizedProfit ? "+" : ""}
+   716→            {realizedPnlSol.toFixed(4)}
+   717→          </div>
+   718→          <div className="text-text-secondary text-[10px]">Realized</div>
+   719→        </div>
+   720→        <div className="text-center">
+   721→          <div
+   722→            className={cn(
+   723→              "text-lg font-bold",
+   724→              isUnrealizedProfit ? "text-text-success" : "text-text-error"
+   725→            )}
+   726→          >
+   727→            {isUnrealizedProfit ? "+" : ""}
+   728→            {unrealizedPnlSol.toFixed(4)}
+   729→          </div>
+   730→          <div className="text-text-secondary text-[10px]">Unrealized</div>
+   731→        </div>
+   732→      </div>
+   733→      {/* Close All Button */}
+   734→      <button
+   735→        onClick={onCloseAll}
+   736→        disabled={!hasOpenPositions}
+   737→        className={cn(
+   738→          "flex flex-col items-center justify-center self-center rounded px-2 py-1 text-[10px] transition-colors",
+   739→          hasOpenPositions
+   740→            ? "text-text-error hover:bg-bg-error-primary cursor-pointer"
+   741→            : "text-text-tertiary cursor-not-allowed opacity-50"
+   742→        )}
+   743→      >
+   744→        <Target className="h-4 w-4" />
+   745→        <span>Close All</span>
+   746→      </button>
+   747→    </div>
+   748→  );
+   749→};
+   750→
+   751→// Section Header Component
+   752→const SectionHeader = ({ children }: { children: React.ReactNode }) => (
+   753→  <div className="text-text-tertiary mb-1.5 text-[10px] font-medium tracking-wide uppercase">
+   754→    {children}
+   755→  </div>
+   756→);
+   757→
+   758→// Collapsible Section Component - follows ControlsPanel/StrategiesPanel pattern
+   759→const CollapsibleSection = ({
+   760→  title,
+   761→  defaultExpanded = true,
+   762→  children,
+   763→}: {
+   764→  title: string;
+   765→  defaultExpanded?: boolean;
+   766→  children: React.ReactNode;
+   767→}) => {
+   768→  const [expanded, setExpanded] = useState(defaultExpanded);
+   769→
+   770→  return (
+   771→    <div
+   772→      className={cn(
+   773→        "flex flex-shrink-0 flex-col transition-opacity duration-200",
+   774→        !expanded && "opacity-75"
+   775→      )}
+   776→    >
+   777→      <button
+   778→        onClick={() => setExpanded(!expanded)}
+   779→        className={cn(
+   780→          "flex cursor-pointer items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase transition-colors",
+   781→          expanded
+   782→            ? "text-text-tertiary hover:text-text-secondary mb-1.5"
+   783→            : "text-text-tertiary/80 hover:text-text-secondary hover:border-border-primary/30 hover:bg-bg-tertiary/30 rounded border border-transparent px-1.5 py-1"
+   784→        )}
+   785→      >
+   786→        <span
+   787→          className={cn(
+   788→            "text-[8px] transition-transform duration-200",
+   789→            expanded ? "rotate-0" : "-rotate-90"
+   790→          )}
+   791→        >
+   792→          ▼
+   793→        </span>
+   794→        {title}
+   795→        {!expanded && (
+   796→          <span className="text-text-tertiary/60 ml-auto text-[8px] font-normal normal-case">
+   797→            click to expand
+   798→          </span>
+   799→        )}
+   800→      </button>
+   801→      <div
+   802→        className={cn(
+   803→          "grid transition-all duration-200",
+   804→          expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+   805→        )}
+   806→      >
+   807→        <div className="overflow-hidden">
+   808→          <div className="flex flex-col gap-2">{children}</div>
+   809→        </div>
+   810→      </div>
+   811→    </div>
+   812→  );
+   813→};
+   814→
+   815→// DEBUG: Floating signal injection panel for testing glow effects
+   816→// TODO: Remove before production
+   817→const SignalDebugPanel = ({
+   818→  isOpen,
+   819→  onClose,
+   820→  tokenList,
+   821→}: {
+   822→  isOpen: boolean;
+   823→  onClose: () => void;
+   824→  tokenList: {
+   825→    watchlist: AutopilotTokenWithPrices[];
+   826→    trending: AutopilotTokenWithPrices[];
+   827→    whales: AutopilotTokenWithPrices[];
+   828→  };
+   829→}) => {
+   830→  const { position, isDragging, handleMouseDown, elementRef } = useDraggable();
+   831→  const addSignal = useGlobalStore(state => state.autopilot.addSignal);
+   832→
+   833→  // Get all tokens for signal injection
+   834→  const allTokens = useMemo(() => {
+   835→    return [...tokenList.watchlist, ...tokenList.trending, ...tokenList.whales];
+   836→  }, [tokenList]);
+   837→
+   838→  const injectSignal = useCallback(
+   839→    (type: "buy" | "sell") => {
+   840→      if (allTokens.length === 0) return;
+   841→
+   842→      // Pick a random token
+   843→      const token = allTokens[Math.floor(Math.random() * allTokens.length)];
+   844→
+   845→      addSignal({
+   846→        timestamp: Date.now(),
+   847→        mint: token.mint,
+   848→        symbol: token.symbol,
+   849→        signalType: type === "buy" ? "magic_buy" : "magic_exit",
+   850→        action: type === "buy" ? "buy" : "sell",
+   851→        reason: `[DEBUG] Test ${type} signal`,
+   852→      });
+   853→    },
+   854→    [allTokens, addSignal]
+   855→  );
+   856→
+   857→  const injectMultipleSignals = useCallback(
+   858→    (type: "buy" | "sell", count: number) => {
+   859→      if (allTokens.length === 0) return;
+   860→
+   861→      // Pick a random token and add multiple signals to it
+   862→      const token = allTokens[Math.floor(Math.random() * allTokens.length)];
+   863→
+   864→      for (let i = 0; i < count; i++) {
+   865→        addSignal({
+   866→          timestamp: Date.now() - i * 100, // Slightly stagger timestamps
+   867→          mint: token.mint,
+   868→          symbol: token.symbol,
+   869→          signalType: type === "buy" ? "magic_buy" : "magic_exit",
+   870→          action: type === "buy" ? "buy" : "sell",
+   871→          reason: `[DEBUG] Test ${type} signal ${i + 1}/${count}`,
+   872→        });
+   873→      }
+   874→    },
+   875→    [allTokens, addSignal]
+   876→  );
+   877→
+   878→  if (!isOpen) return null;
+   879→
+   880→  const style = position
+   881→    ? {
+   882→        position: "fixed" as const,
+   883→        left: position.x,
+   884→        top: position.y,
+   885→        zIndex: 9999,
+   886→      }
+   887→    : { position: "absolute" as const, right: 12, top: 48, zIndex: 50 };
+   888→
+   889→  const panel = (
+   890→    <div
+   891→      ref={elementRef}
+   892→      className="bg-bg-secondary border-border-primary min-w-[220px] rounded-lg border shadow-xl"
+   893→      style={style}
+   894→    >
+   895→      {/* Draggable Header */}
+   896→      <div
+   897→        className={cn(
+   898→          "border-border-primary flex items-center justify-between border-b px-3 py-2",
+   899→          isDragging ? "cursor-grabbing" : "cursor-grab"
+   900→        )}
+   901→        onMouseDown={handleMouseDown}
+   902→      >
+   903→        <span className="text-text-warning text-[10px] font-semibold tracking-wide uppercase select-none">
+   904→          Debug Signals
+   905→        </span>
+   906→        <button
+   907→          onClick={onClose}
+   908→          onMouseDown={e => e.stopPropagation()}
+   909→          className="text-text-secondary hover:text-text-primary transition-colors"
+   910→        >
+   911→          <X className="h-3.5 w-3.5" />
+   912→        </button>
+   913→      </div>
+   914→
+   915→      {/* Debug Content */}
+   916→      <div className="space-y-3 p-3">
+   917→        {/* Buy Signals */}
+   918→        <div>
+   919→          <div className="text-text-success mb-1.5 text-[9px] font-semibold uppercase">
+   920→            Buy Signals
+   921→          </div>
+   922→          <div className="flex flex-wrap gap-1">
+   923→            {[1, 2, 3, 5, 10].map(n => (
+   924→              <button
+   925→                key={`buy-${n}`}
+   926→                onClick={() =>
+   927→                  n === 1
+   928→                    ? injectSignal("buy")
+   929→                    : injectMultipleSignals("buy", n)
+   930→                }
+   931→                className="bg-bg-success-primary text-text-success rounded px-2 py-0.5 text-[10px] hover:opacity-80"
+   932→              >
+   933→                +{n}
+   934→              </button>
+   935→            ))}
+   936→          </div>
+   937→        </div>
+   938→
+   939→        {/* Sell Signals */}
+   940→        <div>
+   941→          <div className="text-text-error mb-1.5 text-[9px] font-semibold uppercase">
+   942→            Sell Signals
+   943→          </div>
+   944→          <div className="flex flex-wrap gap-1">
+   945→            {[1, 2, 3, 5, 10].map(n => (
+   946→              <button
+   947→                key={`sell-${n}`}
+   948→                onClick={() =>
+   949→                  n === 1
+   950→                    ? injectSignal("sell")
+   951→                    : injectMultipleSignals("sell", n)
+   952→                }
+   953→                className="bg-bg-error-primary text-text-error rounded px-2 py-0.5 text-[10px] hover:opacity-80"
+   954→              >
+   955→                +{n}
+   956→              </button>
+   957→            ))}
+   958→          </div>
+   959→        </div>
+   960→
+   961→        {/* Token count info */}
+   962→        <div className="text-text-tertiary border-t border-white/10 pt-2 text-[9px]">
+   963→          {allTokens.length} tokens available for injection
+   964→        </div>
+   965→      </div>
+   966→    </div>
+   967→  );
+   968→
+   969→  // Portal to document.body when dragged
+   970→  return position ? createPortal(panel, document.body) : panel;
+   971→};
+   972→
+   973→// Main Autopilot Widget Component
+   974→export const AutopilotWidget = () => {
+   975→  // Connect to autopilot backend and auto-subscribe to NATS market data
+   976→  useAutopilotSubscription({ isEnabled: true });
+   977→
+   978→  // Get all autopilot data from Zustand store
+   979→  const {
+   980→    positions,
+   981→    marketStatus,
+   982→    stats,
+   983→    scanTick,
+   984→    tokenList,
+   985→    config,
+   986→    strategies,
+   987→    isConnected,
+   988→    sendCommand,
+   989→    unrealizedPnlSol,
+   990→  } = useAutopilotData();
+   991→
+   992→  // Get signal strength map for screener token glow indicators
+   993→  const signalStrengthMap = useTokenSignalStrength();
+   994→
+   995→  // Settings panel state
+   996→  const [settingsOpen, setSettingsOpen] = useState(false);
+   997→
+   998→  // DEBUG: Debug panel state (remove before production)
+   999→  const [debugOpen, setDebugOpen] = useState(false);
+  1000→
+  1001→  const totalTokens =
+  1002→    tokenList.watchlist.length +
+  1003→    tokenList.trending.length +
+  1004→    tokenList.whales.length;
+  1005→
+  1006→  return (
+  1007→    <div className="flex h-full flex-col gap-4 overflow-hidden">
+  1008→      {/* Header - Market Status */}
+  1009→      <div className="flex items-center justify-between">
+  1010→        <div className="flex items-center gap-2">
+  1011→          <Bot
+  1012→            className={cn(
+  1013→              "h-5 w-5",
+  1014→              isConnected ? "text-text-success" : "text-text-error"
+  1015→            )}
+  1016→          />
+  1017→          <span className="text-text-primary text-sm font-semibold">
+  1018→            Token Autopilot
+  1019→          </span>
+  1020→          {scanTick && (
+  1021→            <Tooltip
+  1022→              content={`Scan #${scanTick.scanNumber} analyzed ${totalTokens} tokens this cycle`}
+  1023→              side="bottom"
+  1024→            >
+  1025→              <span className="text-text-secondary cursor-help text-[10px]">
+  1026→                #{scanTick.scanNumber} · {totalTokens} tokens
+  1027→              </span>
+  1028→            </Tooltip>
+  1029→          )}
+  1030→          {isConnected && (
+  1031→            <>
+  1032→              <span className="text-text-tertiary text-[10px]">|</span>
+  1033→              <ScanCountdown
+  1034→                scanTimestamp={scanTick?.timestamp ?? null}
+  1035→                intervalMs={config.pollIntervalMs}
+  1036→              />
+  1037→            </>
+  1038→          )}
+  1039→        </div>
+  1040→        <div className="flex items-center gap-3">
+  1041→          {/* PAPER/LIVE mode badge */}
+  1042→          <span
+  1043→            className={cn(
+  1044→              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+  1045→              config.mode === "paper"
+  1046→                ? "bg-bg-warning-primary text-text-warning"
+  1047→                : "bg-bg-success-primary text-text-success"
+  1048→            )}
+  1049→          >
+  1050→            {config.mode.toUpperCase()}
+  1051→          </span>
+  1052→
+  1053→          {/* Live Trading toggle with tooltip */}
+  1054→          <Tooltip
+  1055→            content="Live trading coming soon"
+  1056→            side="bottom"
+  1057→          >
+  1058→            <div className="flex cursor-not-allowed items-center gap-1.5 opacity-50">
+  1059→              <Power className="text-text-secondary h-3.5 w-3.5" />
+  1060→              <Switch
+  1061→                size="sm"
+  1062→                checked={false}
+  1063→                disabled
+  1064→              />
+  1065→            </div>
+  1066→          </Tooltip>
+  1067→
+  1068→          {/* DEBUG: Bug icon to open debug panel */}
+  1069→          <button
+  1070→            onClick={() => setDebugOpen(!debugOpen)}
+  1071→            className={cn(
+  1072→              "rounded p-1 transition-colors",
+  1073→              debugOpen
+  1074→                ? "text-text-warning bg-white/10"
+  1075→                : "text-text-tertiary hover:text-text-warning hover:bg-white/5"
+  1076→            )}
+  1077→          >
+  1078→            <Bug className="h-4 w-4" />
+  1079→          </button>
+  1080→
+  1081→          {/* Settings gear */}
+  1082→          <button
+  1083→            onClick={() => setSettingsOpen(!settingsOpen)}
+  1084→            disabled={!isConnected}
+  1085→            className={cn(
+  1086→              "rounded p-1 transition-colors",
+  1087→              settingsOpen
+  1088→                ? "text-text-primary bg-white/10"
+  1089→                : "text-text-secondary hover:text-text-primary hover:bg-white/5"
+  1090→            )}
+  1091→          >
+  1092→            <Settings className="h-4 w-4" />
+  1093→          </button>
+  1094→
+  1095→          {/* Separator */}
+  1096→          <div className="bg-border-primary h-4 w-px" />
+  1097→
+  1098→          {/* Market status badge */}
+  1099→          <Tooltip
+  1100→            content="SOL price and market condition (change since widget opened)"
+  1101→            side="bottom"
+  1102→          >
+  1103→            <div className="cursor-help">
+  1104→              <MarketStatusBadge status={marketStatus} />
+  1105→            </div>
+  1106→          </Tooltip>
+  1107→        </div>
+  1108→      </div>
+  1109→
+  1110→      {/* Connection Status - Always visible when disconnected */}
+  1111→      {!isConnected && (
+  1112→        <div className="bg-bg-warning-primary border-border-warning-primary flex items-center gap-2 rounded-lg border px-3 py-2">
+  1113→          <AlertTriangle className="text-text-warning h-4 w-4" />
+  1114→          <span className="text-text-warning text-xs">
+  1115→            Connecting to autopilot backend...
+  1116→          </span>
+  1117→        </div>
+  1118→      )}
+  1119→
+  1120→      {/* ═══ OPEN POSITIONS SECTION ═══ */}
+  1121→      {positions.length > 0 && (
+  1122→        <div className="flex flex-shrink-0 flex-col">
+  1123→          <SectionHeader>Open Positions ({positions.length})</SectionHeader>
+  1124→          <div className="max-h-40 space-y-2 overflow-auto">
+  1125→            {positions.map(pos => (
+  1126→              <PositionCard
+  1127→                key={pos.mint}
+  1128→                position={pos}
+  1129→              />
+  1130→            ))}
+  1131→          </div>
+  1132→        </div>
+  1133→      )}
+  1134→
+  1135→      {/* ═══ PERFORMANCE SECTION ═══ */}
+  1136→      <CollapsibleSection
+  1137→        title="Performance"
+  1138→        defaultExpanded={true}
+  1139→      >
+  1140→        <StatsPanel
+  1141→          stats={stats}
+  1142→          unrealizedPnlSol={unrealizedPnlSol}
+  1143→          hasOpenPositions={positions.length > 0}
+  1144→          onCloseAll={() => sendCommand({ command: "close_all" })}
+  1145→        />
+  1146→      </CollapsibleSection>
+  1147→
+  1148→      {/* ═══ TOKEN WATCH SECTION ═══ (Three-column layout) */}
+  1149→      <div className="flex min-h-0 flex-1 flex-col gap-2">
+  1150→        <SectionHeader>Screener</SectionHeader>
+  1151→
+  1152→        <div className="grid min-h-0 flex-1 grid-cols-3 gap-2 overflow-hidden">
+  1153→          {/* Watchlist Column */}
+  1154→          <TokenListColumn
+  1155→            title="Watchlist"
+  1156→            icon={Eye}
+  1157→            tokens={tokenList.watchlist}
+  1158→            iconColor="text-text-info"
+  1159→            signalStrengthMap={signalStrengthMap}
+  1160→          />
+  1161→
+  1162→          {/* Trending Column */}
+  1163→          <TokenListColumn
+  1164→            title="Trending"
+  1165→            icon={Flame}
+  1166→            tokens={tokenList.trending}
+  1167→            iconColor="text-orange"
+  1168→            signalStrengthMap={signalStrengthMap}
+  1169→          />
+  1170→
+  1171→          {/* Whale Moves Column */}
+  1172→          <TokenListColumn
+  1173→            title="Whales"
+  1174→            icon={Wallet}
+  1175→            tokens={tokenList.whales}
+  1176→            iconColor="text-text-success"
+  1177→            signalStrengthMap={signalStrengthMap}
+  1178→          />
+  1179→        </div>
+  1180→      </div>
+  1181→
+  1182→      {/* Settings Panel Overlay */}
+  1183→      <SettingsPanel
+  1184→        isOpen={settingsOpen}
+  1185→        onClose={() => setSettingsOpen(false)}
+  1186→        config={config}
+  1187→        strategies={strategies}
+  1188→        sendCommand={sendCommand}
+  1189→      />
+  1190→
+  1191→      {/* DEBUG: Signal Debug Panel Overlay - remove before production */}
+  1192→      <SignalDebugPanel
+  1193→        isOpen={debugOpen}
+  1194→        onClose={() => setDebugOpen(false)}
+  1195→        tokenList={tokenList}
+  1196→      />
+  1197→    </div>
+  1198→  );
+  1199→};
+  1200→
+  1201→export default AutopilotWidget;
+  1202→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

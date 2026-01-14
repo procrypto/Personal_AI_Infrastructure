@@ -1,0 +1,168 @@
+---
+phase: 12-data-flow-debugging
+plan: 01
+type: execute
+status: pending
+---
+
+<objective>
+Fix NATS market data enrichment for tokens and positions in the autopilot widget.
+
+Purpose: Tokens and positions currently show 0.00% and "Loading" because market data isn't being used correctly.
+Output: Live price changes displayed for all tokens and positions.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./summary.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+**Prior Phase (dependency):**
+@.planning/phases/11-design-system-alignment/11-01-SUMMARY.md
+
+**Key Files:**
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts
+@apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+
+**Root Cause Analysis:**
+
+1. **Token prices (0.00%):**
+   - `useAutopilotData()` returns raw `tokenList` from store
+   - `useAutopilotTokensWithPrices` hook EXISTS but is NOT USED
+   - Tokens have `change1h: undefined` which defaults to 0 in `TokenRow`
+
+2. **Position P&L ("Loading"):**
+   - `useAutopilotPositions` is correctly used
+   - NATS subscriptions are made via `useAutopilotSubscription`
+   - `marketDataMap[position.mint]` returns empty/undefined
+   - Need to verify: is NATS data arriving? Is it being stored correctly?
+
+**Fix Strategy:**
+
+- Task 1: Use `useAutopilotTokensWithPrices` in `useAutopilotData` to enrich tokens
+- Task 2: Add diagnostic logging to verify NATS data flow
+- Task 3: Verify market data store structure matches lookup pattern
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Integrate useAutopilotTokensWithPrices into useAutopilotData</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts</files>
+  <action>
+Replace raw `tokenList` with enriched tokens from `useAutopilotTokensWithPrices`:
+
+1. Import `useAutopilotTokensWithPrices` from './useAutopilotTokensWithPrices'
+2. Call the hook to get `tokenListWithPrices`
+3. Return `tokenListWithPrices` instead of raw `tokenList`
+
+The widget already expects `WatchedToken` with `priceUsd` and `change1h` properties,
+so this change should wire up the data correctly.
+  </action>
+  <verify>TypeScript compiles without errors (`bun run typecheck` in monorepo root)</verify>
+  <done>useAutopilotData returns enriched tokenList with price data from NATS</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add diagnostic logging for NATS market data flow</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts, apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts</files>
+  <action>
+Add temporary console.log statements to understand data flow:
+
+In useAutopilotPositions:
+- Log position mints being looked up
+- Log marketDataMap keys to see what's available
+- Log if mintData is found/not found
+
+In useAutopilotTokensWithPrices:
+- Log token mints being enriched
+- Log marketDataMap structure for first token
+- Log enrichment result
+
+Format: `[Autopilot] {hook}: {message}` for easy filtering
+
+Note: These are temporary diagnostics. Will be removed in Task 3 if data flows correctly.
+  </action>
+  <verify>Console shows diagnostic output when widget loads</verify>
+  <done>Can see in console whether NATS data is arriving and how it's structured</done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Token enrichment integration and diagnostic logging</what-built>
+  <how-to-verify>
+    1. Run: `cd apps/web-terminal && bun run dev`
+    2. Open: http://localhost:5174
+    3. Open browser DevTools console
+    4. Navigate to Dashboard and locate the Autopilot widget
+    5. Check console for `[Autopilot]` diagnostic messages:
+       - Do you see position mints being looked up?
+       - Do you see marketDataMap keys?
+       - Is data being found or "not found"?
+    6. Check token rows (Watchlist, Trending, Whale Moves):
+       - Are price changes now showing non-zero values?
+       - Or still showing 0.0%?
+    7. Check position cards:
+       - Still showing "Loading"?
+       - Or showing P&L values?
+    8. Report findings so we can determine next fix
+  </how-to-verify>
+  <resume-signal>Describe what you see: "tokens working", "positions still loading", or specific diagnostic output</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `bun run typecheck` passes without errors
+- [ ] Token rows show live price changes (not 0.0%)
+- [ ] Position cards show P&L values (not "Loading")
+- [ ] Diagnostic logs removed if no longer needed
+</verification>
+
+<success_criteria>
+
+- useAutopilotData returns enriched tokenList with prices
+- Token rows display real price change percentages
+- Position cards display real P&L values
+- No TypeScript errors
+- Console logs confirm data flow is working
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/12-data-flow-debugging/12-01-SUMMARY.md`:
+
+# Phase 12 Plan 01: Data Flow Debugging Summary
+
+**[Substantive one-liner about what shipped]**
+
+## Accomplishments
+
+- [Key outcome 1]
+- [Key outcome 2]
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts` - Integrated token price enrichment
+
+## Decisions Made
+
+[Key decisions and rationale, or "None"]
+
+## Issues Encountered
+
+[Problems and resolutions, or "None"]
+
+## Next Step
+
+[If data still not flowing: "Need Task 3 to fix store structure"]
+[If working: "Ready for Phase 13: Layout & Clarity"]
+</output>

@@ -1,0 +1,153 @@
+/**
+ * useAutopilotSubscription
+ *
+ * Manages the autopilot WebSocket subscription and auto-subscribes to
+ * NATS market_data topics for all position mints AND tokenList mints.
+ */
+
+import { useEffect, useRef, useMemo } from "react";
+import { useBaseSubscription } from "./useBaseSubscription";
+import { connectAutopilotWebsocket } from "@/websocket/autopilot/connectAutopilotWebsocket";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { natsWebsocket } from "@/websocket/nats/natsWebsocketInstance";
+import type { MarketDataTopicName } from "@/api/marketData/MarketDataTopic";
+import type { SolPriceTopicName } from "@/api/solPrice/SolPriceTopic";
+
+const AUTOPILOT_POSITIONS_SUBSCRIBER_ID = "autopilot-positions";
+const AUTOPILOT_TOKENS_SUBSCRIBER_ID = "autopilot-tokens";
+const AUTOPILOT_SOL_PRICE_SUBSCRIBER_ID = "autopilot-sol-price";
+
+export const useAutopilotSubscription = ({
+  isEnabled = true,
+}: { isEnabled?: boolean } = {}) => {
+  // Get position mints from store
+  const positionMints = useGlobalStore(
+    useShallow(state => Array.from(state.autopilot.positions.keys()))
+  );
+
+  // Get tokenList from store
+  const tokenList = useGlobalStore(
+    useShallow(state => state.autopilot.tokenList)
+  );
+
+  // Extract unique mints from all token lists
+  const tokenListMints = useMemo(() => {
+    const mints = new Set<string>();
+    tokenList.watchlist.forEach(t => mints.add(t.mint));
+    tokenList.trending.forEach(t => mints.add(t.mint));
+    tokenList.whales.forEach(t => mints.add(t.mint));
+    return Array.from(mints);
+  }, [tokenList]);
+
+  // Track previously subscribed mints to handle add/remove (separate refs for positions and tokens)
+  const subscribedPositionMintsRef = useRef<Set<string>>(new Set());
+  const subscribedTokenMintsRef = useRef<Set<string>>(new Set());
+
+  // Subscribe to autopilot websocket
+  useBaseSubscription({
+    connectionId: "autopilot-subscription",
+    refetchKey: "default",
+    isEnabled,
+    callbacks: {
+      onSubscribe: async () => {
+        return await connectAutopilotWebsocket();
+      },
+    },
+    websocket: autopilotWebsocket,
+  });
+
+  // Auto-subscribe to NATS market_data for all position mints
+  useEffect(() => {
+    if (!isEnabled) return;
+
+    const currentMints = new Set(positionMints);
+    const previousMints = subscribedPositionMintsRef.current;
+
+    // Subscribe to new mints
+    currentMints.forEach(mint => {
+      if (!previousMints.has(mint)) {
+        const topic = `market_data.${mint}` as MarketDataTopicName;
+        natsWebsocket.subscribeTopic({
+          topic,
+          subscriberId: AUTOPILOT_POSITIONS_SUBSCRIBER_ID,
+          args: { nats_replay: false },
+        });
+      }
+    });
+
+    // Unsubscribe from removed mints
+    previousMints.forEach(mint => {
+      if (!currentMints.has(mint)) {
+        const topic = `market_data.${mint}` as MarketDataTopicName;
+        natsWebsocket.unsubscribeTopic({
+          topic,
+          subscriberId: AUTOPILOT_POSITIONS_SUBSCRIBER_ID,
+        });
+      }
+    });
+
+    // Update ref
+    subscribedPositionMintsRef.current = currentMints;
+
+    // Cleanup on unmount
+    return () => {
+      subscribedPositionMintsRef.current.forEach(mint => {
+        const topic = `market_data.${mint}` as MarketDataTopicName;
+        natsWebsocket.unsubscribeTopic({
+          topic,
+          subscriberId: AUTOPILOT_POSITIONS_SUBSCRIBER_ID,
+        });
+      });
+      subscribedPositionMintsRef.current = new Set();
+    };
+  }, [isEnabled, positionMints.join(",")]); // Join to avoid array reference issues
+
+  // Auto-subscribe to NATS market_data for all tokenList mints
+  useEffect(() => {
+    if (!isEnabled) return;
+
+    const currentMints = new Set(tokenListMints);
+    const previousMints = subscribedTokenMintsRef.current;
+
+    // Subscribe to new mints
+    currentMints.forEach(mint => {
+      if (!previousMints.has(mint)) {
+        const topic = `market_data.${mint}` as MarketDataTopicName;
+        natsWebsocket.subscribeTopic({
+          topic,
+          subscriberId: AUTOPILOT_TOKENS_SUBSCRIBER_ID,
+          args: { nats_replay: false },
+        });
+      }
+    });
+
+    // Unsubscribe from removed mints
+    previousMints.forEach(mint => {
+      if (!currentMints.has(mint)) {
+        const topic = `market_data.${mint}` as MarketDataTopicName;
+        natsWebsocket.unsubscribeTopic({
+          topic,
+          subscriberId: AUTOPILOT_TOKENS_SUBSCRIBER_ID,
+        });
+      }
+    });
+
+    // Update ref
+    subscribedTokenMintsRef.current = currentMints;
+
+    // Cleanup on unmount
+    return () => {
+      subscribedTokenMintsRef.current.forEach(mint => {
+        const topic = `market_data.${mint}` as MarketDataTopicName;
+        natsWebsocket.unsubscribeTopic({
+          topic,
+          subscriberId: AUTOPILOT_TOKENS_SUBSCRIBER_ID,
+        });
+      });
+      subscribedTokenMintsRef.current = new Set();
+    };
+  }, [isEnabled, tokenListMints.join(",")]); // Join to avoid array reference issues
+
+  return { positionMints, tokenListMints };
+};

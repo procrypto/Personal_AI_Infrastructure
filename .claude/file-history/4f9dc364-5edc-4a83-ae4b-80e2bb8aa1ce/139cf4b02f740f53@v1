@@ -1,0 +1,96 @@
+---
+phase: 02-dual-path-engine
+plan: 02
+subsystem: signal
+tags: [typescript, ohlcv, signal-processing, rotations]
+
+# Dependency graph
+requires:
+  - phase: 02-01
+    provides: SignalProcessor with requiresOHLCV rule filtering
+provides:
+  - processOHLCV method for complex rule analysis
+  - marketDataProvider option for context enrichment
+  - Minimal TokenMarketData stub creation from OHLCV
+affects: [02-03, websocket-integration]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - Dual-path signal processing (fast path vs OHLCV path)
+    - Context enrichment via provider function
+
+key-files:
+  created: []
+  modified:
+    - src/signal/processor.ts
+
+key-decisions:
+  - "Use provider function pattern for market data lookup"
+  - "Create minimal stub when no market data available"
+
+patterns-established:
+  - "Dual-path processing: processMarketData() for simple rules, processOHLCV() for complex rules"
+  - "Provider function pattern for optional context enrichment"
+
+issues-created: []
+
+# Metrics
+duration: 3min
+completed: 2026-01-09
+---
+
+# Phase 2 Plan 2: OHLCV Processing Path Summary
+
+**Added processOHLCV method to SignalProcessor enabling complex rules (rotations, fractals) to run against candlestick data**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-09T06:18:50Z
+- **Completed:** 2026-01-09T06:22:01Z
+- **Tasks:** 2/2
+- **Files modified:** 1
+
+## Accomplishments
+
+- Added `processOHLCV(mint, ohlcv, marketData?)` method for OHLCV-requiring rules
+- Added `SignalProcessorOptions` with `marketDataProvider` for context enrichment
+- Created `createMinimalTokenData` helper for stub generation when market data unavailable
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1 & 2: OHLCV processing + market data provider** - `17e0784` (feat)
+
+**Plan metadata:** (this commit)
+
+_Note: Both tasks implemented together as they're tightly coupled_
+
+## Files Created/Modified
+
+- `src/signal/processor.ts` - Added processOHLCV method, SignalProcessorOptions interface, createMinimalTokenData helper
+
+## Decisions Made
+
+- Used provider function pattern (`() => Map<string, TokenMarketData>`) for flexible market data lookup
+- Create minimal stub with price from latest OHLCV close when no market data available
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Next Phase Readiness
+
+- OHLCV processing path ready for integration
+- Next: 02-03-PLAN.md will wire OHLCV updates to processOHLCV method
+
+---
+*Phase: 02-dual-path-engine*
+*Completed: 2026-01-09*

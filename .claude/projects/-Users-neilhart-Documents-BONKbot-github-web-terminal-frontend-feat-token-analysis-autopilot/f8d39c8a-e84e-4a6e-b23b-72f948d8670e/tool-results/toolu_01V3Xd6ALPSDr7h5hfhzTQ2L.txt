@@ -1,0 +1,214 @@
+     1→import { createColumnHelper, type ColumnDef } from "@tanstack/react-table";
+     2→import { useMemo } from "react";
+     3→import { Table } from "@/components/table/table";
+     4→import { TABLE_ROW_HEIGHT_SMALL } from "@/config";
+     5→import { useShallow } from "zustand/react/shallow";
+     6→import { cn } from "@/lib/utils";
+     7→import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+     8→import { useGetWatchlist } from "@/api/watchlist/useGetWatchlist";
+     9→import { WatchlistTokenData } from "@/store/memoryStore/slices/websocket-messages-store/types";
+    10→import { SymbolCell } from "@/ui/discovery/lists/shared/cells/symbol-cell";
+    11→import { McapCell } from "@/ui/discovery/lists/shared/cells/mcap-cell";
+    12→import { PriceChangeCell } from "@/ui/discovery/lists/shared/cells/price-change-cell";
+    13→import { TotalVolumeCell } from "@/ui/discovery/lists/shared/cells/total-volume-cell";
+    14→import { LiquidityCell } from "@/ui/discovery/lists/shared/cells/liquidity-cell";
+    15→import { calculatePriceChange } from "@/ui/discovery/lists/shared/utils";
+    16→import { Star } from "lucide-react";
+    17→import { usePausedData } from "@/hooks/usePausedData";
+    18→import { t } from "@lingui/core/macro";
+    19→import { PERCENT_SIGN } from "@/utils/constants";
+    20→
+    21→const columnHelper = createColumnHelper<WatchlistTokenData>();
+    22→
+    23→export type TimeFrame = "5m" | "1h" | "6h";
+    24→
+    25→type WatchlistTableViewProps = {
+    26→  selectedTimeFrame: TimeFrame;
+    27→};
+    28→
+    29→const priceChangeAccessors = {
+    30→  "5m": (row: WatchlistTokenData) =>
+    31→    calculatePriceChange(
+    32→      Number(row.market_data.price_usd),
+    33→      Number(row.market_data.trading_stats_5m.earliest_price_usd)
+    34→    ),
+    35→  "1h": (row: WatchlistTokenData) =>
+    36→    calculatePriceChange(
+    37→      Number(row.market_data.price_usd),
+    38→      Number(row.market_data.trading_stats_1h.earliest_price_usd)
+    39→    ),
+    40→  "6h": (row: WatchlistTokenData) =>
+    41→    calculatePriceChange(
+    42→      Number(row.market_data.price_usd),
+    43→      Number(row.market_data.trading_stats_6h.earliest_price_usd)
+    44→    ),
+    45→};
+    46→
+    47→export const WatchlistTableView = ({
+    48→  selectedTimeFrame,
+    49→}: WatchlistTableViewProps) => {
+    50→  const { data: watchlistPositions } = useGetWatchlist();
+    51→
+    52→  const { watchlistMap, openLocation, isWatchlistLoading } = useGlobalStore(
+    53→    useShallow(state => ({
+    54→      watchlistMap: state.websocketMessages.watchlist.itemsMap,
+    55→      isWatchlistLoading: state.watchlist.isWatchlistDataLoading,
+    56→      openLocation: state.chartPreview.openLocation,
+    57→    }))
+    58→  );
+    59→
+    60→  const positionMap = useMemo(() => {
+    61→    const positionMap = new Map<string, boolean>();
+    62→
+    63→    if (watchlistPositions?.watchlistTokens?.length) {
+    64→      for (const group of watchlistPositions.watchlistTokens) {
+    65→        if (!group?.watchlistTokens?.length) continue;
+    66→
+    67→        const tokens = group.watchlistTokens;
+    68→
+    69→        for (const token of tokens) {
+    70→          positionMap.set(token.tokenMint, true);
+    71→        }
+    72→      }
+    73→    }
+    74→
+    75→    return positionMap;
+    76→  }, [watchlistPositions]);
+    77→
+    78→  const liveData = useMemo(() => {
+    79→    const arr = Array.from(watchlistMap.values()).filter(token =>
+    80→      positionMap.has(token.mint)
+    81→    );
+    82→
+    83→    // Sort by market cap descending
+    84→    return arr.sort((a, b) => {
+    85→      const mcapA = Number(a.market_data.market_cap_usd || 0);
+    86→      const mcapB = Number(b.market_data.market_cap_usd || 0);
+    87→      return mcapB - mcapA;
+    88→    });
+    89→  }, [watchlistMap, positionMap]);
+    90→
+    91→  const data = usePausedData({
+    92→    liveData,
+    93→    isPaused: openLocation === "watchlist",
+    94→  });
+    95→
+    96→  const staticColumns = useMemo(
+    97→    () => [
+    98→      columnHelper.accessor(row => row.market_data.symbol, {
+    99→        id: "symbol",
+   100→        header: t`Token`,
+   101→        cell: props => (
+   102→          <SymbolCell
+   103→            {...props}
+   104→            showWatchlistToggle
+   105→            chartPreviewLocation="watchlist"
+   106→          />
+   107→        ),
+   108→        size: 140,
+   109→        minSize: 120,
+   110→        enableSorting: true,
+   111→      }),
+   112→      columnHelper.accessor(row => Number(row.market_data.market_cap_usd), {
+   113→        id: "mcap",
+   114→        header: t`MCap`,
+   115→        cell: McapCell,
+   116→        size: 100,
+   117→        enableSorting: true,
+   118→      }),
+   119→    ],
+   120→    []
+   121→  );
+   122→
+   123→  const volumeAndLiquidityColumns = useMemo(
+   124→    () => [
+   125→      columnHelper.accessor(row => Number(row.market_data.volume_24h_usd), {
+   126→        id: "volume",
+   127→        header: t`Volume`,
+   128→        cell: TotalVolumeCell,
+   129→        size: 100,
+   130→        enableSorting: true,
+   131→      }),
+   132→      columnHelper.accessor(row => Number(row.market_data.liquidity_usd), {
+   133→        id: "liquidity_usd",
+   134→        header: t`Liquidity`,
+   135→        cell: LiquidityCell,
+   136→        size: 100,
+   137→        enableSorting: true,
+   138→      }),
+   139→    ],
+   140→    []
+   141→  );
+   142→
+   143→  const priceChangeColumns = useMemo(() => {
+   144→    const createColumn = (tf: TimeFrame, header: string) =>
+   145→      columnHelper.accessor(priceChangeAccessors[tf], {
+   146→        id: `price_change_pct_${tf}`,
+   147→        header: () => header,
+   148→        cell: PriceChangeCell,
+   149→        size: 80,
+   150→        enableSorting: true,
+   151→      }) as ColumnDef<WatchlistTokenData>;
+   152→
+   153→    return {
+   154→      "5m": createColumn("5m", t`5m ${PERCENT_SIGN}`),
+   155→      "1h": createColumn("1h", t`1h ${PERCENT_SIGN}`),
+   156→      "6h": createColumn("6h", t`6h ${PERCENT_SIGN}`),
+   157→    };
+   158→  }, []);
+   159→
+   160→  const columns = useMemo(() => {
+   161→    return [
+   162→      ...staticColumns,
+   163→      priceChangeColumns[selectedTimeFrame],
+   164→      ...volumeAndLiquidityColumns,
+   165→    ];
+   166→  }, [
+   167→    selectedTimeFrame,
+   168→    staticColumns,
+   169→    priceChangeColumns,
+   170→    volumeAndLiquidityColumns,
+   171→  ]);
+   172→
+   173→  const isTableLoading =
+   174→    isWatchlistLoading &&
+   175→    !(
+   176→      (watchlistPositions?.watchlistTokens?.[0]?.watchlistTokens?.length ??
+   177→        0) === 0
+   178→    );
+   179→
+   180→  return (
+   181→    <div className="bg-bg-primary-hover h-full overflow-hidden rounded">
+   182→      <Table
+   183→        columns={columns}
+   184→        data={data}
+   185→        isLoading={isTableLoading}
+   186→        estimateRowSize={TABLE_ROW_HEIGHT_SMALL + 8}
+   187→        rowHeight="small"
+   188→        className="hide-scrollbar h-full"
+   189→        getRowId={row => row.mint}
+   190→        tableRowClassName="bg-bg-tertiary hover:bg-bg-quartiary cursor-pointer transition-colors rounded"
+   191→        tableCellClassName={cn(
+   192→          "bg-inherit first:rounded-l last:rounded-r",
+   193→          selectedTimeFrame === "5m"
+   194→            ? "5m"
+   195→            : selectedTimeFrame === "1h"
+   196→              ? "1h"
+   197→              : "6h"
+   198→        )}
+   199→        tableHeadRowClassName="whitespace-nowrap"
+   200→        getRowUrl={row => `/trading/${row.original.mint}`}
+   201→        rowGap={8}
+   202→        storeKey="watchlist"
+   203→        noDataIcon={<Star />}
+   204→        noDataDescription={t`No tokens in watchlist`}
+   205→        hideHeaderOnNoData
+   206→      />
+   207→    </div>
+   208→  );
+   209→};
+   210→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

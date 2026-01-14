@@ -1,0 +1,124 @@
+/**
+ * useAutopilotDataForwarder
+ *
+ * Forwards real-time market data from WebSocket stores to CLI backend.
+ * Sources: watchlist store, trending store (these have live WebSocket updates)
+ */
+
+import { useEffect, useRef } from "react";
+import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import type {
+  WatchlistTokenData,
+  DiscoveryTrendingListTokenData,
+} from "@/store/memoryStore/slices/websocket-messages-store/types";
+
+// Convert watchlist/trending market_data to backend feed format
+function toMarketDataFeed(mint: string, marketData: WatchlistTokenData["market_data"]) {
+  return {
+    type: "market_data_feed" as const,
+    data: {
+      mint,
+      symbol: marketData.symbol,
+      name: marketData.name,
+      price_sol: marketData.price_sol,
+      price_usd: marketData.price_usd,
+      market_cap_usd: marketData.market_cap_usd,
+      volume_24h_usd: marketData.volume_24h_usd,
+      liquidity_usd: marketData.liquidity_usd,
+      trading_stats_1h: marketData.trading_stats_1h,
+    },
+  };
+}
+
+// Convert trading stats to CVD feed format
+function toCvdFeed(mint: string, marketData: WatchlistTokenData["market_data"]) {
+  const stats = marketData.trading_stats_1h;
+  if (!stats) return null;
+
+  const buyVolume = parseFloat(stats.buy_volume_sol || "0");
+  const sellVolume = parseFloat(stats.sell_volume_sol || "0");
+  const netDelta = buyVolume - sellVolume;
+
+  return {
+    type: "cvd_update" as const,
+    data: {
+      mint,
+      buyVolume,
+      sellVolume,
+      netDelta,
+      cvd: netDelta,
+      cvdChange: netDelta,
+      timestamp: Date.now(),
+      periodMs: 3600000, // 1h
+    },
+  };
+}
+
+export function useAutopilotDataForwarder() {
+  // Track last sent data to avoid duplicate sends
+  const lastSentRef = useRef<Map<string, number>>(new Map());
+  const THROTTLE_MS = 1000; // Don't send same mint more than once per second
+
+  // Subscribe to watchlist store changes
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      state => state.websocketMessages.watchlist.itemsMap,
+      (itemsMap: Map<string, WatchlistTokenData>) => {
+        const now = Date.now();
+
+        for (const [mint, item] of itemsMap) {
+          // Throttle per-mint
+          const lastSent = lastSentRef.current.get(mint) || 0;
+          if (now - lastSent < THROTTLE_MS) continue;
+
+          if (!item.market_data?.price_sol) continue;
+
+          // Forward market data
+          autopilotWebsocket.sendFeed(toMarketDataFeed(mint, item.market_data));
+
+          // Forward CVD
+          const cvdFeed = toCvdFeed(mint, item.market_data);
+          if (cvdFeed) {
+            autopilotWebsocket.sendFeed(cvdFeed);
+          }
+
+          lastSentRef.current.set(mint, now);
+        }
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  // Subscribe to trending store changes
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      state => state.websocketMessages.discovery_trending_list.itemsMap,
+      (itemsMap: Map<string, DiscoveryTrendingListTokenData>) => {
+        const now = Date.now();
+
+        for (const [mint, item] of itemsMap) {
+          // Throttle per-mint
+          const lastSent = lastSentRef.current.get(mint) || 0;
+          if (now - lastSent < THROTTLE_MS) continue;
+
+          if (!item.market_data?.price_sol) continue;
+
+          // Forward market data
+          autopilotWebsocket.sendFeed(toMarketDataFeed(mint, item.market_data));
+
+          // Forward CVD
+          const cvdFeed = toCvdFeed(mint, item.market_data);
+          if (cvdFeed) {
+            autopilotWebsocket.sendFeed(cvdFeed);
+          }
+
+          lastSentRef.current.set(mint, now);
+        }
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+}

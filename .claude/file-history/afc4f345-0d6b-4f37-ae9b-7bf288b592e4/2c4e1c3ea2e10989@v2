@@ -1,0 +1,150 @@
+# Context for analytics_clickhouse
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+dbt-based analytics pipeline using ClickHouse for token market analytics. Transforms raw market data into multi-timeframe aggregates (5m, 1h, 6h, 24h), calculates trending scores with statistical normalization, and provides honeypot detection metrics. Outputs to `mart_*` tables for offline analytics and research.
+
+**Important**: This system does NOT power web-terminal's live trending - web-terminal has its own self-contained trending implementation using ClickHouse materialized views. This repo is for offline analytics, dashboards, and algorithm research.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Pipeline | dbt 1.9.4 + dbt-clickhouse 1.9.1 | Transformations |
+| Database | ClickHouse (GCP) | OLAP storage |
+| Runtime | Python 3.10-3.11 | dbt execution |
+
+### Data Flow
+
+```
+materializer_token_market_data (raw)
+  | Staging
+stg_token_market_data (5m buckets)
+  | Intermediate
+int_token_market_metrics + int_token_stats_normalized
+  | Marts
+mart_token_stats_market_5m (market-wide)
+mart_token_metrics_trending_5m (per-token)
+```
+
+### Key Models (8)
+
+| Model | Purpose |
+|-------|---------|
+| `stg_token_market_data` | Raw to 5-minute buckets |
+| `int_token_trending_metrics` | Z-scores, price changes, derived ratios |
+| `mart_token_metrics_trending_5m` | Token-specific trending (ReplacingMergeTree) |
+
+## Capabilities
+
+### Metrics Provided
+
+#### Volume Metrics
+- buy/sell volumes (SOL & USD) for 5m/1h/6h/24h
+- volume_per_txn (whale indicator)
+
+#### Statistical Metrics
+- Z-scores: standard deviations from market average
+- Percentiles: P10/P25/P75/P90 for volume/traders
+
+#### Honeypot Detection
+| Metric | Threshold | Purpose |
+|--------|-----------|---------|
+| txns_per_maker | >= 2.0 | Organic activity |
+| volume_to_fdv | >= 0.015 | Real liquidity |
+| unique_traders | >= 1000 | Distribution |
+| token_age | >= 24h | Maturity |
+
+### Extension Points
+
+- Add timeframe: Create new `int_*` model with different bucket
+- Add metric: Extend `int_token_trending_metrics.sql`
+- Add filter: Modify `analyses/trending/query_trending_tokens.sql`
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- Follow dbt model naming: `stg_`, `int_`, `mart_`
+- Use ReplacingMergeTree for deduplication
+- Document models in schema.yml
+- Test column uniqueness and not-null constraints
+
+### Common Tasks
+
+#### Setup
+
+```bash
+pip install -r requirements.txt
+export CLICKHOUSE_PASSWORD=<from @vem>
+dbt debug
+```
+
+#### Development
+
+```bash
+dbt compile          # Preview SQL
+dbt run --empty      # Dry run
+dbt run              # Execute
+dbt test             # Run tests
+```
+
+#### Finding Code
+
+- Staging models: `models/staging/`
+- Intermediate models: `models/intermediate/`
+- Mart models: `models/marts/`
+- Trending query: `analyses/trending/query_trending_tokens.sql`
+- Schema definitions: `models/schema.yml`
+
+### Things to Avoid
+
+- Changing table engines without understanding ClickHouse implications
+- Running full refreshes on large tables
+- Ignoring ReplacingMergeTree deduplication timing
+- Assuming this powers web-terminal live trending (it doesn't - verified 2026-01-12)
+
+## Related Documentation
+
+- [README.md](README.md) - Setup and usage
+- dbt docs: `dbt docs generate && dbt docs serve`
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| web-terminal (ch-writer) | Raw token market data in `materializer_token_market_data` |
+
+### Relationship with web-terminal
+
+| Aspect | This Repo | web-terminal |
+|--------|-----------|--------------|
+| Data Source | `materializer_token_market_data` | `materializer_token_market_data` |
+| Trending Tables | `mart_token_metrics_trending_5m` | `discovery_trending_token_stats_ts` |
+| Runtime Dependency | **None** | **None** |
+
+**Verified 2026-01-12**: web-terminal's trending queries do NOT read from this repo's `mart_*` tables. Both systems independently process the same raw data for different purposes.
+
+### Likely Consumers (TBD)
+
+| System | What They Get | Status |
+|--------|---------------|--------|
+| Dashboards | Offline analytics | Unverified |
+| BigQuery | Cross-analytics | Unverified |
+| Algorithm research | Trending score prototyping | Likely |
+
+---
+
+<!-- TODO: Team input needed -->
+<!-- The following sections would benefit from team knowledge:
+- [ ] Review guidelines and tone expectations
+- [ ] ClickHouse-specific optimization patterns
+- [ ] Deployment and refresh schedules
+- [ ] Alert thresholds for data quality
+-->

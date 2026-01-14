@@ -1,0 +1,244 @@
+# Discover Workflow
+
+Map a repository or system and produce agent-centric documentation.
+
+## Inputs
+
+- **repo_path**: Path to the repository (required)
+- **system_name**: Name for this system (optional, inferred from repo)
+- **depth**: `quick` | `standard` | `thorough` (default: `standard`)
+
+## Process
+
+### Phase 1: Initial Survey
+
+```
+1. Check for existing documentation:
+   - ai.md (already exists? → read and potentially enhance)
+   - README.md
+   - CONTRIBUTING.md
+   - docs/ directory
+   - .claude/ directory (existing agent context?)
+
+2. Identify project type:
+   - Package manager files (package.json, Cargo.toml, pyproject.toml, etc.)
+   - Framework indicators
+   - Build system (Makefile, docker-compose, etc.)
+```
+
+### Phase 2: Structure Mapping
+
+```
+1. Directory structure analysis:
+   - What are the top-level directories?
+   - Where does source code live?
+   - Where are configs?
+   - Where are tests?
+
+2. Entry points:
+   - Main executables/binaries
+   - API entry points
+   - Service definitions
+
+3. Key files:
+   - Config files (*.toml, *.yaml, *.json)
+   - Environment files (.env.example)
+   - Schema definitions
+```
+
+### Phase 3: Capability Discovery
+
+```
+1. Data sources:
+   - Database connections (look in configs, connection strings)
+   - External API integrations
+   - Message queues / event streams
+   - File storage
+
+2. Interfaces exposed:
+   - REST endpoints (search for route definitions)
+   - WebSocket handlers
+   - CLI commands
+   - NATS/messaging topics
+
+3. Extension patterns:
+   - Plugin systems
+   - Hook points
+   - Configuration injection
+   - Middleware patterns
+```
+
+### Phase 4: Cross-System Context
+
+```
+1. Dependencies:
+   - What external services does this consume?
+   - What shared libraries/packages?
+   - What infrastructure requirements?
+
+2. Consumers:
+   - Who calls this system's APIs?
+   - What reads from its data stores?
+   - What subscribes to its events?
+
+3. Data flows:
+   - What comes in? From where?
+   - What goes out? To where?
+```
+
+### Phase 5: Synthesis
+
+```
+1. Compile findings into ai.md structure:
+   - Follow template from templates/AiMdTemplate.md
+   - Focus on capabilities, not just description
+   - Include concrete "Finding Code" section
+   - Link to existing detailed docs
+
+2. Quality check against template checklist:
+   - Does it answer understanding questions?
+   - Does it answer working questions?
+   - Does it answer extending questions?
+   - Is it agent-readable?
+
+3. Identify gaps:
+   - What couldn't be determined?
+   - What needs human input?
+   - What detailed docs are missing?
+```
+
+### Phase 6: Registration
+
+```
+1. Update central knowledge registry:
+   ~/Documents/Knowledge/registry.md
+
+2. Create/update system context file:
+   ~/Documents/Knowledge/systems/{system-name}/context.md
+
+3. Update cross-system maps if connections discovered:
+   ~/Documents/Knowledge/cross-system/
+```
+
+## Depth Levels
+
+### Quick
+- Phase 1 + basic Phase 2
+- Produces skeleton ai.md with gaps marked
+- ~2-3 minutes
+
+### Standard (default)
+- Phases 1-5
+- Produces complete draft ai.md
+- Registers in knowledge base
+- ~5-10 minutes
+
+### Thorough
+- All phases with deep exploration
+- Spawns research agents for external context
+- Validates all discovered interfaces
+- Produces comprehensive documentation
+- ~15-30 minutes
+
+## Output
+
+1. **ai.md file** - Written to repo root (or specified location)
+2. **Discovery report** - Summary of what was found and gaps
+3. **Registry update** - System added/updated in central knowledge
+
+## Example Invocation
+
+```
+User: "Map ~/Documents/BONKbot/github/web-api"
+
+-> Discover workflow executes
+-> Surveys existing docs (finds README, some scattered docs)
+-> Maps structure (TypeScript backend, Postgres, NATS)
+-> Discovers capabilities (user auth, wallet management, order execution)
+-> Identifies cross-system connections (consumes web-terminal data, serves frontend)
+-> Produces ai.md
+-> Registers in ~/Documents/Knowledge/
+
+Output:
+- Created ai.md at ~/Documents/BONKbot/github/web-api/ai.md
+- Registered "web-api" in knowledge registry
+- Found 3 cross-system connections (documented)
+- Gaps identified: API endpoint documentation incomplete
+```
+
+## Error Handling
+
+- **No repo found**: Ask user to confirm path
+- **Existing ai.md**: Ask whether to enhance or replace
+- **Can't determine project type**: Proceed with generic structure, flag for review
+- **External dependencies unclear**: Note as gap, suggest research follow-up
+
+---
+
+## Completion Gate (MANDATORY)
+
+**CRITICAL: Do NOT mark discovery complete until ALL outputs are verified.**
+
+### Output Checklist
+
+Before finishing, verify ALL THREE outputs exist:
+
+1. **ai.md in repo** - `{repo_path}/ai.md`
+2. **context.md in Knowledge** - `~/Documents/Knowledge/systems/{name}/context.md`
+3. **Registry entry** - Updated in `~/Documents/Knowledge/registry.md`
+
+### Validation Commands
+
+Run these to verify outputs exist:
+
+```bash
+REPO_PATH="{repo_path}"
+SYSTEM_NAME="{name}"
+
+echo "=== Verifying Discover outputs ==="
+[ -f "$REPO_PATH/ai.md" ] && echo "✓ ai.md exists in repo" || echo "✗ MISSING: ai.md in repo"
+[ -f ~/Documents/Knowledge/systems/$SYSTEM_NAME/context.md ] && echo "✓ context.md exists" || echo "✗ MISSING: context.md"
+grep -q "$SYSTEM_NAME" ~/Documents/Knowledge/registry.md && echo "✓ registry entry exists" || echo "✗ MISSING: registry entry"
+```
+
+### Status Terminology
+
+Use these terms accurately in registry entries:
+
+| Status | Meaning |
+|--------|---------|
+| `Explored` | Phases 1-4 done, information gathered, NO outputs written |
+| `Documented` | ai.md + context.md written to filesystem |
+| `Registered` | Entry added to registry.md |
+| `Complete` | ALL THREE verified: ai.md + context.md + registry |
+
+**NEVER mark as "exploration complete" if ai.md doesn't exist.**
+
+### Registry Entry Format
+
+```markdown
+### {system-name}
+- **Path**: `{repo_path}`
+- **Type**: {type}
+- **Production**: Yes/No
+- **ai.md**: Yes (committed) | Yes (untracked) | No (pending)
+- **context.md**: Yes | No
+- **Status**: Complete | Documented | Explored | Not started
+- **Last Discovered**: {date}
+```
+
+### TodoWrite Integration
+
+Use TodoWrite to track discovery progress:
+
+```
+1. [ ] Initial survey (Phase 1)
+2. [ ] Structure mapping (Phase 2)
+3. [ ] Capability discovery (Phase 3)
+4. [ ] Cross-system context (Phase 4)
+5. [ ] Synthesis - write ai.md to repo (Phase 5)
+6. [ ] Registration - write context.md + update registry (Phase 6)
+7. [ ] Validation - run verification commands
+```
+
+Mark discovery complete ONLY after step 7 passes.

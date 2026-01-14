@@ -1,0 +1,114 @@
+# Roadmap: TrenchBench API
+
+## Overview
+
+Transform local-api into a production-grade Cloud Run service with environment-aware configuration, containerization, and CI/CD pipelines following the ferris-the-sentinel deployment pattern.
+
+## Domain Expertise
+
+None
+
+## Phases
+
+**Phase Numbering:**
+- Integer phases (1, 2, 3, 4): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+- [x] **Phase 1: Environment Configuration** - Multi-env config system (local/beta/prod)
+- [x] **Phase 2: Containerization** - Dockerfile and Docker setup for Cloud Run
+- [x] **Phase 3: CI/CD Pipeline** - GitHub Actions for beta and prod deployments
+- [ ] **Phase 4: GCP Integration** - Secret Manager, Workload Identity, deployment verification
+- [x] **Phase 5: Simplify Extensions** - Remove optional extension flag, always-on endpoints
+- [ ] **Phase 6: Community Endpoints** - Port PHP community tracker and Twitter proxy to TypeScript
+
+## Phase Details
+
+### Phase 1: Environment Configuration
+**Goal**: Environment-aware configuration that switches ClickHouse endpoints and settings based on local/beta/prod mode
+**Depends on**: Nothing (first phase)
+**Research**: Unlikely (internal config patterns, existing env structure)
+**Plans**: TBD
+
+Plans:
+- [x] 01-01: Environment detection and config loader
+- [x] 01-02: ClickHouse endpoint switching per environment
+
+### Phase 2: Containerization
+**Goal**: Production-ready multi-stage Dockerfile optimized for Bun/TypeScript on Cloud Run
+**Depends on**: Phase 1
+**Research**: Likely (Bun Docker patterns)
+**Research topics**: Bun official Docker image, multi-stage build patterns for Bun/TS, .dockerignore best practices
+**Plans**: TBD
+
+Plans:
+- [x] 02-01: Multi-stage Dockerfile and .dockerignore
+- [x] 02-02: Local Docker build/run verification
+
+### Phase 3: CI/CD Pipeline
+**Goal**: GitHub Actions workflows for automated beta (main) and prod (v* tags) deployments
+**Depends on**: Phase 2
+**Research**: Likely (ferris-the-sentinel pattern)
+**Research topics**: Current ferris-the-sentinel workflows, GCP Artifact Registry authentication, Cloud Run deploy actions
+**Plans**: TBD
+
+Plans:
+- [x] 03-01: Beta deployment workflow (main branch)
+- [x] 03-02: Production deployment workflow (v* tags)
+
+### Phase 4: GCP Integration
+**Goal**: Workload Identity Federation auth, Secret Manager for credentials, deployment verification
+**Depends on**: Phase 3
+**Research**: Likely (GCP auth patterns)
+**Research topics**: GCP Secret Manager access from Cloud Run, Workload Identity Federation setup, VPC egress configuration
+**Plans**: TBD
+
+Plans:
+- [ ] 04-01: Secret Manager and WIF configuration
+- [ ] 04-02: End-to-end deployment verification
+
+### Phase 5: Simplify Extensions
+**Goal**: Remove optional extension flag, make all endpoints always available, clean up extension gating logic
+**Depends on**: Phase 4 (or can run independently)
+**Research**: Unlikely (internal refactoring)
+**Plans**: TBD
+
+Key changes:
+- Remove `LOCAL_API_ENABLE_EXTENSIONS` environment variable
+- Remove `enableExtensions` config flag
+- Always register extension routes
+- Simplify registry response (remove `enabled` field)
+- Update documentation to reflect always-on behavior
+- Retain data source toggle for local/beta (frontend localStorage feature)
+
+Plans:
+- [x] 05-01: Remove extension gating and simplify registration
+
+### Phase 6: Community Endpoints
+**Goal**: Port PHP community tracker and Twitter proxy endpoints to TypeScript/Bun
+**Depends on**: Phase 1 (uses ClickHouse client)
+**Research**: Unlikely (porting existing PHP code)
+
+Key changes:
+- Add ClickHouse INSERT helper to client.ts
+- Create Twitter proxy endpoint (proxies to api.twitterapi.io)
+- Create community tracker GET endpoint (fetch from ClickHouse)
+- Create community tracker POST endpoint (save to ClickHouse)
+- Support two tables: community_tracker, community_member_history
+
+Plans:
+- [ ] 06-01: Add ClickHouse INSERT helper and Twitter proxy endpoint
+- [ ] 06-02: Community tracker GET/POST endpoints
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Environment Configuration | 2/2 | Complete | 2026-01-13 |
+| 2. Containerization | 2/2 | Complete | 2026-01-13 |
+| 3. CI/CD Pipeline | 2/2 | Complete | 2026-01-13 |
+| 4. GCP Integration | 0/2 | Not started | - |
+| 5. Simplify Extensions | 1/1 | Complete | 2026-01-13 |
+| 6. Community Endpoints | 0/2 | Not started | - |

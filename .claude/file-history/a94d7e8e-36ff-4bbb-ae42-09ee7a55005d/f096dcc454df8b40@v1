@@ -1,0 +1,172 @@
+# TrenchBench API - Endpoints
+
+API reference for all endpoints.
+
+## Overview
+
+All endpoints fetch **production ClickHouse data**. Handle responses as sensitive.
+
+| Type | Description |
+|------|-------------|
+| Generic | Mirror production API (same routes/shapes) |
+| Labs | Local-only endpoints (always enabled) |
+| Extensions | Optional augmentation layer |
+
+## Endpoints
+
+### Health
+
+```
+GET /health
+```
+
+```json
+{ "ok": true, "warning": "This API fetches PRODUCTION data" }
+```
+
+### Generic Endpoints
+
+Production mirrors - same routes and response shapes as production API.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /local-api/trades/:mint` | Trade history for token |
+| `GET /local-api/search/:mint` | Token lookup by mint |
+| `GET /local-api/search?q=...` | Text search |
+| `GET /local-api/ohlcv/pool/:pool/:range` | Pool candlestick data |
+| `GET /local-api/ohlcv/token/:mint/:range` | Token candlestick data |
+| `GET /local-api/holders_stats/:mint` | Top 100 holders |
+| `GET /local-api/holder_stats/:mint/:address` | Single holder stats |
+| `GET /local-api/traders_stats/:mint` | Top profitable traders |
+| `GET /local-api/discovery/trending` | Trending tokens |
+| `GET /local-api/discovery/whale_moves` | Whale activity (24h) |
+| `GET /local-api/wallet_tracker/trades` | Tracked wallet trades |
+| `GET /local-api/wallet_tracker/summary_all` | Wallet summaries |
+| `GET /local-api/wallet_funding/:address` | Funding sources |
+| `GET /local-api/multi-wallet-families/:mint` | Family detection |
+| `GET /local-api/market_data/:mint` | Token market data |
+| `GET /local-api/market_data_batch?mints=...` | Batch market data |
+
+### Labs Endpoints
+
+Local-only endpoints, always enabled.
+
+#### Wallet Trades Snapshot
+
+```
+POST /local-api/labs/wallet_trades_snapshot
+```
+
+Bounded trade history for wallets with dust filtering and pagination.
+
+**Request:**
+```json
+{
+  "traders": ["wallet1", "wallet2"],
+  "lookbackDays": 1,
+  "limitTotal": 5000,
+  "limitPerTrader": 500,
+  "sourceTable": "recent_1d",
+  "minSolAmount": 0.1,
+  "since": "1735900000000000000"
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| traders | string[] | required | Wallet addresses (max 100) |
+| lookbackDays | number | 1 | Days to look back (1-7) |
+| limitTotal | number | 5000 | Total rows (1-5000) |
+| limitPerTrader | number | 500 | Per-wallet limit (1-500) |
+| sourceTable | string | materializer_trades | `recent_1d` or `materializer_trades` |
+| minSolAmount | number | 0 | Filter dust trades (0-10) |
+| since | string | - | Pagination cursor (nanosecond timestamp) |
+
+**Response:**
+```json
+{
+  "ok": true,
+  "trades": [...],
+  "count": 42,
+  "oldestTimestamp": "1234567890000000000"
+}
+```
+
+#### Holders Stats Batch
+
+```
+POST /local-api/labs/holders_stats_batch
+```
+
+Top holders for multiple mints in one query.
+
+**Request:**
+```json
+{
+  "mints": ["mint1", "mint2"],
+  "addresses": ["wallet1"],
+  "limit": 100
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| mints | string[] | required | Token mints (max 50) |
+| addresses | string[] | - | Filter to specific wallets (max 200) |
+| limit | number | 100 | Holders per mint (1-100) |
+
+**Response:**
+```json
+{
+  "ok": true,
+  "holders": {
+    "mint1": [...],
+    "mint2": [...]
+  },
+  "count": 42
+}
+```
+
+### Extensions
+
+Optional augmentation layer. Enable with `LOCAL_API_ENABLE_EXTENSIONS=true`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /local-api/ext/registry` | List available extensions (always on) |
+| `GET /local-api/ext/search/:mint` | Extended token lookup |
+
+Extensions add `ext` payloads to base responses:
+```json
+{
+  "...base fields...",
+  "ext": {
+    "EXT_SEARCH_TOKEN_DETAILS": { ... }
+  }
+}
+```
+
+## Smoke Page
+
+Browser-based testing dashboard at `/smoke.html`.
+
+- System health checks
+- Endpoint smoke tests
+- Extension validation
+
+## Adding Custom Endpoints
+
+1. Copy `src/endpoints/_template.ts` to `src/endpoints/custom/`
+2. Implement your endpoint
+3. Register in `src/server.ts`
+
+See `src/endpoints/custom/README.md` for details.
+
+## Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| Missing ClickHouse credentials | Check `.env` has all three variables |
+| ClickHouse API error 401 | Invalid credentials |
+| Too many traders (max 100) | Reduce wallet count |
+| Query timeout | Reduce `lookbackDays` or use `recent_1d` table |

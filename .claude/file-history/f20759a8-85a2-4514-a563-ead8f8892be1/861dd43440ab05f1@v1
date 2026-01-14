@@ -1,0 +1,186 @@
+---
+phase: 03-slack-listener-threads
+plan: 02
+type: execute
+---
+
+<objective>
+Create Block Kit message builder and thread reply function for QA assignment messages.
+
+Purpose: When a ticket is created, post an interactive Block Kit message in the Linear thread with Claim/Pass/Blocked buttons.
+Output: Block Kit builder functions, thread reply helper, event bus integration.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/03-slack-listener-threads/DISCOVERY.md
+@.planning/phases/03-slack-listener-threads/03-01-PLAN.md
+
+# Prior plan provides:
+# - Slack client singleton (getSlackApp)
+# - Linear message listener (captures message TS and channel)
+
+@src/coordination/types.ts
+@src/coordination/events/event-bus.ts
+@src/coordination/events/emitters.ts
+@src/coordination/slack/client.ts
+@src/coordination/store/linear-message-store.ts
+
+**Tech stack available:** @vercel/kv, @linear/sdk, @slack/bolt
+**Established patterns:** Singleton pattern, Event bus subscribe/dispatch, Type guards
+**Constraining decisions:**
+- [01-03]: Event bus for surface notifications
+- [02-02]: Empty slackUserId during sync - display names only for now
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create Block Kit builder for QA assignment messages</name>
+  <files>src/coordination/slack/block-kit.ts</files>
+  <action>
+    Create src/coordination/slack/block-kit.ts with:
+
+    1. Import KnownBlock from '@slack/types'
+    2. Helper function `priorityEmoji(priority: TicketPriority): string`
+       - urgent → 🔴, high → 🟠, normal → 🟡, low → 🟢
+
+    3. Export `buildQAAssignmentBlocks(ticket: QATicket): KnownBlock[]`
+       Returns blocks array with:
+       - Header section: "*QA Assignment*" with link to Linear issue
+       - Fields section: Priority (with emoji), Status, Source
+       - Divider
+       - Actions block with id `qa_actions_{ticket.id}`:
+         - "Claim" button (primary style, action_id: 'qa_claim', value: ticket.id)
+         - "Pass" button (no style, action_id: 'qa_pass', value: ticket.id)
+         - "Blocked" button (danger style, action_id: 'qa_blocked', value: ticket.id)
+
+    4. Export `buildTicketStatusUpdateBlocks(ticket: QATicket, action: string, userId: string): KnownBlock[]`
+       For updating the message after a button click (Phase 5 will use this):
+       - Show ticket info
+       - Show "✅ Claimed by @user" or "⏸️ Blocked by @user" etc.
+       - Context block with timestamp
+       - NO action buttons (already actioned)
+
+    Use @slack/types for type safety. Do NOT use 'any' types.
+  </action>
+  <verify>
+    - File exists at src/coordination/slack/block-kit.ts
+    - TypeScript compiles: `bun run build` succeeds
+    - Functions are exported
+  </verify>
+  <done>
+    - Block Kit builder for QA assignment messages
+    - Status update builder for post-action messages
+    - Priority emoji helper
+    - Type-safe with @slack/types
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create thread reply function</name>
+  <files>src/coordination/slack/thread-reply.ts</files>
+  <action>
+    Create src/coordination/slack/thread-reply.ts:
+
+    1. Import getSlackApp from './client.js'
+    2. Import buildQAAssignmentBlocks from './block-kit.js'
+    3. Import QATicket type
+
+    4. Export async function `postQAThreadReply(ticket: QATicket): Promise<string | null>`
+       - Validate ticket has slackThreadTs and slackChannelId (return null if missing)
+       - Get Slack client: `getSlackApp().client`
+       - Call chat.postMessage with:
+         - channel: ticket.slackChannelId
+         - thread_ts: ticket.slackThreadTs
+         - text: Fallback text "QA Assignment: {title}"
+         - blocks: buildQAAssignmentBlocks(ticket)
+       - Return the posted message's ts (for potential updates)
+       - Wrap in try/catch, log errors, return null on failure
+
+    5. Export async function `updateQAMessage(channelId: string, messageTs: string, blocks: KnownBlock[]): Promise<boolean>`
+       - Use chat.update to update an existing message
+       - Return true on success, false on failure
+       - This is for Phase 5 when handling button clicks
+  </action>
+  <verify>
+    - File exists at src/coordination/slack/thread-reply.ts
+    - TypeScript compiles: `bun run build` succeeds
+  </verify>
+  <done>
+    - Thread reply function created
+    - Message update function created
+    - Error handling with logging
+    - Returns message timestamp for tracking
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Wire up event bus and update barrel exports</name>
+  <files>src/coordination/slack/subscriber.ts, src/coordination/slack/index.ts</files>
+  <action>
+    1. Create src/coordination/slack/subscriber.ts:
+       - Import getEventBus from '../events/event-bus.js'
+       - Import postQAThreadReply from './thread-reply.js'
+       - Import findLinearMessageByIssueId from '../store/linear-message-store.js'
+       - Import updateTicket from '../store/ticket-store.js'
+
+       Export `setupSlackSubscribers(): void`:
+       - Subscribe to 'ticket:created' event
+       - In handler:
+         a. Look up LinearMessage by ticket.id (the Linear issue ID) using findLinearMessageByIssueId
+         b. If not found, log warning and return (Linear message not captured yet)
+         c. Update ticket with slackThreadTs and slackChannelId from LinearMessage
+         d. Call postQAThreadReply with updated ticket
+         e. Log success or failure
+
+    2. Update src/coordination/slack/index.ts:
+       - Add: export * from './block-kit.js'
+       - Add: export * from './thread-reply.js'
+       - Add: export * from './subscriber.js'
+
+    The flow: ticket:created → lookup LinearMessage → update ticket → post thread reply
+  </action>
+  <verify>
+    - File exists at src/coordination/slack/subscriber.ts
+    - TypeScript compiles: `bun run build` succeeds
+    - All exports in barrel
+  </verify>
+  <done>
+    - Event bus subscription for ticket:created
+    - Links tickets to captured Linear messages
+    - Posts Block Kit reply in thread
+    - Full flow wired: event → lookup → update → reply
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run build` succeeds without errors
+- [ ] src/coordination/slack/ has: block-kit.ts, thread-reply.ts, subscriber.ts
+- [ ] All functions exported from slack/index.ts
+- [ ] No TypeScript errors or 'any' types
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Block Kit builder creates valid Slack blocks
+- Thread reply function posts to correct thread
+- Event bus wired to post replies on ticket:created
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-slack-listener-threads/03-02-SUMMARY.md`
+</output>

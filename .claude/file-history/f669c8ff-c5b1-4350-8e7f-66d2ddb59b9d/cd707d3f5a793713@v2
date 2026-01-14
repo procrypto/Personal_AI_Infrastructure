@@ -1,0 +1,394 @@
+---
+phase: 14-controls-formatting
+plan: 01
+type: execute
+domain: ui
+---
+
+<objective>
+Move PAPER trading indicator and Live Trading toggle into the widget header bar, with a settings gear icon that opens a popover for remaining configuration.
+
+Purpose: Clean up header to show trading mode at a glance while keeping configuration accessible but tucked away.
+Output: Streamlined header with PAPER badge, Live Trading toggle, and settings popover.
+</objective>
+
+<execution_context>
+@~/.claude/get-shit-done/workflows/execute-phase.md
+@~/.claude/get-shit-done/templates/summary-frontmatter.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/13-layout-clarity/13-01-SUMMARY.md
+
+**Key files:**
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+@apps/web-terminal/src/components/popover.tsx
+
+**Reference implementation (Popover pattern):**
+From anomalyzer-widget in feat-dash-pauls-preload-data repo:
+
+- Uses `Popover`, `PopoverTrigger`, `PopoverContent` from `@/components/popover`
+- PopoverContent: `className="w-64 p-3"` with `align="end"`
+- Trigger is a ghost button with icon (e.g., Filter or Settings)
+- Content has title + controls with consistent spacing
+
+**Current state:**
+
+- PAPER/LIVE badge is inside ControlsPanel (lines 369-376)
+- Live Trading toggle is inside ControlsPanel (lines 384-403)
+- ControlsPanel is in Configuration section at bottom of widget
+- Header shows: Bot icon + "Token Autopilot" + scan info + market status badge
+
+**Target state:**
+
+- Header shows: Bot icon + "Token Autopilot" + scan info | PAPER badge + Live Trading toggle + Settings gear | Market status
+- Settings gear opens Popover with: Auto Sources (+ sub-toggles), Market Filter, Refresh Sources, Position Size, Strategies panel
+  </context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add PAPER badge and Live Trading toggle to header</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+  In the header section (lines 868-910), add between the scan info and market status:
+  1. PAPER/LIVE mode badge (copy styling from ControlsPanel lines 369-376)
+  2. Live Trading toggle with Tooltip "Live trading integration coming soon. Invite only 🔒" (copy from lines 385-403)
+
+Layout structure:
+
+```jsx
+<div className="flex items-center justify-between">
+  {/* Left: Bot + Title + Scan info */}
+  <div className="flex items-center gap-2">{/* existing content */}</div>
+
+  {/* Right: Mode controls + Market status */}
+  <div className="flex items-center gap-3">
+    {/* PAPER badge */}
+    <span
+      className={cn(
+        "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+        config.mode === "paper"
+          ? "bg-bg-warning-primary text-text-warning"
+          : "bg-bg-success-primary text-text-success"
+      )}
+    >
+      {config.mode.toUpperCase()}
+    </span>
+
+    {/* Live Trading toggle with tooltip */}
+    <Tooltip
+      content="Live trading integration coming soon. Invite only 🔒"
+      side="bottom"
+    >
+      <div className="flex cursor-not-allowed items-center gap-1.5 opacity-50">
+        <Power className="text-text-secondary h-3.5 w-3.5" />
+        <Switch
+          size="sm"
+          checked={false}
+          disabled
+        />
+      </div>
+    </Tooltip>
+
+    {/* Settings gear - placeholder for Task 2 */}
+
+    {/* Market status badge - existing */}
+    <Tooltip content="...">
+      <div className="cursor-help">
+        <MarketStatusBadge status={marketStatus} />
+      </div>
+    </Tooltip>
+  </div>
+</div>
+```
+
+  </action>
+  <verify>npm run build passes, widget header shows PAPER badge and disabled Live Trading toggle</verify>
+  <done>PAPER badge and Live Trading toggle visible in header row, properly styled</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add Settings gear with Popover for configuration</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+  1. Import Popover components: `import { Popover, PopoverContent, PopoverTrigger } from "@/components/popover";`
+
+2. Add Settings gear button in header (between Live Trading toggle and Market status):
+
+```jsx
+<Popover>
+  <PopoverTrigger asChild>
+    <button
+      className="text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded p-1 transition-colors"
+      disabled={!isConnected}
+    >
+      <Settings className="h-4 w-4" />
+    </button>
+  </PopoverTrigger>
+  <PopoverContent
+    className="w-72 p-3"
+    align="end"
+  >
+    {/* Move controls content here - see Task 3 */}
+  </PopoverContent>
+</Popover>
+```
+
+3. Add a vertical separator before the market status badge:
+
+```jsx
+<div className="bg-border-primary h-4 w-px" />
+```
+
+  </action>
+  <verify>Build passes, gear icon appears in header, clicking opens empty popover</verify>
+  <done>Settings gear button in header, Popover opens on click</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Move configuration controls into Settings Popover</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+  Inside PopoverContent, add the configuration controls with styling matching anomalyzer-widget pattern:
+
+```jsx
+<PopoverContent
+  className="w-72 p-3"
+  align="end"
+>
+  <div className="text-text-secondary mb-3 text-xs font-medium">
+    Configuration
+  </div>
+  <div className="space-y-3">
+    {/* Auto Sources Toggle */}
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <Eye className="text-text-info h-3.5 w-3.5" />
+        <span className="text-text-secondary text-xs">Auto Sources</span>
+      </div>
+      <Switch
+        size="sm"
+        checked={config.autoSourcesEnabled}
+        onCheckedChange={checked =>
+          sendCommand({ command: "toggle_sources", enabled: checked })
+        }
+      />
+    </div>
+
+    {/* Sub-toggles when Auto Sources enabled */}
+    {config.autoSourcesEnabled && (
+      <>
+        <div className="flex items-center justify-between pl-5">
+          <div className="flex items-center gap-2">
+            <Flame className="text-orange h-3 w-3" />
+            <span className="text-text-tertiary text-[11px]">Trending</span>
+          </div>
+          <Switch
+            size="sm"
+            checked={config.trendingEnabled}
+            onCheckedChange={checked =>
+              sendCommand({ command: "toggle_trending", enabled: checked })
+            }
+          />
+        </div>
+        <div className="flex items-center justify-between pl-5">
+          <div className="flex items-center gap-2">
+            <Wallet className="text-text-success h-3 w-3" />
+            <span className="text-text-tertiary text-[11px]">Whale Moves</span>
+          </div>
+          <Switch
+            size="sm"
+            checked={config.whalesEnabled}
+            onCheckedChange={checked =>
+              sendCommand({ command: "toggle_whales", enabled: checked })
+            }
+          />
+        </div>
+      </>
+    )}
+
+    {/* Market Filter Toggle */}
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <ShieldAlert className="text-purple h-3.5 w-3.5" />
+        <span className="text-text-secondary text-xs">Market Filter</span>
+      </div>
+      <Switch
+        size="sm"
+        checked={config.marketFilterEnabled}
+        onCheckedChange={checked =>
+          sendCommand({ command: "toggle_filter", enabled: checked })
+        }
+      />
+    </div>
+
+    {/* Refresh Sources Button */}
+    <button
+      onClick={() => sendCommand({ command: "refresh_sources" })}
+      className="bg-bg-tertiary/50 text-text-secondary hover:bg-bg-tertiary flex w-full items-center justify-center gap-2 rounded px-3 py-1.5 text-xs transition-colors"
+    >
+      <RefreshCw className="h-3 w-3" />
+      Refresh Sources
+    </button>
+
+    {/* Position Size Display */}
+    <div className="border-border-primary/30 text-text-tertiary flex items-center justify-between border-t pt-2 text-[10px]">
+      <span>Position Size</span>
+      <span>{config.positionSizeSol} SOL</span>
+    </div>
+
+    {/* Strategies section */}
+    <div className="border-border-primary/30 border-t pt-2">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Layers className="text-text-secondary h-3.5 w-3.5" />
+          <span className="text-text-secondary text-xs font-medium">
+            Strategies
+          </span>
+        </div>
+        <span
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+            strategies.active.length > 0
+              ? "bg-bg-success-primary text-text-success"
+              : "bg-bg-tertiary text-text-secondary"
+          )}
+        >
+          {strategies.active.length} ACTIVE
+        </span>
+      </div>
+      <div className="max-h-40 space-y-1 overflow-auto">
+        {strategies.available.map(strategy => {
+          const isActive = new Set(strategies.active).has(strategy.id);
+          return (
+            <button
+              key={strategy.id}
+              onClick={() =>
+                sendCommand({
+                  command: "toggle_strategy",
+                  strategyId: strategy.id,
+                  enabled: !isActive,
+                })
+              }
+              className={cn(
+                "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors",
+                isActive
+                  ? "bg-bg-success-primary text-text-success"
+                  : "bg-bg-tertiary/30 hover:bg-bg-tertiary text-text-primary"
+              )}
+            >
+              {isActive ? (
+                <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+              ) : (
+                <Circle className="text-text-tertiary h-3.5 w-3.5 flex-shrink-0" />
+              )}
+              <span className="truncate text-[11px]">{strategy.name}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  </div>
+</PopoverContent>
+```
+
+  </action>
+  <verify>Build passes, Settings popover shows all controls, toggles work correctly</verify>
+  <done>All configuration controls functional in Settings Popover</done>
+</task>
+
+<task type="auto">
+  <name>Task 4: Remove old ControlsPanel and StrategiesPanel from Configuration section</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+  1. Delete the entire Configuration section at the bottom (lines 1009-1022):
+  ```jsx
+  {/* ═══ CONFIGURATION SECTION ═══ */}
+  <div className="border-border-primary/30 flex flex-shrink-0 flex-col gap-2 border-t pt-3">
+    <SectionHeader>Configuration</SectionHeader>
+    <ControlsPanel ... />
+    <StrategiesPanel ... />
+  </div>
+  ```
+
+2. Delete the ControlsPanel component definition (lines 343-489)
+
+3. Delete the StrategiesPanel component definition (lines 492-599)
+
+NOTE: Keep the imports they were using (Settings, Eye, Flame, Wallet, ShieldAlert, RefreshCw, Power, Layers, CheckCircle2, Circle) as they're now used in the Popover.
+</action>
+<verify>npm run build passes, no TypeScript errors, no unused component warnings</verify>
+<done>Old Configuration section removed, code cleaned up</done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Header with PAPER badge, Live Trading toggle, and Settings gear with Popover containing all configuration controls</what-built>
+  <how-to-verify>
+    1. Run: npm run dev
+    2. Visit the autopilot widget
+    3. Verify header shows: Bot icon + "Token Autopilot" + scan info | PAPER badge | disabled toggle | gear icon | SOL price
+    4. Click the gear icon - verify popover opens with:
+       - Auto Sources toggle (+ sub-toggles when enabled)
+       - Market Filter toggle
+       - Refresh Sources button
+       - Position Size display
+       - Strategies section with toggleable items
+    5. Test that toggles work (sends commands to backend)
+    6. Verify the old Configuration section at bottom is gone
+    7. Check popover closes when clicking outside
+  </how-to-verify>
+  <resume-signal>Type "approved" or describe issues to fix</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `npm run build` succeeds without errors
+- [ ] Header shows PAPER badge, Live Trading toggle, and Settings gear
+- [ ] Settings Popover opens and contains all configuration controls
+- [ ] All toggles in Popover send correct commands to backend
+- [ ] Old Configuration section removed from bottom of widget
+- [ ] No TypeScript errors or unused component warnings
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No errors or warnings introduced
+- Header cleanly shows trading mode at a glance
+- Configuration accessible via Settings gear Popover
+  </success_criteria>
+
+<output>
+After completion, create `.planning/phases/14-controls-formatting/14-01-SUMMARY.md`:
+
+# Phase 14 Plan 01: Controls & Formatting Summary
+
+**[One-liner describing what shipped]**
+
+## Accomplishments
+
+- [Key outcomes]
+
+## Files Created/Modified
+
+- `path/to/file.ts` - Description
+
+## Decisions Made
+
+[Key decisions and rationale, or "None"]
+
+## Issues Encountered
+
+[Problems and resolutions, or "None"]
+
+## Next Phase Readiness
+
+[Ready for Phase 15 or blockers]
+</output>

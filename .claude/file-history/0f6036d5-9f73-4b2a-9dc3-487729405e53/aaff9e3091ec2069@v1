@@ -1,0 +1,113 @@
+---
+phase: 04-gcp-integration
+plan: 02
+type: execute
+---
+
+<objective>
+Verify end-to-end deployment pipeline works correctly for beta environment.
+
+Purpose: Confirm the full CI/CD pipeline functions from GitHub push through Cloud Run deployment.
+Output: Successfully deployed and accessible beta service.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior plan context:
+@.planning/phases/04-gcp-integration/04-01-SUMMARY.md
+
+# Workflow files:
+@.github/workflows/deploy.yml
+
+**Prerequisites from 04-01:**
+- GCP setup complete (WIF, service accounts, secrets)
+- Workflow files have correct configuration values
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Update workflow with actual WIF provider path</name>
+  <files>.github/workflows/deploy.yml, .github/workflows/deploy-prod.yml</files>
+  <action>
+If user provided WIF provider path from 04-01, update workflow files:
+
+1. Replace placeholder in deploy.yml:
+   - Find: `workload_identity_provider: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github`
+   - Replace with actual value from GCP setup
+
+2. Replace placeholder in deploy-prod.yml (if production WIF configured):
+   - Same pattern with data-backend-prod project number
+
+If WIF path not yet available, document what needs to be replaced.
+  </action>
+  <verify>grep -n "workload_identity_provider" .github/workflows/deploy*.yml (shows configured values)</verify>
+  <done>Workflow files updated with actual WIF provider paths (or documented for later)</done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Updated workflow configuration ready for deployment test</what-built>
+  <how-to-verify>
+1. Push a commit to main branch to trigger beta deployment
+2. Go to GitHub Actions: https://github.com/BONKbot/local-api/actions
+3. Watch the "Deploy to Beta" workflow run
+4. Verify all steps pass:
+   - Authenticate to Google Cloud ✓
+   - Configure Docker for Artifact Registry ✓
+   - Build container image ✓
+   - Push container image ✓
+   - Deploy to Cloud Run ✓
+5. Note the deployment URL from the workflow output
+  </how-to-verify>
+  <resume-signal>Type "deployed" with the Cloud Run URL, or describe any errors</resume-signal>
+</task>
+
+<task type="auto">
+  <name>Task 2: Verify deployed service responds</name>
+  <files>N/A</files>
+  <action>
+Once deployment URL is provided, verify the service is accessible:
+
+1. Check health endpoint: `curl -s https://{URL}/health`
+2. Check a sample endpoint: `curl -s https://{URL}/stats/holders?mint=...` (or similar)
+3. Verify response format matches local development
+
+If errors occur, check:
+- Cloud Run logs: `gcloud run services logs read trenchbench-api --project=bonkbotbeta`
+- Secret access: Ensure Cloud Run service account can read secrets
+  </action>
+  <verify>curl -s {DEPLOYMENT_URL}/health returns 200 OK or valid response</verify>
+  <done>Service responds correctly, deployment verified end-to-end</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] Workflow files have correct WIF configuration
+- [ ] GitHub Actions workflow runs successfully
+- [ ] Deployed service responds to requests
+- [ ] Cloud Run logs show no errors
+</verification>
+
+<success_criteria>
+- Beta deployment pipeline works end-to-end
+- Service is accessible at Cloud Run URL
+- No authentication or secret access errors
+- Phase 4 complete, project ready for production deployment
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/04-gcp-integration/04-02-SUMMARY.md` with:
+- Deployment URL
+- Any configuration adjustments made
+- Notes for production deployment
+</output>

@@ -1,0 +1,117 @@
+---
+phase: 09-data-flow-investigation
+plan: 01
+subsystem: data-flow
+tags: [nats, websocket, architecture, investigation]
+
+# Dependency graph
+requires:
+  - phase: 03-controls-and-pnl
+    provides: Position P&L calculation via NATS
+  - phase: 05-unit-tests
+    provides: P&L calculation and store tests
+provides:
+  - Root cause analysis for three display issues
+  - Hybrid architecture decision (NATS for prices, CLI for signals)
+  - Implementation plan for Phase 10
+  - Future work item for CLI NATS optimization
+affects: [10-data-flow-fixes, 11-design-system-alignment]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - "Hybrid data enrichment: NATS for display prices, CLI for structural data"
+
+key-files:
+  created:
+    - .planning/phases/09-data-flow-investigation/09-INVESTIGATION.md
+  modified:
+    - apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+    - .planning/ROADMAP.md
+
+key-decisions:
+  - "Hybrid architecture: Frontend uses NATS for display prices, CLI keeps signal generation"
+  - "Calculate totalPnlSol in frontend from position data (not CLI stats)"
+  - "Defer CLI NATS integration to future milestone (data pipeline optimization)"
+
+patterns-established:
+  - "NATS enrichment pattern: Extend existing position-based NATS subscriptions to tokenList and SOL price"
+
+issues-created: []
+
+# Metrics
+duration: 20min
+completed: 2026-01-08
+---
+
+# Phase 9 Plan 01: Data Flow Investigation Summary
+
+**Traced three display issues to missing NATS subscriptions; chose hybrid architecture (NATS for prices, CLI for signals) to fix without backend changes**
+
+## Performance
+
+- **Duration:** 20 min
+- **Started:** 2026-01-08T20:22:13Z
+- **Completed:** 2026-01-08T20:41:52Z
+- **Tasks:** 3
+- **Files modified:** 3
+
+## Accomplishments
+
+- Identified root cause for all three display issues (token prices, stats P&L, market SOL)
+- Made architecture decision: Hybrid approach preserves CLI signal generation while adding NATS price enrichment
+- Documented investigation findings in 09-INVESTIGATION.md
+- Expanded Phase 10 scope with specific implementation tasks
+- Logged CLI NATS integration as future optimization opportunity
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Analyze Data Flow Paths** - `e11fbf010` (chore)
+2. **Task 2: Architecture Decision** - (checkpoint, no code commit)
+3. **Task 3: Document Investigation** - `0d9c63d35` (docs)
+
+## Files Created/Modified
+
+- `.planning/phases/09-data-flow-investigation/09-INVESTIGATION.md` - Full investigation report with root causes and architecture decision
+- `apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts` - Added diagnostic logging for stats_update and market_status events
+- `.planning/ROADMAP.md` - Expanded Phase 10 scope, added Future Work section
+
+## Decisions Made
+
+### Architecture: Hybrid Approach
+
+**Decision:** Frontend enriches display data with NATS, CLI continues signal generation.
+
+**Rationale:**
+1. Matches existing pattern (positions already use NATS for P&L)
+2. No CLI backend changes needed
+3. Real-time display updates
+4. Clear separation: CLI = brain (decisions), Frontend = display (enrichment)
+
+### Future Work: CLI NATS Integration
+
+**Deferred:** CLI queries ClickHouse for token data while frontend already has NATS streams. This duplication will be addressed in a future milestone to optimize data pipeline costs.
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Next Phase Readiness
+
+Phase 10 scope defined with specific implementation tasks:
+1. Extend `useAutopilotSubscription` for tokenList mints
+2. Calculate `totalPnlSol` from position data
+3. Subscribe to SOL/USDC NATS for market status
+
+Ready for `/gsd:plan-phase 10`.
+
+---
+*Phase: 09-data-flow-investigation*
+*Completed: 2026-01-08*

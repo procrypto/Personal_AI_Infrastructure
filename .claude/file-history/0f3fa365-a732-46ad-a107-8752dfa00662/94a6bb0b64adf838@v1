@@ -1,0 +1,87 @@
+---
+phase: 07-validation-cleanup
+plan: 02
+type: execute
+---
+
+<objective>
+Remove redundant API polling code and document final architecture.
+
+Purpose: Clean codebase by removing fallback code that's no longer needed once feeds are validated.
+Output: Leaner codebase with feed-only data flow, updated architecture documentation.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior phase summaries:
+@.planning/phases/07-validation-cleanup/07-01-SUMMARY.md
+
+# Key source files:
+@src/cli.ts
+@src/trading/auto-sources.ts
+@src/api/client.ts
+@.planning/codebase/ARCHITECTURE.md
+
+**Prerequisite:** Plan 07-01 must confirm feeds are working before removing fallback code.
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Remove API polling fallback from OHLCV loop</name>
+  <files>src/cli.ts</files>
+  <action>In the runLoop OHLCV section (~line 720-757):
+1. Remove the API fallback branch (lines that call localApi.getOHLCV)
+2. Keep only the feed-based path (wsServer.getOHLCV)
+3. Remove the apiCount tracking and related logging
+4. Keep feedCount logging for visibility
+5. If no feed data available for a position, log warning but skip (TSL won't work but TP/SL will)
+
+This removes the redundant API calls now that feeds are validated.</action>
+  <verify>npm run build succeeds, grep -n "localApi.getOHLCV" src/cli.ts returns no matches</verify>
+  <done>No API fallback in OHLCV loop, only feed-based data path remains</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Update ARCHITECTURE.md with final feed-based data flow</name>
+  <files>.planning/codebase/ARCHITECTURE.md</files>
+  <action>Update the "Data Flow" section to reflect feed-based architecture:
+1. Update "Analysis Cycle" to show WebSocket feeds as primary data source
+2. Remove references to API polling as fallback
+3. Add "Data Feeds" section documenting: market_data_feed, ohlcv_update, cvd_update, trending_feed, whale_feed, watchlist_feed
+4. Note sub-100ms signal latency achieved
+5. Update timestamp at bottom</action>
+  <verify>ARCHITECTURE.md contains "Data Feeds" section and no references to API fallback</verify>
+  <done>Architecture docs reflect feed-first design, no mention of API polling as active path</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run build` succeeds without errors
+- [ ] `npm test` passes (65 tests)
+- [ ] No localApi.getOHLCV calls in cli.ts OHLCV loop
+- [ ] ARCHITECTURE.md updated with feed-based data flow
+</verification>
+
+<success_criteria>
+
+- API polling fallback removed from OHLCV loop
+- Architecture documentation reflects final state
+- Phase 7 complete: v2.0 milestone achieved
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/07-validation-cleanup/07-02-SUMMARY.md`
+
+Note: This completes v2.0 milestone. Update STATE.md and ROADMAP.md to reflect completion.
+</output>

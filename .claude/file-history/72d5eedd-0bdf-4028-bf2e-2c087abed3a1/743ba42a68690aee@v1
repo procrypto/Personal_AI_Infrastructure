@@ -1,0 +1,166 @@
+---
+phase: 17-screener-signal-indicators
+plan: 01
+type: execute
+---
+
+<objective>
+Add visual signal indicators to screener token rows based on strategy rules matched.
+
+Purpose: Users need at-a-glance visibility into which tokens have active buy/sell signals and their relative strength.
+Output: Token rows in the Screener section display green/red glow intensity based on signal type and rules matched.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/16-user-watchlist-integration/16-01-SUMMARY.md
+@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts
+
+**Tech stack available:** React, Zustand, Tailwind CSS, lucide-react icons
+**Established patterns:** TokenRow component, useAutopilotTokensWithPrices hook, signals array in store
+
+**Design Approach:**
+The signals array stores recent signal events per token (magic_buy, magic_exit, etc.). To show signal indicators:
+1. Create a lookup from signals array → per-token signal strength
+2. Extend TokenRow to accept signal strength and render visual indicator
+3. Use green glow for buy signals (magic_buy), red glow for exit signals (magic_exit, dump_exit)
+4. Intensity scales with recency (recent signals glow brighter)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create useTokenSignalStrength hook for per-token signal lookup</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts, apps/web-terminal/src/hooks/useAutopilot/index.ts</files>
+  <action>
+Create a new hook that builds a Map<mint, SignalStrength> from the signals array.
+
+SignalStrength interface:
+- type: 'buy' | 'sell' | 'none' — determined by most recent signal type for this mint
+- intensity: 0-1 — higher for more recent signals, decays over time (e.g., 1.0 at 0s, 0.5 at 30s, 0.1 at 60s+)
+- timestamp: number — when the signal occurred
+
+Logic:
+1. Group signals by mint, take most recent signal per mint
+2. Calculate intensity based on (now - timestamp), use exponential decay
+3. Classify signal type: magic_buy → 'buy', magic_exit/dump_exit → 'sell', rule_signal → based on action field
+
+Export from index.ts alongside other hooks.
+
+**Why exponential decay:** Recent signals should be very visible, then fade. This gives user immediate feedback that something happened.
+  </action>
+  <verify>
+TypeScript compiles without errors. Hook exports correctly from index.ts.
+  </verify>
+  <done>
+useTokenSignalStrength hook exists, returns Map<mint, SignalStrength> with type, intensity, timestamp fields.
+  </done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add signal glow styling to TokenRow component</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+  <action>
+Modify TokenRow component to accept optional signal strength and render visual glow.
+
+1. Add signalStrength prop to TokenRow: { type: 'buy' | 'sell' | 'none', intensity: number }
+2. Add conditional CSS classes:
+   - Buy signal: green glow using ring/shadow with opacity scaled by intensity
+   - Sell signal: red glow using ring/shadow with opacity scaled by intensity
+   - No signal: no glow (current behavior)
+3. Use Tailwind classes like `ring-1 ring-green-500/[intensity]` or inline style for opacity
+4. The glow should be subtle - don't overwhelm the UI. Start with ring-1 and shadow-sm.
+
+**Why ring+shadow:** Ring provides crisp outline, shadow provides soft glow effect. Combined gives the "indicator" feel.
+
+Update TokenListColumn to pass signal strength down from hook lookup.
+  </action>
+  <verify>
+Build passes: `pnpm run build` in apps/web-terminal succeeds without type errors.
+  </verify>
+  <done>
+TokenRow renders green/red glow based on signal strength. Intensity visually corresponds to signal recency.
+  </done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Token rows in Screener section display signal glow indicators</what-built>
+  <how-to-verify>
+    1. Run dev server: `pnpm run dev` from apps/web-terminal
+    2. Open dashboard with Autopilot widget visible
+    3. Wait for autopilot backend to analyze tokens and generate signals
+    4. Observe tokens in Screener section:
+       - Tokens with recent buy signals should have subtle green glow
+       - Tokens with recent exit signals should have subtle red glow
+       - Glow should fade over ~60 seconds as signal ages
+    5. Confirm glow is visible but not overwhelming (subtle indicator)
+    6. Confirm existing functionality unchanged (prices, change %, OPEN badge)
+  </how-to-verify>
+  <resume-signal>Type "approved" to continue, or describe issues to fix</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] `pnpm run build` succeeds in apps/web-terminal
+- [ ] `pnpm run typecheck` passes
+- [ ] Signal glow visually appears on tokens with recent signals
+- [ ] Glow fades over time as signals age
+- [ ] No visual regressions to existing token row styling
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- Token rows display green glow for buy signals
+- Token rows display red glow for exit/sell signals
+- Glow intensity fades over ~60 seconds
+- Widget remains performant (no visible lag from signal lookup)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/17-screener-signal-indicators/17-01-SUMMARY.md`:
+
+# Phase 17 Plan 01: Screener Signal Indicators Summary
+
+**[Substantive one-liner]**
+
+## Performance
+- **Duration:** X min
+- **Tasks:** 3 (2 auto + 1 checkpoint)
+- **Files modified:** 3
+
+## Accomplishments
+- [Key outcome 1]
+- [Key outcome 2]
+
+## Task Commits
+1. **Task 1:** [commit hash] (feat)
+2. **Task 2:** [commit hash] (feat)
+
+## Files Created/Modified
+- `file.ts` - Description
+
+## Decisions Made
+[Any decisions, or "None"]
+
+## Deviations from Plan
+[Any deviations, or "None"]
+
+## Issues Encountered
+[Problems and resolutions, or "None"]
+
+## Next Phase Readiness
+[Milestone v1.4 complete / next milestone info]
+</output>

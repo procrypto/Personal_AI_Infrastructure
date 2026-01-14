@@ -1,0 +1,266 @@
+/**
+ * Core user scanning logic extracted for testability.
+ * This module contains the bracket-tracking state machine and extraction patterns.
+ */
+
+export interface UserInfo {
+    userId: string;
+    displayName: string;
+    messageCount: number;
+}
+
+export interface ScanState {
+    buffer: string;
+    inString: boolean;
+    escapeNext: boolean;
+    braceDepth: number;
+    bracketDepth: number;
+    inMessagesArray: boolean;
+    inMessage: boolean;
+    messageStartDepth: number;
+    currentUserId: string | null;
+    currentDisplayName: string | null;
+}
+
+export interface ScanResult {
+    users: Map<string, UserInfo>;
+    state: ScanState;
+}
+
+// Patterns for targeted extraction (non-global for single match).
+export const PATTERNS = {
+    fromId: /"from_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/,
+    actorId: /"actor_id"\s*:\s*("user(\d+)"|"(\d+)"|(\d+))/,
+    fromName: /"from"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/,
+    actorName: /"actor"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/,
+    messagesStart: /"messages"\s*:\s*\[/,
+    typeMessage: /"type"\s*:\s*"message"/,
+};
+
+/**
+ * Create initial scan state.
+ */
+export function createInitialState(): ScanState {
+    return {
+        buffer: '',
+        inString: false,
+        escapeNext: false,
+        braceDepth: 0,
+        bracketDepth: 0,
+        inMessagesArray: false,
+        inMessage: false,
+        messageStartDepth: 0,
+        currentUserId: null,
+        currentDisplayName: null,
+    };
+}
+
+/**
+ * Extract user ID from a regex match.
+ */
+export function extractUserId(match: RegExpExecArray): string | null {
+    return match[2] ?? match[3] ?? match[4] ?? null;
+}
+
+/**
+ * Extract display name from a regex match, handling escape sequences.
+ */
+export function extractDisplayName(match: RegExpExecArray): string {
+    return match[1].replace(/\\(.)/g, '$1');
+}
+
+/**
+ * Process a chunk of text and extract users.
+ * This is the core bracket-tracking state machine.
+ */
+export function processChunk(
+    chunk: string,
+    state: ScanState,
+    userMap: Map<string, UserInfo>,
+): ScanState {
+    state.buffer += chunk;
+    let i = 0;
+
+    // Helper to commit current user to map.
+    const commitUser = (): void => {
+        if (state.currentUserId && !userMap.has(state.currentUserId)) {
+            userMap.set(state.currentUserId, {
+                userId: state.currentUserId,
+                displayName: state.currentDisplayName ?? 'Unknown',
+                messageCount: 0,
+            });
+        }
+        state.currentUserId = null;
+        state.currentDisplayName = null;
+        state.inMessage = false;
+    };
+
+    while (i < state.buffer.length) {
+        const char = state.buffer[i];
+
+        // Handle escape sequences inside strings.
+        if (state.escapeNext) {
+            state.escapeNext = false;
+            i++;
+            continue;
+        }
+
+        if (char === '\\' && state.inString) {
+            state.escapeNext = true;
+            i++;
+            continue;
+        }
+
+        // Toggle string state.
+        if (char === '"') {
+            state.inString = !state.inString;
+            i++;
+            continue;
+        }
+
+        // Skip everything inside strings.
+        if (state.inString) {
+            i++;
+            continue;
+        }
+
+        // Track brackets and braces.
+        if (char === '[') {
+            state.bracketDepth++;
+
+            // Check if this is the start of a messages array.
+            const lookback = state.buffer.slice(Math.max(0, i - 50), i + 1);
+            if (PATTERNS.messagesStart.test(lookback)) {
+                state.inMessagesArray = true;
+            }
+            i++;
+            continue;
+        }
+
+        if (char === ']') {
+            state.bracketDepth--;
+            if (state.bracketDepth === 0 && state.inMessagesArray) {
+                // Exiting messages array.
+                state.inMessagesArray = false;
+                commitUser();
+            }
+            i++;
+            continue;
+        }
+
+        if (char === '{') {
+            state.braceDepth++;
+
+            // If we're in messages array and this is a new object at array level.
+            if (state.inMessagesArray && state.braceDepth === state.bracketDepth + 1) {
+                // New message object starting.
+                commitUser();
+                state.messageStartDepth = state.braceDepth;
+            }
+            i++;
+            continue;
+        }
+
+        if (char === '}') {
+            // If closing a message object.
+            if (state.inMessage && state.braceDepth === state.messageStartDepth) {
+                commitUser();
+            }
+            state.braceDepth--;
+            i++;
+            continue;
+        }
+
+        // Look for field patterns when in messages array.
+        if (state.inMessagesArray && !state.inMessage) {
+            // Look ahead for "type": "message" to confirm this is a message.
+            const remaining = state.buffer.slice(i, i + 100);
+            if (PATTERNS.typeMessage.test(remaining)) {
+                state.inMessage = true;
+            }
+        }
+
+        // Extract user fields when in a message.
+        if (state.inMessagesArray && state.inMessage && !state.currentUserId) {
+            const remaining = state.buffer.slice(i, i + 100);
+
+            // Try to extract from_id.
+            let match = PATTERNS.fromId.exec(remaining);
+            if (match) {
+                state.currentUserId = extractUserId(match);
+                i += match[0].length;
+                continue;
+            }
+
+            // Try to extract actor_id.
+            match = PATTERNS.actorId.exec(remaining);
+            if (match) {
+                state.currentUserId = extractUserId(match);
+                i += match[0].length;
+                continue;
+            }
+        }
+
+        // Extract display name when in a message.
+        if (state.inMessagesArray && state.inMessage && !state.currentDisplayName) {
+            const remaining = state.buffer.slice(i, i + 200);
+
+            // Try to extract from.
+            let match = PATTERNS.fromName.exec(remaining);
+            if (match) {
+                state.currentDisplayName = extractDisplayName(match);
+                i += match[0].length;
+                continue;
+            }
+
+            // Try to extract actor.
+            match = PATTERNS.actorName.exec(remaining);
+            if (match) {
+                state.currentDisplayName = extractDisplayName(match);
+                i += match[0].length;
+                continue;
+            }
+        }
+
+        i++;
+    }
+
+    // Keep a small tail for cross-chunk patterns.
+    const keepSize = Math.min(state.buffer.length, 512);
+    state.buffer = state.buffer.slice(-keepSize);
+
+    return state;
+}
+
+/**
+ * Finalize scanning and commit any pending user.
+ */
+export function finalizeScan(
+    state: ScanState,
+    userMap: Map<string, UserInfo>,
+): UserInfo[] {
+    // Commit any pending user.
+    if (state.currentUserId && !userMap.has(state.currentUserId)) {
+        userMap.set(state.currentUserId, {
+            userId: state.currentUserId,
+            displayName: state.currentDisplayName ?? 'Unknown',
+            messageCount: 0,
+        });
+    }
+
+    // Sort users alphabetically by display name.
+    return Array.from(userMap.values()).sort((a, b) =>
+        a.displayName.localeCompare(b.displayName),
+    );
+}
+
+/**
+ * Scan a complete JSON string for users.
+ * Convenience function for testing.
+ */
+export function scanJsonString(json: string): UserInfo[] {
+    const userMap = new Map<string, UserInfo>();
+    let state = createInitialState();
+    state = processChunk(json, state, userMap);
+    return finalizeScan(state, userMap);
+}

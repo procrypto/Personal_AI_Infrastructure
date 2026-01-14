@@ -1,0 +1,565 @@
+/**
+ * Magic Exit Management - Automatic Exit Strategies Based on Market Structure
+ *
+ * ============================================================================
+ * STRATEGY OVERVIEW
+ * ============================================================================
+ *
+ * "Magic Exits" are automatic exit mechanisms that use rotation-based support
+ * and resistance levels to manage open positions. Instead of fixed percentage
+ * stops or take-profits, we exit based on actual market structure.
+ *
+ * ============================================================================
+ * WHY STRUCTURE-BASED EXITS?
+ * ============================================================================
+ *
+ * Fixed percentage exits (e.g., "stop at -5%, take profit at +10%") don't
+ * account for where meaningful price levels actually are. A 5% stop might:
+ *   - Be too tight if support is 7% below entry → gets stopped out before bounce
+ *   - Be too loose if support is 2% below entry → gives back unnecessary profit
+ *
+ * Structure-based exits solve this by using actual support/resistance:
+ *   - Stop loss below actual support (where buyers are expected)
+ *   - Take profit at actual resistance (where sellers are expected)
+ *
+ * ============================================================================
+ * EXIT TYPES
+ * ============================================================================
+ *
+ * 1. MAGIC TAKE PROFIT (TP)
+ *    Trigger: Price approaches or exceeds rotation resistance (rotationHigh)
+ *    Rationale: Resistance represents where price previously reversed. Taking
+ *               profit here captures gains before potential rejection.
+ *    Condition: Must be in profit (prevents exiting losing trades at resistance)
+ *
+ * 2. MAGIC STOP LOSS (SL)
+ *    Trigger: Price breaks below rotation support (rotationLow)
+ *    Rationale: Support break invalidates bullish structure. The reason for
+ *               the trade (bullish structure) no longer exists.
+ *    Condition: No profit requirement (cut losses regardless)
+ *
+ * 3. MAGIC TRAILING STOP LOSS (TSL) - TODO
+ *    Trigger: Price closes below Williams fractal trailing stop
+ *    Rationale: Locks in profits as trade moves in your favor while giving
+ *               room for normal pullbacks
+ *    Implementation: Trail to fractal swing lows (for longs)
+ *
+ * ============================================================================
+ * INTEGRATION WITH ROTATIONS
+ * ============================================================================
+ *
+ * Magic exits use the same rotation levels calculated by the Rotations rule:
+ *   - rotationHigh = resistance (TP zone)
+ *   - rotationLow = support (SL zone)
+ *
+ * This creates coherence: entries are at support, exits are at resistance,
+ * and stops are when support breaks. All based on the same structure model.
+ *
+ * ============================================================================
+ * TRIGGER MECHANICS
+ * ============================================================================
+ *
+ * TP Trigger (default 0.5% buffer):
+ *   - Price within 0.5% of rotationHigh AND in profit → EXIT
+ *   - OR price >= rotationHigh AND in profit → EXIT
+ *
+ * SL Trigger (default 0.5% buffer):
+ *   - Price is 0.5%+ below rotationLow → EXIT
+ *   - No profit requirement (we're cutting losses)
+ *
+ * The buffer prevents:
+ *   - TP: Missing exits because price turned just before resistance
+ *   - SL: Whipsawing on exact level touches
+ */
+
+import type { TokenMarketData, OHLCV } from '../api/types.js';
+import type { PaperTrade } from './types.js';
+import { paperTracker } from './paper-tracker.js';
+import {
+  getRotationLevels,
+  estimateRotationFromMarketData,
+  type RotationLevels,
+} from '../rules/rotations.js';
+import { williamsTsl, type TslCheckResult } from './williams-tsl.js';
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+/**
+ * Configuration for magic exit strategies.
+ * Each exit type can be individually enabled/disabled with custom thresholds.
+ */
+export interface MagicExitConfig {
+  // ========================================================================
+  // TAKE PROFIT SETTINGS
+  // ========================================================================
+  /** Enable magic take profit at rotation resistance */
+  tpEnabled: boolean;
+  /**
+   * How close to resistance to trigger TP (percentage).
+   * Lower = more aggressive (exit earlier), Higher = more conservative.
+   * Example: 0.5 means exit when within 0.5% of resistance.
+   */
+  tpTriggerPercent: number;
+
+  // ========================================================================
+  // STOP LOSS SETTINGS
+  // ========================================================================
+  /** Enable magic stop loss on support break */
+  slEnabled: boolean;
+  /**
+   * How far below support to trigger SL (percentage).
+   * Lower = tighter stop (less loss, more false triggers).
+   * Higher = looser stop (more loss, fewer false triggers).
+   * Example: 0.5 means exit when 0.5% below support.
+   */
+  slTriggerPercent: number;
+
+  // ========================================================================
+  // TRAILING STOP LOSS SETTINGS (TODO)
+  // ========================================================================
+  /** Enable Williams fractal trailing stop loss */
+  tslEnabled: boolean;
+}
+
+/**
+ * Result of checking a single trade for exit conditions.
+ */
+export interface ExitCheck {
+  /** Whether an exit should be executed */
+  shouldExit: boolean;
+  /** Reason for exit (for logging and analytics) */
+  reason: 'tp_resistance' | 'sl_support_break' | 'tsl_fractal' | null;
+  /** Price at which to execute exit */
+  exitPrice: number;
+  /** Rotation levels used for this check (for reference) */
+  rotationLevels?: RotationLevels;
+  /** TSL check result (for reference) */
+  tslResult?: TslCheckResult;
+  /** Human-readable details about why exit triggered */
+  details?: string;
+}
+
+// ============================================================================
+// DEFAULT CONFIGURATION
+// ============================================================================
+
+/**
+ * Default magic exit configuration.
+ *
+ * These defaults are tuned for meme coin trading:
+ *   - 0.5% TP buffer: Captures most of the move to resistance
+ *   - 0.5% SL buffer: Allows for small wicks without triggering
+ *   - TSL disabled: Requires OHLCV data which may not be available
+ */
+export const DEFAULT_MAGIC_EXIT_CONFIG: MagicExitConfig = {
+  tpEnabled: true,
+  tpTriggerPercent: 0.5, // Exit when within 0.5% of resistance
+
+  slEnabled: true,
+  slTriggerPercent: 0.5, // Exit when 0.5% below support
+
+  tslEnabled: true, // Williams fractal trailing stop (1m, 3/3 range)
+};
+
+// ============================================================================
+// MAGIC EXIT CHECKER
+// ============================================================================
+
+/**
+ * MagicExitChecker - Monitors open trades and triggers structure-based exits.
+ *
+ * Usage:
+ *   1. Create instance with config
+ *   2. Call checkExit() or checkAllTrades() with market data
+ *   3. Call executeExits() to close trades that should exit
+ *
+ * The checker uses rotation levels from the rotations rule cache, or estimates
+ * them from market data if not cached. This ensures consistency with entry signals.
+ */
+export class MagicExitChecker {
+  private config: MagicExitConfig;
+
+  constructor(config: Partial<MagicExitConfig> = {}) {
+    this.config = { ...DEFAULT_MAGIC_EXIT_CONFIG, ...config };
+  }
+
+  /**
+   * Update configuration at runtime.
+   * Useful for adjusting thresholds without restarting.
+   */
+  updateConfig(config: Partial<MagicExitConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
+   * Check if a single trade should exit based on magic exit rules.
+   *
+   * Flow:
+   *   1. Get rotation levels for this token (from cache or estimate)
+   *   2. Check TP condition (approaching resistance, in profit)
+   *   3. Check SL condition (below support)
+   *   4. Check TSL condition (below trailing fractal stop)
+   *   5. Return first triggered exit condition
+   *
+   * @param trade - Open paper trade to check
+   * @param marketData - Current market data for the token
+   * @param candles - Optional 1m OHLCV data for Williams TSL
+   * @returns ExitCheck with shouldExit and reason
+   */
+  checkExit(trade: PaperTrade, marketData: TokenMarketData, candles?: OHLCV[]): ExitCheck {
+    const currentPrice = marketData.price_sol;
+
+    // ========================================================================
+    // GET ROTATION LEVELS
+    // ========================================================================
+    // First try to get cached levels from the rotations rule.
+    // If not cached (token not analyzed by rotations rule), estimate from
+    // market data. This ensures we always have some structure to work with.
+    let levels = getRotationLevels(trade.mint);
+    if (!levels) {
+      levels = estimateRotationFromMarketData(marketData);
+    }
+
+    if (!levels) {
+      // Can't determine structure - no exit signal
+      return { shouldExit: false, reason: null, exitPrice: currentPrice };
+    }
+
+    // ========================================================================
+    // CHECK MAGIC TAKE PROFIT (for long positions)
+    // ========================================================================
+    // Only check TP for buy trades (long positions).
+    // TP triggers when price approaches resistance AND we're in profit.
+    if (this.config.tpEnabled && trade.action === 'buy') {
+      const tpCheck = this.checkTakeProfit(trade, currentPrice, levels);
+      if (tpCheck.shouldExit) return tpCheck;
+    }
+
+    // ========================================================================
+    // CHECK MAGIC STOP LOSS (for long positions)
+    // ========================================================================
+    // Only check SL for buy trades (long positions).
+    // SL triggers when price breaks below support (no profit requirement).
+    if (this.config.slEnabled && trade.action === 'buy') {
+      const slCheck = this.checkStopLoss(trade, currentPrice, levels);
+      if (slCheck.shouldExit) return slCheck;
+    }
+
+    // ========================================================================
+    // CHECK WILLIAMS FRACTAL TRAILING STOP LOSS
+    // ========================================================================
+    // TSL trails to second most recent valid fractal low.
+    // Requires 1m candle data.
+    if (this.config.tslEnabled && trade.action === 'buy' && candles && candles.length > 0) {
+      const tslCheck = this.checkTrailingStop(trade, currentPrice, candles);
+      if (tslCheck.shouldExit) return tslCheck;
+    }
+
+    // No exit conditions met
+    return {
+      shouldExit: false,
+      reason: null,
+      exitPrice: currentPrice,
+      rotationLevels: levels,
+    };
+  }
+
+  /**
+   * Check Williams Fractal Trailing Stop Loss condition.
+   *
+   * STRATEGY RATIONALE:
+   * Williams fractals identify swing lows. We trail to the SECOND most recent
+   * valid fractal low (not the most recent) to give trades room to breathe.
+   *
+   * A fractal low is "valid" if it hasn't been invalidated by a subsequent
+   * lower fractal low (meaning support was broken).
+   *
+   * @param trade - Open trade to check
+   * @param currentPrice - Current price
+   * @param candles - 1m OHLCV candles for fractal detection
+   * @returns ExitCheck for TSL
+   */
+  private checkTrailingStop(
+    trade: PaperTrade,
+    currentPrice: number,
+    candles: OHLCV[]
+  ): ExitCheck {
+    const tslResult = williamsTsl.check(trade.mint, currentPrice, candles);
+
+    if (tslResult.triggered) {
+      return {
+        shouldExit: true,
+        reason: 'tsl_fractal',
+        exitPrice: currentPrice,
+        tslResult,
+        details: tslResult.details,
+      };
+    }
+
+    return {
+      shouldExit: false,
+      reason: null,
+      exitPrice: currentPrice,
+      tslResult,
+    };
+  }
+
+  /**
+   * Check Magic Take Profit condition.
+   *
+   * STRATEGY RATIONALE:
+   * Rotation resistance (rotationHigh) represents where price previously
+   * reversed. Rather than hoping for continued momentum, we capture gains
+   * before the expected rejection. This is conservative but consistent.
+   *
+   * TRIGGER CONDITIONS:
+   * 1. Price within tpTriggerPercent of resistance AND in profit
+   * 2. OR price at/above resistance AND in profit
+   *
+   * The profit requirement prevents exiting losing trades at resistance
+   * (which would lock in losses instead of giving recovery chance).
+   *
+   * @param trade - Open trade to check
+   * @param currentPrice - Current price
+   * @param levels - Rotation levels
+   * @returns ExitCheck for TP
+   */
+  private checkTakeProfit(
+    trade: PaperTrade,
+    currentPrice: number,
+    levels: RotationLevels
+  ): ExitCheck {
+    const { rotationHigh } = levels;
+
+    // Calculate distance to resistance as percentage
+    // Positive = below resistance, Negative = above resistance
+    const distanceToResistance = ((rotationHigh - currentPrice) / currentPrice) * 100;
+
+    // Calculate current P&L percentage
+    const pnlPercent = ((currentPrice - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+
+    // ========================================================================
+    // TRIGGER: APPROACHING RESISTANCE AND IN PROFIT
+    // ========================================================================
+    // If we're within the trigger distance of resistance AND making money,
+    // take profit now rather than risk rejection.
+    if (distanceToResistance <= this.config.tpTriggerPercent && pnlPercent > 0) {
+      return {
+        shouldExit: true,
+        reason: 'tp_resistance',
+        exitPrice: currentPrice,
+        rotationLevels: levels,
+        details: `Price ${currentPrice.toFixed(8)} within ${distanceToResistance.toFixed(2)}% of resistance ${rotationHigh.toFixed(8)} | P&L: +${pnlPercent.toFixed(2)}%`,
+      };
+    }
+
+    // ========================================================================
+    // TRIGGER: AT OR ABOVE RESISTANCE AND IN PROFIT
+    // ========================================================================
+    // Price has reached or exceeded resistance. Even if it continues higher,
+    // we've captured the expected move. Take profit on strength.
+    if (currentPrice >= rotationHigh && pnlPercent > 0) {
+      return {
+        shouldExit: true,
+        reason: 'tp_resistance',
+        exitPrice: currentPrice,
+        rotationLevels: levels,
+        details: `Price ${currentPrice.toFixed(8)} at/above resistance ${rotationHigh.toFixed(8)} | P&L: +${pnlPercent.toFixed(2)}%`,
+      };
+    }
+
+    // TP not triggered
+    return { shouldExit: false, reason: null, exitPrice: currentPrice, rotationLevels: levels };
+  }
+
+  /**
+   * Check Magic Stop Loss condition.
+   *
+   * STRATEGY RATIONALE:
+   * Rotation support (rotationLow) represents where buyers previously stepped in.
+   * If price breaks below this level, the bullish structure that justified our
+   * entry is invalidated. We exit to prevent further losses.
+   *
+   * TRIGGER CONDITIONS:
+   * - Price is slTriggerPercent below support
+   *
+   * No profit requirement - we cut losses regardless of P&L. The goal is
+   * capital preservation when the trade thesis (bullish structure) is wrong.
+   *
+   * WHY NOT EXIT AT EXACT SUPPORT?
+   * A small buffer prevents whipsaws from wicks that briefly touch support
+   * but don't indicate genuine breakdown. The 0.5% default allows for normal
+   * volatility while still protecting against real support breaks.
+   *
+   * @param trade - Open trade to check
+   * @param currentPrice - Current price
+   * @param levels - Rotation levels
+   * @returns ExitCheck for SL
+   */
+  private checkStopLoss(
+    trade: PaperTrade,
+    currentPrice: number,
+    levels: RotationLevels
+  ): ExitCheck {
+    const { rotationLow } = levels;
+
+    // Calculate how far below support we are (as percentage)
+    // Positive = below support, Negative = above support
+    const distanceBelowSupport = ((rotationLow - currentPrice) / currentPrice) * 100;
+
+    // ========================================================================
+    // TRIGGER: SUPPORT BREAK
+    // ========================================================================
+    // Price has broken below support by more than the trigger threshold.
+    // The bullish structure is invalidated - exit to limit losses.
+    if (distanceBelowSupport >= this.config.slTriggerPercent) {
+      const pnlPercent = ((currentPrice - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+
+      return {
+        shouldExit: true,
+        reason: 'sl_support_break',
+        exitPrice: currentPrice,
+        rotationLevels: levels,
+        details: `Price ${currentPrice.toFixed(8)} broke support ${rotationLow.toFixed(8)} by ${distanceBelowSupport.toFixed(2)}% | P&L: ${pnlPercent.toFixed(2)}%`,
+      };
+    }
+
+    // SL not triggered
+    return { shouldExit: false, reason: null, exitPrice: currentPrice, rotationLevels: levels };
+  }
+
+  /**
+   * Check all open trades for exit conditions.
+   *
+   * This is the batch version of checkExit() - iterates through all open
+   * paper trades and returns those that should be closed.
+   *
+   * @param marketDataMap - Map of mint -> market data for all tokens
+   * @param candleDataMap - Optional map of mint -> 1m OHLCV candles for TSL
+   * @returns Array of trades that should exit with their exit details
+   */
+  checkAllTrades(
+    marketDataMap: Map<string, TokenMarketData>,
+    candleDataMap?: Map<string, OHLCV[]>
+  ): Array<{
+    trade: PaperTrade;
+    exit: ExitCheck;
+  }> {
+    const exits: Array<{ trade: PaperTrade; exit: ExitCheck }> = [];
+
+    const openTrades = paperTracker.getOpenTrades();
+
+    for (const trade of openTrades) {
+      const marketData = marketDataMap.get(trade.mint);
+      if (!marketData) continue; // Skip if no market data available
+
+      const candles = candleDataMap?.get(trade.mint);
+      const exit = this.checkExit(trade, marketData, candles);
+      if (exit.shouldExit) {
+        exits.push({ trade, exit });
+      }
+    }
+
+    return exits;
+  }
+
+  /**
+   * Execute magic exits for all triggered trades.
+   *
+   * This is the main entry point for the run loop - checks all trades and
+   * closes those that meet exit conditions.
+   *
+   * @param marketDataMap - Map of mint -> market data
+   * @param quiet - Suppress console output (for bulk scanning)
+   * @param candleDataMap - Optional map of mint -> 1m OHLCV candles for TSL
+   * @returns Array of trades that were closed
+   */
+  async executeExits(
+    marketDataMap: Map<string, TokenMarketData>,
+    quiet: boolean = false,
+    candleDataMap?: Map<string, OHLCV[]>
+  ): Promise<PaperTrade[]> {
+    const closedTrades: PaperTrade[] = [];
+    const exitsToExecute = this.checkAllTrades(marketDataMap, candleDataMap);
+
+    for (const { trade, exit } of exitsToExecute) {
+      const marketData = marketDataMap.get(trade.mint);
+      if (!marketData) continue;
+
+      // Close the paper trade
+      const closed = paperTracker.closeTrade(
+        trade.id,
+        exit.exitPrice,
+        marketData.price_usd
+      );
+
+      if (closed) {
+        closedTrades.push(closed);
+
+        // Clear TSL state for this mint
+        williamsTsl.clearState(closed.mint);
+
+        // Log the exit (unless quiet mode)
+        if (!quiet) {
+          const reasonLabel = this.getReasonLabel(exit.reason);
+          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+          console.log(
+            `\n[MAGIC ${reasonLabel}] ${closed.symbol} | ${pnlSign}${closed.pnlPercent?.toFixed(2)}%`
+          );
+          if (exit.details) {
+            console.log(`  ${exit.details}`);
+          }
+        }
+      }
+    }
+
+    // Persist closed trades
+    if (closedTrades.length > 0) {
+      await paperTracker.save();
+    }
+
+    return closedTrades;
+  }
+
+  /**
+   * Get human-readable label for exit reason.
+   * Used in logging and UI display.
+   */
+  private getReasonLabel(reason: ExitCheck['reason']): string {
+    switch (reason) {
+      case 'tp_resistance':
+        return 'TP'; // Take Profit
+      case 'sl_support_break':
+        return 'SL'; // Stop Loss
+      case 'tsl_fractal':
+        return 'TSL'; // Trailing Stop Loss
+      default:
+        return 'EXIT';
+    }
+  }
+
+  /**
+   * Get current configuration.
+   * Returns a copy to prevent external mutation.
+   */
+  getConfig(): MagicExitConfig {
+    return { ...this.config };
+  }
+}
+
+// ============================================================================
+// SINGLETON INSTANCE
+// ============================================================================
+
+/**
+ * Default magic exit checker instance.
+ * Used by the CLI run loop for automatic exit management.
+ *
+ * The singleton pattern ensures:
+ *   1. Consistent configuration across the application
+ *   2. No duplicate instances checking the same trades
+ *   3. Easy access without dependency injection
+ */
+export const magicExits = new MagicExitChecker();

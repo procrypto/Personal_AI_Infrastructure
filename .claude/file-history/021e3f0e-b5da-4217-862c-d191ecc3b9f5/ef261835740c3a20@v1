@@ -1,0 +1,92 @@
+/**
+ * Thread Reply Functions
+ *
+ * Post and update QA assignment messages in Slack threads.
+ * Used to reply to Linear's native Slack messages with interactive Block Kit UI.
+ */
+
+import type { KnownBlock } from '@slack/types';
+import { getSlackApp } from './client.js';
+import { buildQAAssignmentBlocks } from './block-kit.js';
+import type { QATicket } from '../types.js';
+
+/**
+ * Post a QA assignment message in a Slack thread.
+ * Returns the posted message's timestamp for tracking, or null on failure.
+ *
+ * @param ticket - The QA ticket to post about (must have slackThreadTs and slackChannelId)
+ * @returns Message timestamp string on success, null on failure or missing thread info
+ */
+export async function postQAThreadReply(ticket: QATicket): Promise<string | null> {
+  // Validate required Slack thread info
+  if (!ticket.slackThreadTs || !ticket.slackChannelId) {
+    console.warn(
+      `[thread-reply] Cannot post reply - ticket ${ticket.id} missing Slack thread info`,
+      { slackThreadTs: ticket.slackThreadTs, slackChannelId: ticket.slackChannelId }
+    );
+    return null;
+  }
+
+  try {
+    const app = getSlackApp();
+    const blocks = buildQAAssignmentBlocks(ticket);
+
+    const result = await app.client.chat.postMessage({
+      channel: ticket.slackChannelId,
+      thread_ts: ticket.slackThreadTs,
+      text: `QA Assignment: ${ticket.title}`, // Fallback for notifications
+      blocks,
+    });
+
+    if (result.ok && result.ts) {
+      console.log(
+        `[thread-reply] Posted QA assignment for ticket ${ticket.id} in thread ${ticket.slackThreadTs}`,
+        { messageTs: result.ts }
+      );
+      return result.ts;
+    }
+
+    console.error('[thread-reply] Slack API returned not ok', { result });
+    return null;
+  } catch (error) {
+    console.error(`[thread-reply] Failed to post QA thread reply for ticket ${ticket.id}`, error);
+    return null;
+  }
+}
+
+/**
+ * Update an existing QA message with new blocks.
+ * Used by Phase 5 button handlers to replace action buttons with status.
+ *
+ * @param channelId - Slack channel ID
+ * @param messageTs - Timestamp of the message to update
+ * @param blocks - New Block Kit blocks to display
+ * @returns true on success, false on failure
+ */
+export async function updateQAMessage(
+  channelId: string,
+  messageTs: string,
+  blocks: KnownBlock[]
+): Promise<boolean> {
+  try {
+    const app = getSlackApp();
+
+    const result = await app.client.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      blocks,
+      text: 'QA Assignment Updated', // Fallback text required
+    });
+
+    if (result.ok) {
+      console.log(`[thread-reply] Updated message ${messageTs} in channel ${channelId}`);
+      return true;
+    }
+
+    console.error('[thread-reply] Slack API returned not ok for update', { result });
+    return false;
+  } catch (error) {
+    console.error(`[thread-reply] Failed to update message ${messageTs}`, error);
+    return false;
+  }
+}

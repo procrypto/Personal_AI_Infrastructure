@@ -1,0 +1,125 @@
+# GitHub Actions workflow for deploying to GCP Cloud Run (Production)
+# Triggers on version tags (v*) for multi-region production deployments
+
+name: Deploy to Production
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: data-backend-prod
+  WIF_SERVICE_ACCOUNT: web-terminal@data-backend-prod.iam.gserviceaccount.com
+  WIF_PROVIDER: projects/145759184861/locations/global/workloadIdentityPools/github-actions-auth-pool/providers/github
+  ARTIFACT_REGISTRY: europe-west4-docker.pkg.dev
+  ARTIFACT_REGISTRY_FULL_PATH: europe-west4-docker.pkg.dev/data-backend-prod/trenchbench-api/server
+  ENVIRONMENT: prod
+
+jobs:
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }} --quiet
+
+      - name: Build and push Docker image
+        id: build
+        run: |
+          IMAGE="${{ env.ARTIFACT_REGISTRY_FULL_PATH }}:${{ github.sha }}"
+          docker build -t $IMAGE .
+          docker push $IMAGE
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy to Cloud Run (${{ matrix.region.suffix }})
+    runs-on: ubuntu-latest
+    needs: build
+
+    strategy:
+      matrix:
+        region:
+          - name: asia-southeast1
+            suffix: asia
+          - name: europe-west3
+            suffix: eu
+          - name: us-east4
+            suffix: usa
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run (${{ matrix.region.suffix }})
+        id: deploy
+        run: |
+          gcloud run deploy trenchbench-api-${{ matrix.region.suffix }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --image=${{ needs.build.outputs.image }} \
+            --region=${{ matrix.region.name }} \
+            --memory=512Mi \
+            --cpu=1 \
+            --min-instances=0 \
+            --max-instances=10 \
+            --port=8080 \
+            --allow-unauthenticated \
+            --set-env-vars="APP_ENV=remote,ENVIRONMENT=${{ env.ENVIRONMENT }}" \
+            --set-secrets="CLICKHOUSE_URL=clickhouse-${{ env.ENVIRONMENT }}-${{ matrix.region.suffix }}-ro-uri:latest,CLICKHOUSE_USER=clickhouse-${{ env.ENVIRONMENT }}-${{ matrix.region.suffix }}-ro-user:latest,CLICKHOUSE_PASSWORD=clickhouse-${{ env.ENVIRONMENT }}-${{ matrix.region.suffix }}-ro-password:latest,TWITTER_API_KEY=twitter-api-key:latest"
+
+      - name: Get service URL
+        id: get-url
+        run: |
+          URL=$(gcloud run services describe trenchbench-api-${{ matrix.region.suffix }} --region=${{ matrix.region.name }} --format='value(status.url)')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Show deployment details
+        run: |
+          echo "Service deployed successfully!"
+          echo "Region: ${{ matrix.region.name }} (${{ matrix.region.suffix }})"
+          echo "Service: trenchbench-api-${{ matrix.region.suffix }}"
+          echo "URL: ${{ steps.get-url.outputs.url }}"
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+          echo "Tag: ${{ github.ref_name }}"
+
+      - name: Verify deployment health
+        run: |
+          echo "Waiting for deployment to stabilize..."
+          sleep 15
+          HEALTH_URL="${{ steps.get-url.outputs.url }}/health"
+          echo "Checking health at $HEALTH_URL"
+          curl -sf "$HEALTH_URL" | grep -q '"ok":true' && echo "Health check passed" || (echo "Health check failed" && exit 1)

@@ -1,0 +1,823 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/rotations.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+     1→/**
+     2→ * Rotations Rule - Market Structure Detection via Candlestick Rotations
+     3→ *
+     4→ * ============================================================================
+     5→ * STRATEGY OVERVIEW
+     6→ * ============================================================================
+     7→ *
+     8→ * This implements the Rotations v1.5.2 algorithm for detecting market structure
+     9→ * via candlestick rotations. It tracks support/resistance levels dynamically
+    10→ * based on price action structure, not arbitrary calculations.
+    11→ *
+    12→ * Reference: tradingview/Rotations1.5.2.pine.js
+    13→ *
+    14→ * ============================================================================
+    15→ * CORE CONCEPT: WHAT IS A ROTATION?
+    16→ * ============================================================================
+    17→ *
+    18→ * A "rotation" represents a confirmed directional swing in price. Unlike simple
+    19→ * higher-highs/lower-lows, rotations require TWO conditions to be met:
+    20→ *
+    21→ *   1. Price must close beyond the previous rotation's extreme (high or low)
+    22→ *   2. Price must also close beyond the previous bar's extreme
+    23→ *
+    24→ * This dual requirement filters out noise and only signals when there's
+    25→ * genuine momentum behind the move.
+    26→ *
+    27→ * ============================================================================
+    28→ * STATE MACHINE
+    29→ * ============================================================================
+    30→ *
+    31→ * The indicator tracks three states:
+    32→ *
+    33→ *   State +1 (Upward Rotation / Bullish Structure):
+    34→ *     Condition: close > rotationHigh AND close > high[1]
+    35→ *     Meaning: Price has broken above resistance with momentum
+    36→ *     Action: Look for long entries on pullbacks
+    37→ *
+    38→ *   State -1 (Downward Rotation / Bearish Structure):
+    39→ *     Condition: close < rotationLow AND close < low[1]
+    40→ *     Meaning: Price has broken below support with momentum
+    41→ *     Action: Look for short entries or exit longs
+    42→ *
+    43→ *   State 0 (Invalidation / Ranging):
+    44→ *     Condition: Price crosses opposite level without meeting full criteria
+    45→ *     Meaning: Structure is broken, no clear direction
+    46→ *     Action: Wait for new structure or range trade
+    47→ *
+    48→ * ============================================================================
+    49→ * SIGNAL TYPES & RATIONALE
+    50→ * ============================================================================
+    51→ *
+    52→ * 1. BREAK OF STRUCTURE (BOS) - signalOnRotation
+    53→ *    - Trigger: State flips from non-bullish to +1, or non-bearish to -1
+    54→ *    - Rationale: Catching the exact moment market structure changes puts you
+    55→ *      ahead of traders still positioned for the old direction
+    56→ *    - Risk: Moderate - structure breaks can fail
+    57→ *    - Strength: 0.8 (high confidence)
+    58→ *
+    59→ * 2. PULLBACK TO SUPPORT/RESISTANCE - signalOnPullback
+    60→ *    - Trigger: Price approaches rotationLow in uptrend, or rotationHigh in downtrend
+    61→ *    - Rationale: Trend continuation trades have highest probability. Buying
+    62→ *      pullbacks in uptrends means buying at dynamic support with trend backing you
+    63→ *    - Risk: Lower than BOS (trend is already confirmed)
+    64→ *    - Strength: 0.7 (good confidence)
+    65→ *
+    66→ * 3. SWING FAILURE PATTERN (SFP) - signalOnSFP
+    67→ *    - Trigger: Wick beyond level but close back inside (false breakout)
+    68→ *    - Rationale: False breakouts indicate liquidity grabs. Smart money pushes
+    69→ *      price through obvious levels to trigger stops, then reverses. Fading
+    70→ *      these moves catches the reversal with tight stops (just beyond the wick)
+    71→ *    - Risk: Higher (counter-trend), but tight stops mean good risk/reward
+    72→ *    - Strength: 0.75
+    73→ *
+    74→ * ============================================================================
+    75→ * LEVEL CALCULATION
+    76→ * ============================================================================
+    77→ *
+    78→ * When a new rotation is established:
+    79→ *   - rotationHigh = high of the bar that triggered the rotation
+    80→ *   - rotationLow = low of the bar that triggered the rotation
+    81→ *
+    82→ * These levels persist until a new rotation is established, serving as:
+    83→ *   - Support (rotationLow) - expected to hold in uptrends
+    84→ *   - Resistance (rotationHigh) - expected to hold in downtrends
+    85→ *
+    86→ * ============================================================================
+    87→ * MARKET DATA FALLBACK
+    88→ * ============================================================================
+    89→ *
+    90→ * When OHLCV data is unavailable (e.g., API limitations), we estimate rotation
+    91→ * state from market data price changes:
+    92→ *
+    93→ *   - 5m change > 1% AND 1h change > 0% → Upward rotation
+    94→ *   - 5m change < -1% AND 1h change < 0% → Downward rotation
+    95→ *   - Mixed signals → Invalidation (ranging)
+    96→ *
+    97→ * This is less accurate than true OHLCV-based calculation but provides
+    98→ * reasonable signals when candlestick data isn't available.
+    99→ */
+   100→
+   101→import type { OHLCV } from '../api/types.js';
+   102→import type { Rule, Signal, AnalysisContext, RotationsRuleConfig } from './types.js';
+   103→
+   104→// ============================================================================
+   105→// TYPES
+   106→// ============================================================================
+   107→
+   108→/**
+   109→ * Rotation state representing market structure direction.
+   110→ * -1 = Bearish (downward rotation confirmed)
+   111→ *  0 = Invalidated (structure broken, no clear direction)
+   112→ * +1 = Bullish (upward rotation confirmed)
+   113→ */
+   114→export type RotationState = -1 | 0 | 1;
+   115→
+   116→/**
+   117→ * Current rotation levels and state.
+   118→ * These define the dynamic support/resistance based on recent structure.
+   119→ */
+   120→export interface RotationLevels {
+   121→  /** Resistance level - high of the bar that established current rotation */
+   122→  rotationHigh: number;
+   123→  /** Support level - low of the bar that established current rotation */
+   124→  rotationLow: number;
+   125→  /** Current market structure state */
+   126→  state: RotationState;
+   127→  /** Bar index when current rotation started (for reference) */
+   128→  barIndex: number;
+   129→}
+   130→
+   131→/**
+   132→ * Complete rotation analysis including signals.
+   133→ */
+   134→export interface RotationAnalysis {
+   135→  /** Current timeframe rotation levels */
+   136→  current: RotationLevels;
+   137→  /** Higher timeframe levels for confluence (optional) */
+   138→  htf?: RotationLevels;
+   139→  /** Generated signals based on price vs levels */
+   140→  signals: {
+   141→    /** State just flipped to +1 (bullish structure established) */
+   142→    newUpRotation: boolean;
+   143→    /** State just flipped to -1 (bearish structure established) */
+   144→    newDownRotation: boolean;
+   145→    /** State just flipped to 0 (structure invalidated) */
+   146→    invalidation: boolean;
+   147→    /** Price is near rotationLow (potential support bounce) */
+   148→    atSupport: boolean;
+   149→    /** Price is near rotationHigh (potential resistance rejection) */
+   150→    atResistance: boolean;
+   151→    /** Wick above rotationHigh but close below (false breakout / SFP) */
+   152→    falseBreakoutHigh: boolean;
+   153→    /** Wick below rotationLow but close above (false breakout / SFP) */
+   154→    falseBreakoutLow: boolean;
+   155→    /** Current TF direction matches HTF direction */
+   156→    htfAligned: boolean;
+   157→  };
+   158→}
+   159→
+   160→// ============================================================================
+   161→// ROTATION CALCULATOR
+   162→// ============================================================================
+   163→
+   164→/**
+   165→ * Calculate rotation state from OHLCV candlestick data.
+   166→ *
+   167→ * This is the core algorithm that processes bars sequentially to determine
+   168→ * current market structure. Each bar is evaluated against the current
+   169→ * rotation levels to detect state changes.
+   170→ *
+   171→ * Algorithm:
+   172→ *   1. Initialize with first bar's high/low as initial levels
+   173→ *   2. For each subsequent bar:
+   174→ *      a. Check if upward rotation criteria met (close > rotationHigh AND close > prevHigh)
+   175→ *      b. Check if downward rotation criteria met (close < rotationLow AND close > prevLow)
+   176→ *      c. Check if invalidation occurred (crossed opposite level without full criteria)
+   177→ *   3. Update state and levels accordingly
+   178→ *
+   179→ * @param ohlcv - Array of OHLCV candles (will be sorted oldest-first)
+   180→ * @returns RotationLevels or null if insufficient data
+   181→ */
+   182→export function calculateRotations(ohlcv: OHLCV[]): RotationLevels | null {
+   183→  if (ohlcv.length < 2) return null;
+   184→
+   185→  // Sort by timestamp ascending (oldest first) to process chronologically
+   186→  const bars = [...ohlcv].sort((a, b) => a.timestamp - b.timestamp);
+   187→
+   188→  // Initialize with first bar's range as starting levels
+   189→  let rotationHigh = bars[0].high;
+   190→  let rotationLow = bars[0].low;
+   191→  let state: RotationState = 0;
+   192→  let rotationStartIndex = 0;
+   193→
+   194→  // Process each bar to update rotation state
+   195→  for (let i = 1; i < bars.length; i++) {
+   196→    const bar = bars[i];
+   197→    const prevBar = bars[i - 1];
+   198→
+   199→    let newState: RotationState = state;
+   200→
+   201→    // ========================================================================
+   202→    // CHECK FOR NEW UPWARD ROTATION
+   203→    // ========================================================================
+   204→    // Criteria: Close above current resistance AND above previous bar's high
+   205→    // This dual requirement ensures momentum is behind the breakout, not just
+   206→    // a wick or weak close at the level.
+   207→    if (bar.close > rotationHigh && bar.close > prevBar.high) {
+   208→      newState = 1;
+   209→      // Reset levels to this bar's range - this becomes new support/resistance
+   210→      rotationHigh = bar.high;
+   211→      rotationLow = bar.low;
+   212→      rotationStartIndex = i;
+   213→    }
+   214→    // ========================================================================
+   215→    // CHECK FOR NEW DOWNWARD ROTATION
+   216→    // ========================================================================
+   217→    // Criteria: Close below current support AND below previous bar's low
+   218→    // Same logic as upward but inverted - ensures genuine breakdown with momentum.
+   219→    else if (bar.close < rotationLow && bar.close < prevBar.low) {
+   220→      newState = -1;
+   221→      rotationHigh = bar.high;
+   222→      rotationLow = bar.low;
+   223→      rotationStartIndex = i;
+   224→    }
+   225→    // ========================================================================
+   226→    // CHECK FOR INVALIDATION
+   227→    // ========================================================================
+   228→    // Occurs when price crosses the opposite level without meeting full rotation
+   229→    // criteria. This breaks the current structure without establishing new direction.
+   230→    // Example: In uptrend, price closes below rotationLow but NOT below prevLow
+   231→    else if (
+   232→      (state > 0 && bar.close < rotationLow) ||
+   233→      (state < 0 && bar.close > rotationHigh)
+   234→    ) {
+   235→      newState = 0;
+   236→    }
+   237→
+   238→    state = newState;
+   239→  }
+   240→
+   241→  return {
+   242→    rotationHigh,
+   243→    rotationLow,
+   244→    state,
+   245→    barIndex: rotationStartIndex,
+   246→  };
+   247→}
+   248→
+   249→/**
+   250→ * Analyze current price action against rotation levels.
+   251→ *
+   252→ * This function doesn't calculate rotations - it analyzes current price
+   253→ * relative to already-calculated levels to detect actionable signals.
+   254→ *
+   255→ * @param currentPrice - Current close price
+   256→ * @param currentHigh - Current bar high (or estimate)
+   257→ * @param currentLow - Current bar low (or estimate)
+   258→ * @param levels - Calculated rotation levels
+   259→ * @param htfLevels - Optional higher timeframe levels for confluence
+   260→ * @param levelBuffer - Percentage buffer for "at level" detection (default 0.5%)
+   261→ * @returns RotationAnalysis with populated signals
+   262→ */
+   263→export function analyzeRotations(
+   264→  currentPrice: number,
+   265→  currentHigh: number,
+   266→  currentLow: number,
+   267→  levels: RotationLevels,
+   268→  htfLevels?: RotationLevels,
+   269→  levelBuffer: number = 0.5
+   270→): RotationAnalysis {
+   271→  // Calculate buffer zone around levels
+   272→  // A 0.5% buffer means "at support" when within 0.5% of rotationLow
+   273→  const bufferMultiplier = 1 + levelBuffer / 100;
+   274→  const bufferDivisor = 1 - levelBuffer / 100;
+   275→
+   276→  // ========================================================================
+   277→  // DETECT IF PRICE IS AT SUPPORT
+   278→  // ========================================================================
+   279→  // Price is "at support" when:
+   280→  //   - Current low touched or approached the rotationLow (within buffer)
+   281→  //   - Current price is still at or above the level (hasn't broken down)
+   282→  const atSupport =
+   283→    currentLow <= levels.rotationLow * bufferMultiplier &&
+   284→    currentPrice >= levels.rotationLow * bufferDivisor;
+   285→
+   286→  // ========================================================================
+   287→  // DETECT IF PRICE IS AT RESISTANCE
+   288→  // ========================================================================
+   289→  // Price is "at resistance" when:
+   290→  //   - Current high touched or approached the rotationHigh (within buffer)
+   291→  //   - Current price is still at or below the level (hasn't broken up)
+   292→  const atResistance =
+   293→    currentHigh >= levels.rotationHigh * bufferDivisor &&
+   294→    currentPrice <= levels.rotationHigh * bufferMultiplier;
+   295→
+   296→  // ========================================================================
+   297→  // DETECT FALSE BREAKOUTS (SWING FAILURE PATTERN)
+   298→  // ========================================================================
+   299→  // SFP occurs when price wicks beyond a level but closes back inside.
+   300→  // This indicates a "liquidity grab" - stops were triggered but there
+   301→  // wasn't genuine follow-through. Often precedes reversal.
+   302→  //
+   303→  // False breakout HIGH: Wick above resistance, close at or below
+   304→  // → Bearish signal (rejection from resistance)
+   305→  const falseBreakoutHigh =
+   306→    currentHigh > levels.rotationHigh && currentPrice <= levels.rotationHigh;
+   307→
+   308→  // False breakout LOW: Wick below support, close at or above
+   309→  // → Bullish signal (rejection from support / liquidity grab)
+   310→  const falseBreakoutLow =
+   311→    currentLow < levels.rotationLow && currentPrice >= levels.rotationLow;
+   312→
+   313→  // ========================================================================
+   314→  // CHECK HIGHER TIMEFRAME ALIGNMENT
+   315→  // ========================================================================
+   316→  // When HTF levels are provided, check if current TF direction aligns.
+   317→  // Trading with HTF alignment significantly improves win rate.
+   318→  // Neutral HTF (state 0) doesn't conflict with any direction.
+   319→  const htfAligned = htfLevels
+   320→    ? levels.state === htfLevels.state || htfLevels.state === 0
+   321→    : true;
+   322→
+   323→  return {
+   324→    current: levels,
+   325→    htf: htfLevels,
+   326→    signals: {
+   327→      newUpRotation: false, // Set by comparing with previous state (see updateRotationState)
+   328→      newDownRotation: false,
+   329→      invalidation: false,
+   330→      atSupport,
+   331→      atResistance,
+   332→      falseBreakoutHigh,
+   333→      falseBreakoutLow,
+   334→      htfAligned,
+   335→    },
+   336→  };
+   337→}
+   338→
+   339→// ============================================================================
+   340→// STATE MANAGEMENT
+   341→// ============================================================================
+   342→
+   343→/**
+   344→ * In-memory cache of rotation state per mint.
+   345→ *
+   346→ * We cache the previous state to detect state CHANGES (which generate signals).
+   347→ * Without caching, we can only detect current state, not transitions.
+   348→ */
+   349→const rotationStateCache = new Map<
+   350→  string,
+   351→  {
+   352→    previousState: RotationState;
+   353→    previousLevels: RotationLevels;
+   354→    lastUpdate: number;
+   355→  }
+   356→>();
+   357→
+   358→/**
+   359→ * Update rotation state and detect state changes.
+   360→ *
+   361→ * This is the key function that detects TRANSITIONS between states,
+   362→ * which are what generate trading signals. A token being in state +1
+   363→ * is not a signal - transitioning TO state +1 is the signal.
+   364→ *
+   365→ * @param mint - Token mint address (for cache lookup)
+   366→ * @param newLevels - Freshly calculated rotation levels
+   367→ * @param currentPrice - Current price
+   368→ * @param currentHigh - Current bar high
+   369→ * @param currentLow - Current bar low
+   370→ * @param htfLevels - Optional HTF levels
+   371→ * @param levelBuffer - Buffer percentage for level detection
+   372→ * @returns RotationAnalysis with state change signals populated
+   373→ */
+   374→export function updateRotationState(
+   375→  mint: string,
+   376→  newLevels: RotationLevels,
+   377→  currentPrice: number,
+   378→  currentHigh: number,
+   379→  currentLow: number,
+   380→  htfLevels?: RotationLevels,
+   381→  levelBuffer: number = 0.5
+   382→): RotationAnalysis {
+   383→  const cached = rotationStateCache.get(mint);
+   384→
+   385→  // Get base analysis (without state change signals)
+   386→  const analysis = analyzeRotations(
+   387→    currentPrice,
+   388→    currentHigh,
+   389→    currentLow,
+   390→    newLevels,
+   391→    htfLevels,
+   392→    levelBuffer
+   393→  );
+   394→
+   395→  // ========================================================================
+   396→  // DETECT STATE TRANSITIONS
+   397→  // ========================================================================
+   398→  // Compare current state to cached previous state to detect changes.
+   399→  // Only transitions generate signals, not static states.
+   400→  if (cached) {
+   401→    // New upward rotation: wasn't bullish before, now is
+   402→    if (newLevels.state === 1 && cached.previousState !== 1) {
+   403→      analysis.signals.newUpRotation = true;
+   404→    }
+   405→    // New downward rotation: wasn't bearish before, now is
+   406→    if (newLevels.state === -1 && cached.previousState !== -1) {
+   407→      analysis.signals.newDownRotation = true;
+   408→    }
+   409→    // Invalidation: wasn't neutral before, now is
+   410→    if (newLevels.state === 0 && cached.previousState !== 0) {
+   411→      analysis.signals.invalidation = true;
+   412→    }
+   413→  }
+   414→
+   415→  // Update cache for next comparison
+   416→  rotationStateCache.set(mint, {
+   417→    previousState: newLevels.state,
+   418→    previousLevels: newLevels,
+   419→    lastUpdate: Date.now(),
+   420→  });
+   421→
+   422→  return analysis;
+   423→}
+   424→
+   425→/**
+   426→ * Clear cached rotation state for a mint.
+   427→ * Call when resetting or when token is removed from watchlist.
+   428→ */
+   429→export function clearRotationState(mint: string): void {
+   430→  rotationStateCache.delete(mint);
+   431→}
+   432→
+   433→/**
+   434→ * Estimate rotation levels from market data when OHLCV is unavailable.
+   435→ *
+   436→ * This is a FALLBACK when the API doesn't provide candlestick data.
+   437→ * It uses price change percentages to infer market structure.
+   438→ *
+   439→ * Algorithm:
+   440→ *   1. Calculate 5m and 1h price changes from earliest prices
+   441→ *   2. Determine state from change direction and magnitude:
+   442→ *      - Strong 5m up + positive 1h → Bullish (+1)
+   443→ *      - Strong 5m down + negative 1h → Bearish (-1)
+   444→ *      - Mixed signals → Ranging (0)
+   445→ *   3. Estimate support/resistance from recent price range
+   446→ *
+   447→ * @param token - Token market data with earliest prices
+   448→ * @returns Estimated RotationLevels or null if insufficient data
+   449→ */
+   450→export function estimateRotationFromMarketData(
+   451→  token: import('../api/types.js').TokenMarketData
+   452→): RotationLevels | null {
+   453→  const currentPrice = token.price_sol;
+   454→  if (!currentPrice || currentPrice <= 0) return null;
+   455→
+   456→  // Get historical prices (fallback to current if not available)
+   457→  const price5mAgo = token.earliest_price_sol_5m > 0 ? token.earliest_price_sol_5m : currentPrice;
+   458→  const price1hAgo = token.earliest_price_sol_1h > 0 ? token.earliest_price_sol_1h : currentPrice;
+   459→
+   460→  // Calculate percentage changes
+   461→  const change5m = ((currentPrice - price5mAgo) / price5mAgo) * 100;
+   462→  const change1h = ((currentPrice - price1hAgo) / price1hAgo) * 100;
+   463→
+   464→  // ========================================================================
+   465→  // DETERMINE ROTATION STATE FROM PRICE CHANGES
+   466→  // ========================================================================
+   467→  // We need clear momentum in one direction to confirm a rotation.
+   468→  // Mixed signals indicate ranging/invalidated structure.
+   469→  let state: RotationState = 0;
+   470→
+   471→  if (change5m > 1 && change1h > 0) {
+   472→    // Strong short-term bullish (>1% in 5m) with positive hourly trend
+   473→    // This indicates momentum breakout to upside
+   474→    state = 1;
+   475→  } else if (change5m < -1 && change1h < 0) {
+   476→    // Strong short-term bearish (<-1% in 5m) with negative hourly trend
+   477→    // This indicates momentum breakdown to downside
+   478→    state = -1;
+   479→  } else if (change5m > 2) {
+   480→    // Very strong 5m move (>2%) overrides hourly indecision
+   481→    // Indicates sudden momentum shift regardless of hourly
+   482→    state = 1;
+   483→  } else if (change5m < -2) {
+   484→    // Very strong downward 5m move overrides hourly
+   485→    state = -1;
+   486→  }
+   487→  // Otherwise state stays at 0 (invalidation/ranging)
+   488→  // This catches mixed signals like 5m up but 1h down, etc.
+   489→
+   490→  // ========================================================================
+   491→  // ESTIMATE SUPPORT/RESISTANCE LEVELS
+   492→  // ========================================================================
+   493→  // Without actual OHLCV data, we estimate levels from the price range.
+   494→  // Use the larger of actual change or 2% as minimum range width.
+   495→  const rangePercent = Math.max(Math.abs(change5m), 2);
+   496→  const halfRange = (rangePercent / 100) * currentPrice;
+   497→
+   498→  let rotationHigh: number;
+   499→  let rotationLow: number;
+   500→
+   501→  if (state === 1) {
+   502→    // Uptrend: Current price is at/near the high, support is below
+   503→    rotationHigh = currentPrice;
+   504→    rotationLow = Math.min(price5mAgo, currentPrice - halfRange);
+   505→  } else if (state === -1) {
+   506→    // Downtrend: Current price is at/near the low, resistance is above
+   507→    rotationHigh = Math.max(price5mAgo, currentPrice + halfRange);
+   508→    rotationLow = currentPrice;
+   509→  } else {
+   510→    // Ranging: Use recent price range with small buffer
+   511→    rotationHigh = Math.max(currentPrice, price5mAgo) * 1.01;
+   512→    rotationLow = Math.min(currentPrice, price5mAgo) * 0.99;
+   513→  }
+   514→
+   515→  return {
+   516→    rotationHigh,
+   517→    rotationLow,
+   518→    state,
+   519→    barIndex: 0, // Unknown without OHLCV bar index
+   520→  };
+   521→}
+   522→
+   523→/**
+   524→ * Get current rotation levels for a mint from cache.
+   525→ * Returns null if token hasn't been analyzed yet.
+   526→ */
+   527→export function getRotationLevels(mint: string): RotationLevels | null {
+   528→  return rotationStateCache.get(mint)?.previousLevels ?? null;
+   529→}
+   530→
+   531→// ============================================================================
+   532→// ROTATIONS RULE IMPLEMENTATION
+   533→// ============================================================================
+   534→
+   535→/**
+   536→ * RotationsRule - Rule implementation for the rotations strategy.
+   537→ *
+   538→ * This rule analyzes market structure and generates buy/sell signals based on:
+   539→ *   1. Break of Structure (BOS): New rotation established
+   540→ *   2. Pullback: Price at support in uptrend, or resistance in downtrend
+   541→ *   3. Swing Failure Pattern (SFP): False breakout / liquidity grab
+   542→ *
+   543→ * Each signal type can be enabled/disabled via config.
+   544→ */
+   545→export class RotationsRule implements Rule<RotationsRuleConfig> {
+   546→  config: RotationsRuleConfig;
+   547→
+   548→  constructor(config: RotationsRuleConfig) {
+   549→    this.config = config;
+   550→  }
+   551→
+   552→  /**
+   553→   * Analyze a token's market structure and generate signals.
+   554→   *
+   555→   * Flow:
+   556→   *   1. Try OHLCV-based calculation (most accurate)
+   557→   *   2. Fallback to market data estimation if OHLCV unavailable
+   558→   *   3. Update state cache and detect transitions
+   559→   *   4. Generate appropriate signal based on config
+   560→   *
+   561→   * @param context - Analysis context with token data and OHLCV
+   562→   * @returns Signal or null if no signal generated
+   563→   */
+   564→  analyze(context: AnalysisContext): Signal | null {
+   565→    const { token, ohlcv } = context;
+   566→
+   567→    let levels: RotationLevels | null = null;
+   568→    let currentHigh: number;
+   569→    let currentLow: number;
+   570→
+   571→    // ========================================================================
+   572→    // CALCULATE ROTATION LEVELS
+   573→    // ========================================================================
+   574→    // Prefer OHLCV-based calculation (more accurate), fall back to estimation
+   575→    if (ohlcv && ohlcv.length >= 10) {
+   576→      // Have sufficient OHLCV data - use proper calculation
+   577→      levels = calculateRotations(ohlcv);
+   578→      const latestBar = ohlcv[ohlcv.length - 1];
+   579→      currentHigh = latestBar?.high ?? token.price_sol;
+   580→      currentLow = latestBar?.low ?? token.price_sol;
+   581→    } else {
+   582→      // No OHLCV - estimate from market data price changes
+   583→      levels = estimateRotationFromMarketData(token);
+   584→      // Estimate high/low with small buffer around current price
+   585→      currentHigh = token.price_sol * 1.001;
+   586→      currentLow = token.price_sol * 0.999;
+   587→    }
+   588→
+   589→    if (!levels) return null;
+   590→
+   591→    const currentPrice = token.price_sol;
+   592→
+   593→    // ========================================================================
+   594→    // UPDATE STATE AND DETECT CHANGES
+   595→    // ========================================================================
+   596→    const analysis = updateRotationState(
+   597→      token.mint,
+   598→      levels,
+   599→      currentPrice,
+   600→      currentHigh,
+   601→      currentLow,
+   602→      undefined, // HTF levels would come from separate OHLCV fetch
+   603→      this.config.levelBuffer
+   604→    );
+   605→
+   606→    // Generate signal based on analysis and config
+   607→    return this.generateSignal(token.mint, token.symbol, analysis);
+   608→  }
+   609→
+   610→  /**
+   611→   * Generate trading signal based on rotation analysis.
+   612→   *
+   613→   * Checks each enabled signal type in priority order:
+   614→   *   1. New rotations (BOS) - highest priority, structure just changed
+   615→   *   2. Pullbacks - trend continuation setups
+   616→   *   3. SFP - false breakout counter-trades
+   617→   *
+   618→   * @param mint - Token mint address
+   619→   * @param symbol - Token symbol
+   620→   * @param analysis - Rotation analysis with signals
+   621→   * @returns Signal or null
+   622→   */
+   623→  private generateSignal(
+   624→    mint: string,
+   625→    symbol: string,
+   626→    analysis: RotationAnalysis
+   627→  ): Signal | null {
+   628→    const { signals, current } = analysis;
+   629→    const now = Date.now();
+   630→
+   631→    // ========================================================================
+   632→    // CHECK HTF ALIGNMENT (if required)
+   633→    // ========================================================================
+   634→    // When requireHtfAlignment is enabled, skip signals that conflict
+   635→    // with higher timeframe direction. This improves win rate significantly.
+   636→    if (this.config.requireHtfAlignment && !signals.htfAligned) {
+   637→      return null;
+   638→    }
+   639→
+   640→    // ========================================================================
+   641→    // SIGNAL: NEW UPWARD ROTATION (Break of Structure)
+   642→    // ========================================================================
+   643→    // Rationale: Structure just shifted bullish. This is the earliest entry
+   644→    // point, catching traders positioned for the old direction off guard.
+   645→    // Risk: Structure breaks can fail, but early entry offers best R:R.
+   646→    if (this.config.signalOnRotation && signals.newUpRotation) {
+   647→      return {
+   648→        ruleId: this.config.id,
+   649→        ruleName: this.config.name,
+   650→        mint,
+   651→        symbol,
+   652→        type: 'buy',
+   653→        strength: 0.8, // High confidence - confirmed structure shift
+   654→        reason: `New upward rotation - structure shift bullish`,
+   655→        data: {
+   656→          rotationState: current.state,
+   657→          rotationHigh: current.rotationHigh,
+   658→          rotationLow: current.rotationLow,
+   659→          signalType: 'new_rotation',
+   660→        },
+   661→        timestamp: now,
+   662→      };
+   663→    }
+   664→
+   665→    // ========================================================================
+   666→    // SIGNAL: NEW DOWNWARD ROTATION (Break of Structure)
+   667→    // ========================================================================
+   668→    // Rationale: Structure just shifted bearish. Exit longs or enter shorts.
+   669→    if (this.config.signalOnRotation && signals.newDownRotation) {
+   670→      return {
+   671→        ruleId: this.config.id,
+   672→        ruleName: this.config.name,
+   673→        mint,
+   674→        symbol,
+   675→        type: 'sell',
+   676→        strength: 0.8,
+   677→        reason: `New downward rotation - structure shift bearish`,
+   678→        data: {
+   679→          rotationState: current.state,
+   680→          rotationHigh: current.rotationHigh,
+   681→          rotationLow: current.rotationLow,
+   682→          signalType: 'new_rotation',
+   683→        },
+   684→        timestamp: now,
+   685→      };
+   686→    }
+   687→
+   688→    // ========================================================================
+   689→    // SIGNAL: PULLBACK TO SUPPORT IN UPTREND
+   690→    // ========================================================================
+   691→    // Rationale: Highest probability setup - buying at support with trend.
+   692→    // Trend is already confirmed (+1), we're buying the dip at a level
+   693→    // that previously showed buying interest.
+   694→    if (
+   695→      this.config.signalOnPullback &&
+   696→      current.state === 1 &&
+   697→      signals.atSupport
+   698→    ) {
+   699→      return {
+   700→        ruleId: this.config.id,
+   701→        ruleName: this.config.name,
+   702→        mint,
+   703→        symbol,
+   704→        type: 'buy',
+   705→        strength: 0.7, // Good confidence - trend + support alignment
+   706→        reason: `Pullback to rotation support in uptrend`,
+   707→        data: {
+   708→          rotationState: current.state,
+   709→          rotationHigh: current.rotationHigh,
+   710→          rotationLow: current.rotationLow,
+   711→          signalType: 'pullback_support',
+   712→        },
+   713→        timestamp: now,
+   714→      };
+   715→    }
+   716→
+   717→    // ========================================================================
+   718→    // SIGNAL: PULLBACK TO RESISTANCE IN DOWNTREND
+   719→    // ========================================================================
+   720→    // Rationale: Selling at resistance with trend is high probability.
+   721→    // Trend confirmed bearish (-1), we're selling at a level that
+   722→    // previously showed selling interest.
+   723→    if (
+   724→      this.config.signalOnPullback &&
+   725→      current.state === -1 &&
+   726→      signals.atResistance
+   727→    ) {
+   728→      return {
+   729→        ruleId: this.config.id,
+   730→        ruleName: this.config.name,
+   731→        mint,
+   732→        symbol,
+   733→        type: 'sell',
+   734→        strength: 0.7,
+   735→        reason: `Pullback to rotation resistance in downtrend`,
+   736→        data: {
+   737→          rotationState: current.state,
+   738→          rotationHigh: current.rotationHigh,
+   739→          rotationLow: current.rotationLow,
+   740→          signalType: 'pullback_resistance',
+   741→        },
+   742→        timestamp: now,
+   743→      };
+   744→    }
+   745→
+   746→    // ========================================================================
+   747→    // SIGNAL: SWING FAILURE PATTERN (SFP) - FALSE BREAKOUT LOW
+   748→    // ========================================================================
+   749→    // Rationale: Price wicked below support but closed back above.
+   750→    // This is a "liquidity grab" - stops below support were triggered,
+   751→    // providing liquidity for large buy orders. Reversal often follows.
+   752→    // Risk: Counter-trend, but tight stop (just below wick) offers good R:R.
+   753→    if (this.config.signalOnSFP && signals.falseBreakoutLow) {
+   754→      return {
+   755→        ruleId: this.config.id,
+   756→        ruleName: this.config.name,
+   757→        mint,
+   758→        symbol,
+   759→        type: 'buy',
+   760→        strength: 0.75,
+   761→        reason: `False breakout below support (SFP) - liquidity grab`,
+   762→        data: {
+   763→          rotationState: current.state,
+   764→          rotationHigh: current.rotationHigh,
+   765→          rotationLow: current.rotationLow,
+   766→          signalType: 'sfp_low',
+   767→        },
+   768→        timestamp: now,
+   769→      };
+   770→    }
+   771→
+   772→    // ========================================================================
+   773→    // SIGNAL: SWING FAILURE PATTERN (SFP) - FALSE BREAKOUT HIGH
+   774→    // ========================================================================
+   775→    // Rationale: Price wicked above resistance but closed back below.
+   776→    // Stops above resistance were hunted, now reversal expected.
+   777→    if (this.config.signalOnSFP && signals.falseBreakoutHigh) {
+   778→      return {
+   779→        ruleId: this.config.id,
+   780→        ruleName: this.config.name,
+   781→        mint,
+   782→        symbol,
+   783→        type: 'sell',
+   784→        strength: 0.75,
+   785→        reason: `False breakout above resistance (SFP) - liquidity grab`,
+   786→        data: {
+   787→          rotationState: current.state,
+   788→          rotationHigh: current.rotationHigh,
+   789→          rotationLow: current.rotationLow,
+   790→          signalType: 'sfp_high',
+   791→        },
+   792→        timestamp: now,
+   793→      };
+   794→    }
+   795→
+   796→    // No signal conditions met
+   797→    return null;
+   798→  }
+   799→}
+   800→
+   801→// ============================================================================
+   802→// DEFAULT CONFIGURATION
+   803→// ============================================================================
+   804→
+   805→/**
+   806→ * Default configuration for the Rotations rule.
+   807→ * All signal types enabled, no HTF requirement.
+   808→ */
+   809→export const DEFAULT_ROTATIONS_CONFIG: RotationsRuleConfig = {
+   810→  id: 'rotations-default',
+   811→  name: 'Rotations S/R',
+   812→  description: 'Market structure via candlestick rotations',
+   813→  enabled: true,
+   814→  type: 'both',
+   815→  ruleType: 'rotations',
+   816→  levelBuffer: 0.5, // 0.5% buffer for "at level" detection
+   817→  requireHtfAlignment: false, // Set true for conservative signals
+   818→  signalOnRotation: true, // Signal on break of structure
+   819→  signalOnPullback: true, // Signal on pullback to S/R
+   820→  signalOnSFP: true, // Signal on false breakouts
+   821→};
+   822→

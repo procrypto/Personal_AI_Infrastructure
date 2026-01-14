@@ -1,0 +1,101 @@
+301:    case 'run': {
+302-      const watchlist = configStore.getWatchlist();
+303-      const ruleSets = configStore.getRuleSets();
+304-
+305-      if (ruleSets.length === 0) {
+306-        console.error('No active rule sets. Use "use <template>" to add one.');
+307-        process.exit(1);
+308-      }
+309-
+310-      const config = configStore.get();
+311-      const trigger = createTrigger(config.trigger);
+312-      const autoSources = createAutoSourceManager(localApi, config.autoSources);
+313-
+314-      // Initial refresh of auto-sources
+315-      if (config.autoSources.enabled) {
+316-        console.log('Fetching auto-sources (trending, whales)...');
+317-        await autoSources.refresh();
+318-      }
+319-
+320-      // Helper to get source label for output
+321-      const sourceLabel = (source: TokenSource): string => {
+322-        switch (source) {
+323-          case 'watchlist': return 'W';
+324-          case 'trending': return 'T';
+325-          case 'whales': return '$';
+326-          default: return '?';
+327-        }
+328-      };
+329-
+330-      / Combine all token sources: watchlist + auto-sources + open positions
+331-      const getAllTokens = () => {
+332-        const tokens = new Map<string, { mint: string; symbol?: string; source: TokenSource }>();
+333-
+334-        // Manual watchlist (highest priority)
+335-        for (const t of watchlist) {
+336-          tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: 'watchlist' });
+337-        }
+338-
+339-        // Auto-sources (if enabled)
+340-        if (config.autoSources.enabled) {
+341-          for (const t of autoSources.getSourcedTokens()) {
+342-            if (!tokens.has(t.mint)) {
+343-              tokens.set(t.mint, { mint: t.mint, symbol: t.symbol, source: t.source });
+344-            }
+345-          }
+346-        }
+347-
+348-        // Open positions (always include)
+349-        for (const trade of paperTracker.getOpenTrades()) {
+350-          if (!tokens.has(trade.mint)) {
+351-            // Determine source from auto-sources if available
+352-            const autoSource = autoSources.getSourceForMint(trade.mint);
+353-            tokens.set(trade.mint, {
+354-              mint: trade.mint,
+355-              symbol: trade.symbol,
+356-              source: autoSource || 'watchlist',
+357-            });
+358-          }
+359-        }
+360-
+361-        return Array.from(tokens.values());
+362-      };
+363-
+364-      const allTokens = getAllTokens();
+365-      const autoSourceCounts = autoSources.getCounts();
+366-
+367-      if (allTokens.length === 0) {
+368-        console.error('Nothing to watch. Add tokens with "watch <mint>", enable auto-sources, or have open trades.');
+369-        process.exit(1);
+370-      }
+371-
+372-      const openCount = paperTracker.getOpenTrades().length;
+373-      console.log('Starting analysis loop... (Ctrl+C to stop)');
+374-      console.log(`  Watchlist: ${watchlist.length} | Trending: ${autoSourceCounts.trending} | Whales: ${autoSourceCounts.whales}`);
+375-      console.log(`  Open trades: ${openCount} | Rules: ${ruleSets.length} sets | Mode: ${config.trigger.mode}`);
+376-      console.log(`  Scan interval: ${config.pollIntervalMs}ms | Source refresh: ${config.autoSources.refreshIntervalMs / 1000}s\n`);
+377-
+378-      const engine = new RuleEngine({ api: localApi });
+379-      for (const ruleSet of ruleSets) {
+380-        engine.addRulesFromConfig(ruleSet.rules);
+381-      }
+382-
+383-      let scanCount = 0;
+384-      const runLoop = async () => {
+385-        scanCount++;
+386-        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+387-
+388-        // Refresh auto-sources if needed (every 15m by default)
+389-        await autoSources.refreshIfNeeded();
+390-
+391-        // Get fresh token list
+392-        const tokens = getAllTokens();
+393-        const openTrades = paperTracker.getOpenTrades();
+394-        const openMints = new Set(openTrades.map(t => t.mint));
+395-
+396-        // Batch fetch all market data upfront (much faster than individual calls)
+397-        const allMints = tokens.map(t => t.mint);
+398-        const marketDataCache = await localApi.getMarketDataBatch(allMints);
+399-
+400-        const scanResults: string[] = [];
+401-        const tradeResults: string[] = [];

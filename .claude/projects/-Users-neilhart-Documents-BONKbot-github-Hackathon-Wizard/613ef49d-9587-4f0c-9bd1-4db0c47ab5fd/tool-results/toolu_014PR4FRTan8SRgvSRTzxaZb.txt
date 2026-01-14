@@ -1,0 +1,185 @@
+     1→/**
+     2→ * Trade Trigger
+     3→ *
+     4→ * Handles triggering trades based on analysis signals.
+     5→ * Supports both paper trading and (future) live LOIS integration.
+     6→ */
+     7→
+     8→import type { Signal } from '../rules/types.js';
+     9→import type { TriggerConfig } from '../config/types.js';
+    10→import type { TriggerEvent, PaperTrade } from './types.js';
+    11→import { paperTracker } from './paper-tracker.js';
+    12→
+    13→interface TriggerResult {
+    14→  triggered: boolean;
+    15→  reason?: string;
+    16→  trade?: PaperTrade;
+    17→  event: TriggerEvent;
+    18→}
+    19→
+    20→// Track last trigger time per mint for cooldown
+    21→const lastTriggerTime = new Map<string, number>();
+    22→
+    23→export class TradeTrigger {
+    24→  constructor(private config: TriggerConfig) {}
+    25→
+    26→  updateConfig(config: TriggerConfig): void {
+    27→    this.config = config;
+    28→  }
+    29→
+    30→  async trigger(params: {
+    31→    mint: string;
+    32→    symbol: string;
+    33→    action: 'buy' | 'sell';
+    34→    priceSol: number;
+    35→    priceUsd: number;
+    36→    ruleSetId: string;
+    37→    signals: Signal[];
+    38→    confidence: number;
+    39→    quiet?: boolean;  // Suppress verbose output during bulk scanning
+    40→  }): Promise<TriggerResult> {
+    41→    const event: TriggerEvent = {
+    42→      timestamp: Date.now(),
+    43→      mint: params.mint,
+    44→      symbol: params.symbol,
+    45→      action: params.action,
+    46→      ruleSetId: params.ruleSetId,
+    47→      signals: params.signals.map(s => ({
+    48→        ruleId: s.ruleId,
+    49→        ruleName: s.ruleName,
+    50→        reason: s.reason,
+    51→        strength: s.strength,
+    52→      })),
+    53→      confidence: params.confidence,
+    54→      triggered: false,
+    55→    };
+    56→
+    57→    // Check if triggers are enabled
+    58→    if (!this.config.enabled) {
+    59→      event.reason = 'Triggers disabled';
+    60→      paperTracker.recordEvent(event);
+    61→      return { triggered: false, reason: event.reason, event };
+    62→    }
+    63→
+    64→    // Check cooldown
+    65→    const lastTime = lastTriggerTime.get(params.mint) ?? 0;
+    66→    const elapsed = Date.now() - lastTime;
+    67→    if (elapsed < this.config.cooldownMs) {
+    68→      event.reason = `Cooldown: ${Math.ceil((this.config.cooldownMs - elapsed) / 1000)}s remaining`;
+    69→      paperTracker.recordEvent(event);
+    70→      return { triggered: false, reason: event.reason, event };
+    71→    }
+    72→
+    73→    // Check for existing open trade on this mint
+    74→    const existingTrade = paperTracker.getOpenTradeForMint(params.mint);
+    75→    if (existingTrade) {
+    76→      // If same direction, skip
+    77→      if (existingTrade.action === params.action) {
+    78→        event.reason = `Already have ${params.action} position open`;
+    79→        paperTracker.recordEvent(event);
+    80→        return { triggered: false, reason: event.reason, event };
+    81→      }
+    82→
+    83→      // Opposite direction - check config
+    84→      if (this.config.onOppositeSignal === 'ignore') {
+    85→        event.reason = `Ignoring opposite signal (have ${existingTrade.action} open)`;
+    86→        paperTracker.recordEvent(event);
+    87→        return { triggered: false, reason: event.reason, event };
+    88→      }
+    89→
+    90→      // Close the existing position
+    91→      const closed = paperTracker.closeTrade(existingTrade.id, params.priceSol, params.priceUsd);
+    92→      if (closed && !params.quiet) {
+    93→        const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+    94→        console.log(`\n[CLOSE] ${closed.action.toUpperCase()} ${closed.symbol} -> ${pnlSign}${closed.pnlPercent?.toFixed(2)}% (${pnlSign}${closed.pnlSol?.toFixed(4)} SOL)`);
+    95→        console.log(`  Reason: Opposite ${params.action.toUpperCase()} signal`);
+    96→      }
+    97→
+    98→      // If 'close' mode, don't open new position
+    99→      if (this.config.onOppositeSignal === 'close') {
+   100→        event.triggered = true;
+   101→        event.reason = 'Closed on opposite signal';
+   102→        paperTracker.recordEvent(event);
+   103→        lastTriggerTime.set(params.mint, Date.now());
+   104→        return { triggered: true, event };
+   105→      }
+   106→      // 'flip' mode continues to open new position below
+   107→    }
+   108→
+   109→    // Determine position size
+   110→    let positionSizeSol = this.config.defaultPositionSizeSol;
+   111→    // Scale by confidence (50-100% of default size)
+   112→    positionSizeSol *= 0.5 + (params.confidence * 0.5);
+   113→    // Cap at max
+   114→    positionSizeSol = Math.min(positionSizeSol, this.config.maxPositionSizeSol);
+   115→
+   116→    // Execute based on mode
+   117→    if (this.config.mode === 'paper') {
+   118→      const trade = paperTracker.openTrade({
+   119→        mint: params.mint,
+   120→        symbol: params.symbol,
+   121→        action: params.action,
+   122→        priceSol: params.priceSol,
+   123→        priceUsd: params.priceUsd,
+   124→        positionSizeSol,
+   125→        ruleSetId: params.ruleSetId,
+   126→        signalStrength: params.confidence,
+   127→        reason: params.signals.map(s => s.reason).join('; '),
+   128→      });
+   129→
+   130→      event.triggered = true;
+   131→      event.tradeId = trade.id;
+   132→      paperTracker.recordEvent(event);
+   133→      lastTriggerTime.set(params.mint, Date.now());
+   134→
+   135→      if (!params.quiet) {
+   136→        console.log(`\n[PAPER TRADE] ${params.action.toUpperCase()} ${params.symbol}`);
+   137→        console.log(`  Position: ${positionSizeSol.toFixed(4)} SOL`);
+   138→        console.log(`  Price: ${params.priceSol} SOL ($${params.priceUsd.toFixed(6)})`);
+   139→        console.log(`  Confidence: ${(params.confidence * 100).toFixed(0)}%`);
+   140→        console.log(`  Trade ID: ${trade.id}`);
+   141→      }
+   142→
+   143→      return { triggered: true, trade, event };
+   144→    } else {
+   145→      // Live mode - would integrate with LOIS here
+   146→      event.reason = 'Live LOIS integration not yet implemented';
+   147→      event.triggered = false;
+   148→      paperTracker.recordEvent(event);
+   149→
+   150→      if (!params.quiet) {
+   151→        console.log(`\n[LOIS TRIGGER - NOT IMPLEMENTED]`);
+   152→        console.log(`  Would ${params.action}: ${params.symbol}`);
+   153→        console.log(`  Size: ${positionSizeSol.toFixed(4)} SOL`);
+   154→      }
+   155→
+   156→      return { triggered: false, reason: event.reason, event };
+   157→    }
+   158→  }
+   159→
+   160→  // Helper to close a position by mint
+   161→  async closePosition(mint: string, currentPriceSol: number, currentPriceUsd: number): Promise<PaperTrade | null> {
+   162→    const trade = paperTracker.getOpenTradeForMint(mint);
+   163→    if (!trade) return null;
+   164→
+   165→    const closed = paperTracker.closeTrade(trade.id, currentPriceSol, currentPriceUsd);
+   166→    if (closed) {
+   167→      await paperTracker.save();
+   168→      console.log(`\n[PAPER] Closed position: ${closed.symbol}`);
+   169→      console.log(`  Entry: ${closed.entryPriceSol} SOL`);
+   170→      console.log(`  Exit: ${currentPriceSol} SOL`);
+   171→      console.log(`  P&L: ${closed.pnlPercent?.toFixed(2)}% (${closed.pnlSol?.toFixed(4)} SOL)`);
+   172→    }
+   173→    return closed;
+   174→  }
+   175→}
+   176→
+   177→// Factory function
+   178→export function createTrigger(config: TriggerConfig): TradeTrigger {
+   179→  return new TradeTrigger(config);
+   180→}
+   181→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

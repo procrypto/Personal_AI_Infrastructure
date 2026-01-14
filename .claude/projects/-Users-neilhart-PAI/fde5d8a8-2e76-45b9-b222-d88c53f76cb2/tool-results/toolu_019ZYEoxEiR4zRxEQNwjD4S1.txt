@@ -1,0 +1,452 @@
+     1→---
+     2→name: story-explanation
+     3→description: Create compelling story-format summaries using UltraThink to find the best narrative framing. Support multiple formats - 3-part narrative, n-length with inline links, abridged 5-line, or comprehensive via Foundry MCP. USE WHEN user says 'create story explanation', 'narrative summary', 'explain as a story', or wants content in Daniel's conversational first-person voice.
+     4→---
+     5→
+     6→# Story Explanation - Narrative Summary with Creative Analysis
+     7→
+     8→## 🎯 Load Full PAI Context
+     9→
+    10→**Before starting any task with this skill, load complete PAI context:**
+    11→
+    12→`read ${PAI_DIR}/Skills/CORE/SKILL.md`
+    13→
+    14→## Core Philosophy
+    15→
+    16→**Standard approach:** Generate a generic summary of content.
+    17→
+    18→**This skill:** Use UltraThink to analyze multiple narrative framings, then select the BEST one and present it in a compelling story format.
+    19→
+    20→Based on:
+    21→- **UltraThink**: Deep content understanding across multiple perspectives and narrative angles
+    22→- **Best framing selection**: Choose the most compelling narrative angle from multiple options
+    23→- **Daniel Miessler voice**: First person, casual, direct, genuinely curious
+    24→
+    25→**The Problem This Solves:**
+    26→- Generic summaries use obvious framing without exploring alternatives
+    27→- Mode collapse causes formulaic story explanations
+    28→- Best narrative angles get missed in favor of first-thought approaches
+    29→- Content needs to be explained in conversational, engaging way
+    30→
+    31→## When to Activate This Skill
+    32→
+    33→- User requests story explanations or narrative summaries
+    34→- User says "create a story explanation" or "explain this as a story"
+    35→- User says "narrative summary", "tell as story", or "explain in narrative"
+    36→- User wants content explained in conversational, engaging format
+    37→- Need to find the most compelling narrative hook for content
+    38→- User explicitly requests this skill
+    39→- Want to present content in Daniel's voice
+    40→- Format-specific requests: "story with links", "abridged story", "5-line summary", "CSE", "CSE5"
+    41→- Slash commands: `/create-story-explanation`, `/cse`, `/cse5`
+    42→
+    43→**DO NOT use this skill when:**
+    44→- User wants comprehensive extraction (use research skill with fabric)
+    45→- User wants quick technical summary
+    46→- Speed matters more than narrative quality
+    47→
+    48→## 🔀 Workflow Routing
+    49→
+    50→This skill contains multiple workflows for different story explanation formats:
+    51→
+    52→### Available Workflows:
+    53→
+    54→1. **`workflows/create.md`** - Main 3-part narrative (default)
+    55→   - **Use when:** User wants standard story explanation format
+    56→   - **Triggers:** "create story explanation", "story explanation", default workflow
+    57→   - **Output:** 3-part format (opening 15-25 words → body 5-15 sentences → closing 15-25 words)
+    58→
+    59→2. **`workflows/create-with-links.md`** - N-length format with inline source links
+    60→   - **Use when:** User wants comprehensive narrative with source attribution
+    61→   - **Triggers:** "story explanation with links", "narrative with sources", "with inline citations"
+    62→   - **Output:** N sentences (default 25) with inline links after each sentence
+    63→
+    64→3. **`workflows/create-abridged.md`** - Ultra-concise 5-line format (5-12 words per line)
+    65→   - **Use when:** User wants abbreviated format from URL, YouTube, or text
+    66→   - **Triggers:** "create abridged story explanation", "5-line summary", command: `/create-abridged-story-explanation`
+    67→   - **Output:** 5 lines with strict word limits
+    68→
+    69→4. **`workflows/cse.md`** - Comprehensive explanation using Foundry MCP
+    70→   - **Use when:** User wants detailed narrative explanation
+    71→   - **Triggers:** "run CSE", "explain this story", command: `/cse`
+    72→   - **Output:** Complete narrative explanation via Foundry
+    73→
+    74→5. **`workflows/cse5.md`** - Clean 5-line numbered format using Foundry MCP
+    75→   - **Use when:** User wants scannable, numbered breakdown
+    76→   - **Triggers:** "explain in 5 lines", "CSE5", command: `/cse5`
+    77→   - **Output:** 5 numbered lines, one concept per line
+    78→
+    79→### Routing Decision Tree:
+    80→
+    81→```
+    82→User request → Analyze intent:
+    83→
+    84→├─ "with links" OR "inline sources" OR "with citations"
+    85→│  └─> workflows/create-with-links.md (N-length format with inline links)
+    86→│
+    87→├─ "abridged" OR "5-12 words per line"
+    88→│  └─> workflows/create-abridged.md
+    89→│
+    90→├─ "CSE5" OR "5 lines" OR "numbered"
+    91→│  └─> workflows/cse5.md
+    92→│
+    93→├─ "CSE" OR "comprehensive explanation"
+    94→│  └─> workflows/cse.md
+    95→│
+    96→└─ Default OR "story explanation"
+    97→   └─> workflows/create.md (3-part narrative)
+    98→```
+    99→
+   100→### Command Routing:
+   101→- `/create-story-explanation` → `workflows/create.md`
+   102→- `/create-story-output-links` → `workflows/create-with-links.md`
+   103→- `/create-abridged-story-explanation` → `workflows/create-abridged.md`
+   104→- `/cse` → `workflows/cse.md`
+   105→- `/cse5` → `workflows/cse5.md`
+   106→
+   107→## 📁 Scratchpad → History Pattern
+   108→
+   109→**Working Directory:** `${PAI_DIR}/scratchpad/YYYY-MM-DD-HHMMSS_story-explanation-[topic]/`
+   110→
+   111→**Process:**
+   112→1. **Scratchpad (Working Files):**
+   113→   - Create timestamped directory for each story explanation project
+   114→   - Store raw content extraction (transcripts, article text, etc.)
+   115→   - Keep UltraThink analysis notes
+   116→   - Save multiple framing explorations (5+ options from deep analysis)
+   117→   - Draft iterations and refinements
+   118→   - Example: `${PAI_DIR}/scratchpad/2025-10-26-143000_story-explanation-agi-timeline/`
+   119→
+   120→2. **History (Permanent Archive - Optional):**
+   121→   - Move to `${PAI_DIR}/History/research/YYYY-MM/YYYY-MM-DD-HHMMSS_AGENT-[agent]_RESEARCH_[slug].md` **ONLY IF:**
+   122→     - The analysis provides valuable reusable insights about narrative framing
+   123→     - The content analysis reveals patterns applicable to future work
+   124→     - The framing exploration demonstrates particularly effective techniques
+   125→     - You want to reference this analysis methodology later
+   126→   - Include: Final story explanation + UltraThink analysis notes + framing options explored
+   127→   - Most story explanations are one-off outputs and can stay in scratchpad
+   128→
+   129→3. **Distinction:**
+   130→   - **Scratchpad = All working files** (content extraction, drafts, explorations)
+   131→   - **History = Only valuable analytical insights** (methodology learnings, exceptional framing discoveries)
+   132→   - **Most story explanations are throwaway content** - only archive exceptional analysis
+   133→
+   134→**File Structure Example:**
+   135→```
+   136→${PAI_DIR}/scratchpad/2025-10-26-143000_story-explanation-agi-timeline/
+   137→├── raw-content.txt                    # Extracted article/transcript
+   138→├── ultrathink-analysis.md             # Deep narrative analysis notes
+   139→├── framing-explorations.md            # 5+ different narrative framings explored
+   140→├── draft-v1.md                        # First draft
+   141→├── draft-v2.md                        # Refined version
+   142→└── final-story-explanation.md         # Final output
+   143→
+   144→# Only if exceptional:
+   145→${PAI_DIR}/History/research/2025-10/2025-10-26-143000_AGENT-default_RESEARCH_agi-timeline-narrative-framing-analysis.md
+   146→```
+   147→
+   148→**Guidelines:**
+   149→- Always work in scratchpad first
+   150→- Only move to history if the analysis itself is valuable for future reference
+   151→- Clean up scratchpad after project completion (or leave for periodic cleanup)
+   152→- The story explanation output itself goes to the user - not necessarily to history
+   153→
+   154→## The Four-Step Process
+   155→
+   156→### Step 1: Content Extraction
+   157→
+   158→**For YouTube videos:**
+   159→```bash
+   160→fabric -y "YOUTUBE_URL"
+   161→```
+   162→
+   163→**For URLs/articles:**
+   164→```typescript
+   165→WebFetch(url, "Extract full content of this article")
+   166→```
+   167→
+   168→**For other content:**
+   169→- Paste text directly
+   170→- Read from files
+   171→
+   172→### Step 2: Activate Be Creative Skill
+   173→
+   174→**Load the be-creative skill for deep reasoning enhancement:**
+   175→
+   176→This provides access to:
+   177→- **UltraThink**: Deep reasoning and quality analysis
+   178→- Enhanced techniques for finding the best narrative framing
+   179→
+   180→### Step 3: Deep UltraThink Analysis (via Be Creative)
+   181→
+   182→Before generating story explanation, engage in extended deep thinking:
+   183→
+   184→**UltraThink Protocol:**
+   185→```
+   186→ULTRATHINK DEEP STORY ANALYSIS MODE:
+   187→
+   188→Think deeply and extensively about this content:
+   189→
+   190→1. CORE NARRATIVE - What's the fundamental story being told?
+   191→2. MULTIPLE FRAMINGS - What are 5-7 different ways to frame this story?
+   192→3. AUDIENCE ANGLES - How would different audiences understand this?
+   193→4. HOOK VARIETY - What are compelling but different entry points?
+   194→5. EMPHASIS OPTIONS - Which elements could be emphasized or de-emphasized?
+   195→6. STRUCTURAL APPROACHES - Chronological? Problem-solution? Comparison?
+   196→7. IMPACT FOCUS - What's the "wow" factor that makes this significant?
+   197→8. CONVERSATIONAL FLOW - How would Daniel explain this to a friend?
+   198→9. KEY INSIGHTS - What makes readers think "I get it now!"?
+   199→10. BEST FRAMING - Which narrative angle is most compelling?
+   200→
+   201→Allow thinking to explore multiple narrative approaches.
+   202→Question assumptions about the "obvious" way to tell this story.
+   203→Look for the framing that would make readers stop and engage.
+   204→Consider: What would make someone excited to share this?
+   205→```
+   206→
+   207→### Step 4: Multiple Framings + Best Selection (via UltraThink)
+   208→
+   209→Use UltraThink to explore different framings, then select the BEST one:
+   210→
+   211→**Framing Exploration Protocol:**
+   212→```
+   213→STEP 1 - GENERATE MULTIPLE FRAMINGS:
+   214→Generate 5 different narrative framings from your deep analysis,
+   215→exploring diverse approaches and perspectives.
+   216→
+   217→For each framing option:
+   218→- Different hook/entry point
+   219→- Different emphasis on key elements
+   220→- Different structural approach
+   221→- Different "wow" factor
+   222→
+   223→Explore creative and non-obvious narrative framings.
+   224→Avoid formulaic approaches.
+   225→
+   226→STEP 2 - SELECT BEST FRAMING:
+   227→Choose the single most compelling narrative framing that:
+   228→- Has the strongest hook
+   229→- Best captures the "wow" factor
+   230→- Would make Daniel most excited to share
+   231→- Feels most natural in his voice
+   232→- Makes complex ideas accessible
+   233→
+   234→STEP 3 - OUTPUT IN SELECTED FORMAT:
+   235→Use the selected framing to create the story explanation in the appropriate format.
+   236→```
+   237→
+   238→## Output Formats
+   239→
+   240→### Default: 3-Part Narrative (workflows/create.md)
+   241→
+   242→**Opening (15-25 words)**
+   243→- Compelling sentence that sets up the content
+   244→- Use plain descriptors: "interview", "paper", "talk", "article", "post", "blog"
+   245→- Avoid journalistic adjectives: "alarming", "groundbreaking", "shocking", "incredible"
+   246→- First person voice (Daniel's perspective)
+   247→
+   248→**Body (5-15 sentences)**
+   249→- Escalating story-based flow: background → main points → examples → implications
+   250→- Written in 9th-grade English (conversational, not dumbed down)
+   251→- Vary sentence length naturally (8-16 words, mix short and longer)
+   252→- Natural rhythm that feels human-written
+   253→- First person voice
+   254→- Stick to the facts - don't extrapolate beyond the input
+   255→- No bullet markers - line breaks between sentences
+   256→- Period at end of each sentence
+   257→
+   258→**Closing (15-25 words)**
+   259→- Wrap up in a compelling way that delivers the "wow" factor
+   260→- First person voice
+   261→- Make the significance clear
+   262→
+   263→### N-Length with Links (workflows/create-with-links.md)
+   264→
+   265→**N sentences** (user-specified, default 25) with inline links after EVERY sentence mentioning developments:
+   266→
+   267→```
+   268→[Sentence 1 - opening hook]. [LINK 1](URL) | [LINK 2](URL)
+   269→
+   270→[Sentence 2]. [LINK 3](URL)
+   271→
+   272→[Sentence 3]. [LINK 4](URL) | [LINK 5](URL) | [LINK 6](URL)
+   273→
+   274→[Continue for n sentences...]
+   275→
+   276→---
+   277→
+   278→**Primary Sources:**
+   279→- [Source 1]: [URL]
+   280→- [Source 2]: [URL]
+   281→```
+   282→
+   283→## Voice and Style Guidelines
+   284→
+   285→### DANIEL MIESSLER VOICE:
+   286→- First person perspective ("In this post, I argue...")
+   287→- Casual, direct, genuinely curious and excited
+   288→- Natural conversational tone (like telling a friend)
+   289→- Never flowery, emotional, or journalistic
+   290→- Let the content speak for itself
+   291→
+   292→### AVOID THESE CLICHE PHRASES:
+   293→- "sitting on a knife's edge"
+   294→- "game-changer" / "game changing"
+   295→- "double-edged sword"
+   296→- "paradigm shift"
+   297→- "revolutionary"
+   298→- "groundbreaking"
+   299→- "alarming"
+   300→- "shocking"
+   301→- "incredible"
+   302→- "mind-blowing"
+   303→
+   304→### GOOD SIGNALS:
+   305→- Opening hooks the reader with plain, direct language
+   306→- Body flows naturally with varied sentence length
+   307→- Story escalates logically (background → points → implications)
+   308→- Closing delivers "wow" factor without hyperbole
+   309→- Reads naturally when spoken aloud
+   310→- Sticks to facts from the content
+   311→- Feels like Daniel sharing something interesting
+   312→
+   313→### BAD SIGNALS (avoid):
+   314→- Journalistic or academic tone
+   315→- Formulaic structure
+   316→- Extrapolating beyond the input
+   317→- Flowery or emotional language
+   318→- Cliche phrases
+   319→- Bullet points or numbered lists in final output
+   320→
+   321→## Comparison to Other Approaches
+   322→
+   323→**/cse5 (single story explanation):**
+   324→- Fast, single output via Foundry MCP
+   325→- Quick technical summary
+   326→- No creative analysis
+   327→
+   328→**research skill (insight extraction):**
+   329→- Comprehensive analysis and extraction
+   330→- Multiple perspectives and sources
+   331→- Analytical, not narrative format
+   332→
+   333→**story-explanation (this skill):**
+   334→- Single BEST story explanation in chosen format
+   335→- Uses be-creative skill (UltraThink)
+   336→- Deep reasoning to explore and find best framing
+   337→- Daniel Miessler voice (first person, casual, direct)
+   338→- Explores multiple narrative angles, selects most compelling
+   339→- Specifically designed for engaging storytelling
+   340→- Prioritizes conversational flow and "wow" factor
+   341→
+   342→## Integration with Kai
+   343→
+   344→When this skill activates, Kai should:
+   345→
+   346→1. **Determine format** - Based on user request, select appropriate workflow
+   347→2. **Create scratchpad directory** - `${PAI_DIR}/scratchpad/YYYY-MM-DD-HHMMSS_story-explanation-[topic]/`
+   348→3. **Load be-creative skill** - Activate research-backed creativity framework
+   349→4. **Load content** via appropriate method (fabric -y, WebFetch, Read, or paste)
+   350→5. **Save raw content to scratchpad** - Store extracted content for reference
+   351→6. **Engage UltraThink mode** - Deep analysis across 10 narrative dimensions
+   352→7. **Save UltraThink notes to scratchpad** - Document narrative analysis process
+   353→8. **Explore multiple framings** - Use UltraThink to generate 5 different narrative framings
+   354→9. **Save framing explorations to scratchpad** - Document all 5+ framings considered
+   355→10. **Select best framing** - Choose the most compelling narrative angle
+   356→11. **Output in selected format** - 3-part, n-length with links, abridged, or Foundry format
+   357→12. **Save final output to scratchpad** - Store completed story explanation
+   358→13. **Use Daniel's voice** - First person, casual, direct, genuinely curious
+   359→14. **Optionally archive to history** - Only if analysis methodology is exceptionally valuable for future reference
+   360→
+   361→**Critical:** The be-creative skill provides UltraThink framework ensuring we explore creative narrative framings that would otherwise be missed due to mode collapse, then select the single BEST one.
+   362→
+   363→**File Organization:**
+   364→- All working files go to scratchpad (content, analysis, drafts, final output)
+   365→- Only exceptional analytical insights go to history
+   366→- Most story explanations are one-off outputs and remain in scratchpad
+   367→
+   368→## Key Principles
+   369→
+   370→1. **Use be-creative skill** - UltraThink framework for deep reasoning in exploring framings
+   371→2. **Think narratively first** - UltraThink about story possibilities before output
+   372→3. **Explore diverse framings** - Generate multiple creative narrative framings through deep analysis
+   373→4. **Select best framing** - Choose the most compelling narrative angle
+   374→5. **Format flexibility** - Multiple output formats for different use cases
+   375→6. **Daniel's voice** - First person, casual, direct, genuinely curious
+   376→7. **Conversational flow** - Vary sentence length (8-16 words), natural rhythm
+   377→8. **Avoid cliches** - No "game-changer", "paradigm shift", "revolutionary", etc.
+   378→9. **Stick to facts** - Don't extrapolate beyond the input
+   379→10. **Deliver "wow" factor** - Make significance clear without hyperbole
+   380→
+   381→## Common Failure Modes to Avoid
+   382→
+   383→1. **Mode collapse** - Only considering obvious narrative framings without exploring alternatives
+   384→2. **Formulaic structure** - Generic academic or journalistic tone
+   385→3. **Cliche language** - Using "game-changer", "paradigm shift", "revolutionary", "groundbreaking"
+   386→4. **Extrapolating** - Adding information not in the source content
+   387→5. **Wrong voice** - Third person, formal, or academic instead of Daniel's casual first person
+   388→6. **No "wow" factor** - Missing the compelling closing that makes significance clear
+   389→7. **Bullet points** - Using numbered lists or bullets in final output
+   390→8. **Flowery language** - Emotional, journalistic, or hyperbolic tone
+   391→
+   392→## Success Criteria
+   393→
+   394→You've succeeded with this skill when:
+   395→- Story explanation reads naturally when spoken aloud
+   396→- Opening hooks the reader with plain, direct language
+   397→- Body flows conversationally with varied sentence length
+   398→- Closing delivers "wow" factor without hyperbole
+   399→- Voice feels like Daniel sharing something interesting with a friend
+   400→- Sticks to facts from the content without extrapolating
+   401→- No cliches or journalistic language
+   402→- User says "This makes me want to share it!" or "I get it now!"
+   403→
+   404→## Quick Reference
+   405→
+   406→**Four-step process:**
+   407→1. Activate be-creative skill (UltraThink)
+   408→2. Extract content (fabric -y, WebFetch, Read, paste)
+   409→3. Deep UltraThink (10-dimension narrative analysis)
+   410→4. Explore multiple framings (5 different narrative approaches) → Select BEST → Output in selected format
+   411→
+   412→**Format selection:**
+   413→- Default: 3-part narrative (opening/body/closing)
+   414→- With links: N-length with inline source attribution
+   415→- Abridged: Ultra-concise 5-line format
+   416→- CSE/CSE5: Foundry MCP formats
+   417→
+   418→**Voice:**
+   419→- First person (Daniel's perspective)
+   420→- Casual, direct, genuinely curious
+   421→- Natural conversational tone (like telling a friend)
+   422→- NO cliches, journalistic language, or flowery tone
+   423→
+   424→**Remember:**
+   425→- Use be-creative skill for UltraThink deep reasoning
+   426→- Think deeply about narrative possibilities (UltraThink)
+   427→- Explore diverse framings to find the best narrative angle
+   428→- Select the single most compelling narrative angle
+   429→- Stick to facts - don't extrapolate beyond the input
+   430→- Deliver "wow" factor without hyperbole
+   431→
+   432→## Relationship to Other Skills
+   433→
+   434→**Works well with:**
+   435→- `research` - Deep insights extraction from same content (analytical complement)
+   436→- `social` - Turn story explanation into social media posts
+   437→- `writing` - Use story explanation as blog post draft or inspiration
+   438→- `media` - Generate hero image for the story explanation
+   439→
+   440→**Use research skill instead when:**
+   441→- User wants comprehensive analysis with multiple sources
+   442→- Focus is on novel ideas and insights, not narrative storytelling
+   443→- Analytical extraction preferred over conversational explanation
+   444→
+   445→---
+   446→
+   447→**This skill provides compelling narrative explanations in Daniel's voice using research-backed creativity techniques to find the BEST framing from multiple possibilities.**
+   448→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

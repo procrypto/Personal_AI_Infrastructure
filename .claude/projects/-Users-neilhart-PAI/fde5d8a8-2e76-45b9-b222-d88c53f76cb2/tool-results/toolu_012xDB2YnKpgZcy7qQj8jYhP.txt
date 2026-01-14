@@ -1,0 +1,212 @@
+     1→{
+     2→  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+     3→  "_envDocs": {
+     4→    "description": "Platform-agnostic environment variables used throughout the Personal AI system",
+     5→    "DA": "Digital Assistant name - your AI's identity (e.g., 'Kai', 'PAI', 'Nova'). Used in statusline, hooks, and agent identification.",
+     6→    "PAI_DIR": "Root directory for all PAI configuration. The setup.sh script updates this automatically. If hooks fail with 'No such file or directory', update this to your actual path (e.g., /Users/john/.claude).",
+     7→    "PAI_SIMPLE_COLORS": "Set to '1' to use basic ANSI colors in statusline instead of 24-bit RGB. Enable if you see garbled colors or display issues in your terminal. Default: 0 (use full color).",
+     8→    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "Maximum tokens for Claude responses. Higher values allow longer outputs but cost more."
+     9→  },
+    10→  "_setupNote": "IMPORTANT: Run 'bash .claude/setup.sh' to automatically configure PAI_DIR. If you see hook errors mentioning '__HOME__', the setup script was not run or you need to manually change PAI_DIR below to your actual home directory path (e.g., /Users/john/.claude on macOS or /home/john/.claude on Linux).",
+    11→  "env": {
+    12→    "PAI_DIR": "/Users/neilhart/.claude",
+    13→    "DA": "PAI",
+    14→    "PAI_SIMPLE_COLORS": "0",
+    15→    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
+    16→  },
+    17→  "permissions": {
+    18→    "allow": [
+    19→      "Bash",
+    20→      "Read",
+    21→      "Write",
+    22→      "Edit",
+    23→      "MultiEdit",
+    24→      "Glob",
+    25→      "Grep",
+    26→      "WebFetch(domain:*)",
+    27→      "WebSearch",
+    28→      "NotebookRead",
+    29→      "NotebookEdit",
+    30→      "TodoWrite",
+    31→      "ExitPlanMode",
+    32→      "Task",
+    33→      "mcp__*"
+    34→    ],
+    35→    "deny": [
+    36→      "Bash(diskutil partitionDisk)",
+    37→      "Bash(diskutil eraseDisk)",
+    38→      "Bash(diskutil eraseVolume)",
+    39→      "Bash(diskutil reformat)",
+    40→      "Bash(diskutil zeroDisk)",
+    41→      "Bash(diskutil appleRAID)",
+    42→      "Bash(diskutil randomDisk)",
+    43→      "Bash(diskutil coreStorage)",
+    44→      "Bash(diskutil cs)",
+    45→      "Bash(diskutil disableJournal)",
+    46→      "Bash(diskutil resetFusion)",
+    47→      "Bash(diskutil disableOwnership)",
+    48→      "Bash(diskutil apfs deleteContainer)",
+    49→      "Bash(diskutil apfs eraseVolume)",
+    50→      "Bash(diskutil apfs decryptVolume)",
+    51→      "Bash(diskutil apfs changePassphrase)",
+    52→      "Bash(diskutil apfs deleteVolume)",
+    53→      "Bash(diskutil apfs deleteVolumeGroup)",
+    54→      "Bash(diskutil apfs deleteSnapshot)",
+    55→      "Bash(rm -rf /)",
+    56→      "Bash(rm -rf /*)",
+    57→      "Bash(rm -rf ~)",
+    58→      "Bash(rm -rf $HOME)",
+    59→      "Bash(rm -rf $PAI_HOME)",
+    60→      "Bash(rm -rf $PAI_DIR)",
+    61→      "Bash(sudo rm -rf /)",
+    62→      "Bash(sudo rm -rf /*)",
+    63→      "Bash(fork bomb)",
+    64→      "Bash(dd if=/dev/zero of=/dev/sda)",
+    65→      "Bash(mkfs.ext4 /dev/sda)",
+    66→      "Bash( /dev/sda)",
+    67→      "Bash(> /dev/sda)"
+    68→    ]
+    69→  },
+    70→  "enableAllProjectMcpServers": true,
+    71→  "enabledMcpjsonServers": [],
+    72→  "hooks": {
+    73→    "PreToolUse": [
+    74→      {
+    75→        "matcher": "Bash",
+    76→        "hooks": [
+    77→          {
+    78→            "type": "command",
+    79→            "command": "${PAI_DIR}/Hooks/security-validator.ts"
+    80→          }
+    81→        ]
+    82→      },
+    83→      {
+    84→        "matcher": "*",
+    85→        "hooks": [
+    86→          {
+    87→            "type": "command",
+    88→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type PreToolUse"
+    89→          }
+    90→        ]
+    91→      }
+    92→    ],
+    93→    "PostToolUse": [
+    94→      {
+    95→        "matcher": "*",
+    96→        "hooks": [
+    97→          {
+    98→            "type": "command",
+    99→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type PostToolUse"
+   100→          },
+   101→          {
+   102→            "type": "command",
+   103→            "command": "${PAI_DIR}/Hooks/update-tab-on-action.ts"
+   104→          }
+   105→        ]
+   106→      }
+   107→    ],
+   108→    "SessionEnd": [
+   109→      {
+   110→        "hooks": [
+   111→          {
+   112→            "type": "command",
+   113→            "command": "${PAI_DIR}/Hooks/capture-session-summary.ts"
+   114→          },
+   115→          {
+   116→            "type": "command",
+   117→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type SessionEnd"
+   118→          }
+   119→        ]
+   120→      }
+   121→    ],
+   122→    "UserPromptSubmit": [
+   123→      {
+   124→        "hooks": [
+   125→          {
+   126→            "type": "command",
+   127→            "command": "${PAI_DIR}/Hooks/update-tab-titles.ts"
+   128→          },
+   129→          {
+   130→            "type": "command",
+   131→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type UserPromptSubmit"
+   132→          }
+   133→        ]
+   134→      }
+   135→    ],
+   136→    "SessionStart": [
+   137→      {
+   138→        "hooks": [
+   139→          {
+   140→            "type": "command",
+   141→            "command": "${PAI_DIR}/Hooks/load-core-context.ts"
+   142→          },
+   143→          {
+   144→            "type": "command",
+   145→            "command": "${PAI_DIR}/Hooks/initialize-session.ts"
+   146→          },
+   147→          {
+   148→            "type": "command",
+   149→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type SessionStart"
+   150→          }
+   151→        ]
+   152→      }
+   153→    ],
+   154→    "Stop": [
+   155→      {
+   156→        "hooks": [
+   157→          {
+   158→            "type": "command",
+   159→            "command": "${PAI_DIR}/Hooks/stop-hook.ts"
+   160→          },
+   161→          {
+   162→            "type": "command",
+   163→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type Stop"
+   164→          }
+   165→        ]
+   166→      }
+   167→    ],
+   168→    "SubagentStop": [
+   169→      {
+   170→        "hooks": [
+   171→          {
+   172→            "type": "command",
+   173→            "command": "${PAI_DIR}/Hooks/subagent-stop-hook.ts"
+   174→          },
+   175→          {
+   176→            "type": "command",
+   177→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type SubagentStop"
+   178→          }
+   179→        ]
+   180→      }
+   181→    ],
+   182→    "PreCompact": [
+   183→      {
+   184→        "matcher": "",
+   185→        "hooks": [
+   186→          {
+   187→            "type": "command",
+   188→            "command": "${PAI_DIR}/Hooks/context-compression-hook.ts"
+   189→          },
+   190→          {
+   191→            "type": "command",
+   192→            "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type PreCompact"
+   193→          }
+   194→        ]
+   195→      }
+   196→    ]
+   197→  },
+   198→  "statusLine": {
+   199→    "type": "command",
+   200→    "command": "bash ${PAI_DIR}/statusline-command.sh"
+   201→  },
+   202→  "enabledPlugins": {
+   203→    "browser-automation@browser-tools": true
+   204→  },
+   205→  "alwaysThinkingEnabled": true,
+   206→  "max_tokens": 4096
+   207→}
+   208→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

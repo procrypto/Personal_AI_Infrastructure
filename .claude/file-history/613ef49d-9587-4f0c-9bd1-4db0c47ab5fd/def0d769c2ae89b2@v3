@@ -1,0 +1,229 @@
+/**
+ * WebSocket Server for Frontend Integration
+ *
+ * Broadcasts live autopilot events to connected clients.
+ */
+
+import { WebSocketServer, WebSocket } from 'ws';
+import type { PaperTrade } from './trading/types.js';
+
+// Event types the frontend can receive
+export type AutopilotEvent =
+  | { type: 'position_update'; positions: PositionData[] }
+  | { type: 'signal'; signal: SignalData }
+  | { type: 'market_status'; status: MarketStatusData }
+  | { type: 'stats_update'; stats: StatsData }
+  | { type: 'scan_tick'; tick: ScanTickData }
+  | { type: 'token_list'; tokens: TokenListData }
+  | { type: 'config'; config: ConfigData };
+
+// Command types the frontend can send
+export type AutopilotCommand =
+  | { command: 'toggle_sources'; enabled: boolean }
+  | { command: 'toggle_trending'; enabled: boolean }
+  | { command: 'toggle_whales'; enabled: boolean }
+  | { command: 'toggle_filter'; enabled: boolean }
+  | { command: 'set_mode'; mode: 'paper' | 'live' }
+  | { command: 'set_position_size'; sizeSol: number }
+  | { command: 'refresh_sources' }
+  | { command: 'get_config' };
+
+// Config state
+export interface ConfigData {
+  autoSourcesEnabled: boolean;
+  trendingEnabled: boolean;
+  whalesEnabled: boolean;
+  marketFilterEnabled: boolean;
+  mode: 'paper' | 'live';
+  positionSizeSol: number;
+  pollIntervalMs: number;
+}
+
+export type CommandHandler = (command: AutopilotCommand) => Promise<void> | void;
+
+export interface PositionData {
+  mint: string;
+  symbol: string;
+  action: 'buy' | 'sell';
+  entryPriceSol: number;
+  currentPriceSol: number;
+  positionSizeSol: number;
+  pnlPercent: number;
+  pnlSol: number;
+  entryTime: number;
+}
+
+export interface SignalData {
+  timestamp: number;
+  mint: string;
+  symbol: string;
+  signalType: 'magic_buy' | 'magic_exit' | 'dump_exit' | 'rule_signal';
+  action: 'buy' | 'sell' | 'close';
+  reason: string;
+  pnlPercent?: number;
+  entryType?: string;
+}
+
+export interface MarketStatusData {
+  state: 'NORMAL' | 'CAUTION' | 'DUMP';
+  solPriceChangePercent: number;
+  blockEntries: boolean;
+  exitAll: boolean;
+}
+
+export interface StatsData {
+  totalTrades: number;
+  openTrades: number;
+  closedTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnlSol: number;
+  totalPnlUsd: number;
+  avgPnlPercent: number;
+}
+
+export interface ScanTickData {
+  timestamp: number;
+  scanNumber: number;
+  tokenCount: number;
+  openPositions: number;
+}
+
+export interface WatchedToken {
+  mint: string;
+  symbol: string;
+  source: 'watchlist' | 'trending' | 'whales';
+  priceSol?: number;
+  priceUsd?: number;
+  change1h?: number;
+  change24h?: number;
+  volume24h?: number;
+  mcap?: number;
+  hasPosition?: boolean;
+}
+
+export interface TokenListData {
+  watchlist: WatchedToken[];
+  trending: WatchedToken[];
+  whales: WatchedToken[];
+}
+
+class AutopilotWebSocketServer {
+  private wss: WebSocketServer | null = null;
+  private clients: Set<WebSocket> = new Set();
+  private port: number = 8765;
+  private commandHandler: CommandHandler | null = null;
+
+  start(port: number = 8765): void {
+    if (this.wss) {
+      console.log('[WS] Server already running');
+      return;
+    }
+
+    this.port = port;
+    this.wss = new WebSocketServer({ port });
+
+    this.wss.on('connection', (ws) => {
+      this.clients.add(ws);
+      console.log(`[WS] Client connected (${this.clients.size} total)`);
+
+      // Handle incoming messages (commands from frontend)
+      ws.on('message', async (data) => {
+        try {
+          const message = JSON.parse(data.toString()) as AutopilotCommand;
+          if (message.command && this.commandHandler) {
+            console.log(`[WS] Command received: ${message.command}`);
+            await this.commandHandler(message);
+          }
+        } catch (err) {
+          console.error('[WS] Failed to parse command:', err);
+        }
+      });
+
+      ws.on('close', () => {
+        this.clients.delete(ws);
+        console.log(`[WS] Client disconnected (${this.clients.size} total)`);
+      });
+
+      ws.on('error', (err) => {
+        console.error('[WS] Client error:', err.message);
+        this.clients.delete(ws);
+      });
+    });
+
+    this.wss.on('error', (err) => {
+      console.error('[WS] Server error:', err.message);
+    });
+
+    console.log(`[WS] Server started on port ${port}`);
+  }
+
+  // Register a handler for incoming commands
+  onCommand(handler: CommandHandler): void {
+    this.commandHandler = handler;
+  }
+
+  stop(): void {
+    if (!this.wss) return;
+
+    for (const client of this.clients) {
+      client.close();
+    }
+    this.clients.clear();
+    this.wss.close();
+    this.wss = null;
+    console.log('[WS] Server stopped');
+  }
+
+  broadcast(event: AutopilotEvent): void {
+    if (this.clients.size === 0) return;
+
+    const message = JSON.stringify(event);
+    for (const client of this.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    }
+  }
+
+  // Convenience methods for specific event types
+  broadcastPositions(positions: PositionData[]): void {
+    this.broadcast({ type: 'position_update', positions });
+  }
+
+  broadcastSignal(signal: SignalData): void {
+    this.broadcast({ type: 'signal', signal });
+  }
+
+  broadcastMarketStatus(status: MarketStatusData): void {
+    this.broadcast({ type: 'market_status', status });
+  }
+
+  broadcastStats(stats: StatsData): void {
+    this.broadcast({ type: 'stats_update', stats });
+  }
+
+  broadcastScanTick(tick: ScanTickData): void {
+    this.broadcast({ type: 'scan_tick', tick });
+  }
+
+  broadcastTokenList(tokens: TokenListData): void {
+    this.broadcast({ type: 'token_list', tokens });
+  }
+
+  broadcastConfig(config: ConfigData): void {
+    this.broadcast({ type: 'config', config });
+  }
+
+  getClientCount(): number {
+    return this.clients.size;
+  }
+
+  isRunning(): boolean {
+    return this.wss !== null;
+  }
+}
+
+// Singleton instance
+export const wsServer = new AutopilotWebSocketServer();

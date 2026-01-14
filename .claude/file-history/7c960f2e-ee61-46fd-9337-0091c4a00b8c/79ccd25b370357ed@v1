@@ -1,0 +1,98 @@
+# TrenchBench Branch Unification
+
+## What This Is
+
+Merge of two parallel TrenchBench development branches in web-terminal-frontend: `feat/dash-pauls` (37 UI commits with cross-widget sync, badges, PNL fixes) into `feat/dash-pauls-preload-data` (unified `trenchBenchStore` architecture with local-api integration). Creates a new `feat/trenchbench-unified` branch with feature parity and the clean data architecture.
+
+## Core Value
+
+**Feature parity** — all 37 UI features from dash-pauls must work in the unified architecture. Users should get the same (or better) experience with the improved data layer underneath.
+
+## Requirements
+
+### Validated
+
+- trenchBenchStore centralized data management — existing
+- useTrenchBenchBackfill unified backfill hook — existing
+- Local-api integration for 1d+ history — existing
+- WebSocket dual-write (live_trades + trenchBenchStore) — existing
+- localStorage persistence with 30-min staleness — existing
+
+### Active (All Complete)
+
+- [x] Pause-on-hover for Intel Grid
+- [x] HOT/TRENDING badge logic (3+ KOLs holding >50%)
+- [x] Cross-widget selection sync (Intel Grid ↔ Vantage ↔ Anomalyzer)
+- [x] Lamports vs SOL smart detection
+- [x] User PNL accuracy fixes (use backend pnl_total_usd)
+- [x] Exfil open positions expandable section
+- [x] Anomalyzer deduplication (same trader+token within 5 min)
+- [x] Intel Grid chart refresh mechanism (prevent blanking)
+- [x] Connection removal when KOLs sell
+- [x] Session P/L tracking in Exfil
+
+### Out of Scope
+
+- 7-day wallet summary endpoint — data team dependency, defer
+- IndexedDB caching — Phase 2 per architecture doc
+- Full test coverage — focus on working features first
+- Remote holders_stats_batch endpoint — using local-api for now
+
+## Context
+
+### Branch State
+- **Common ancestor:** `baad821b3` (12 days ago)
+- **feat/dash-pauls:** 37 commits ahead (UI/bugfixes)
+- **feat/dash-pauls-preload-data:** 16 commits ahead (architecture)
+- **Conflict files:** intel-grid-widget.tsx, vantage-widget.tsx, anomalyzer-widget.tsx, exfil-widget.tsx
+
+### TrenchBench Widgets
+| Widget | Purpose |
+|--------|---------|
+| Intel Grid | Token discovery with KOL position cards |
+| Vantage | Bubble visualization of trader activity |
+| Anomalyzer | Deviation detection from trader baselines |
+| Exfil | Quick trade execution + portfolio summary |
+
+### Data Architecture (preload-data)
+```
+Data Sources              Shared Store               Widgets (Subscribe)
+──────────────────────────────────────────────────────────────────────
+WebSocket (live)    ─┐
+Remote API (2h)     ─┼──► processTrade() ──► traderIndex    ──► Vantage
+Local-API (1d+)     ─┤                   ──► tokenIndex     ──► Intel Grid
+Batched Holders     ─┘                   ──► holdingsMatrix ──► Anomalyzer
+                                         ──► positionsByToken
+                                         ──► selectedTokenMints
+                                         ──► selectedTraderAddresses
+```
+
+### Cross-Widget Sync (dash-pauls)
+Uses CustomEvents for inter-widget communication:
+- `intel-grid-token-select` → Vantage, Anomalyzer
+- `vantage-token-select/deselect` → Intel Grid, Anomalyzer
+- `vantage-kol-select` → Anomalyzer
+- `anomalyzer-token-select` → Intel Grid, Vantage
+
+### Migration Strategy: Hybrid → Pure
+1. **This merge:** Keep CustomEvents working, add store subscriptions in parallel
+2. **Validate:** Confirm positionsByToken has all needed holder data
+3. **Follow-up:** Remove CustomEvent listeners once store is proven
+
+## Constraints
+
+- **Data pipeline integrity**: Can't break Overwatch sidebar or existing live_trades store — only add and augment
+- **Local-api optional**: Must work without local-api server running (graceful fallback)
+- **Git worktree structure**: Working in worktree, not main repo
+
+## Key Decisions
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| New branch (feat/trenchbench-unified) | Preserve both source branches for rollback | — Pending |
+| Hybrid → Pure sync migration | Feature parity priority; validate store before removing events | — Pending |
+| Merge dash-pauls INTO preload-data | preload-data has cleaner architecture as base | — Pending |
+| Keep CustomEvents during merge | Lower risk, easier to validate feature parity | — Pending |
+
+---
+*Last updated: 2025-01-12 after initialization*

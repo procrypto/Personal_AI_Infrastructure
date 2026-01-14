@@ -1,0 +1,84 @@
+     1→import { DiscoveryTrendingListTokenDataMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+     2→import { BaseWebsocket } from "@/websocket/base/BaseWebsocket";
+     3→
+     4→export class DiscoveryWebsocket extends BaseWebsocket {
+     5→  private hasMessageListener = false;
+     6→  private removeListener: (() => void) | null = null;
+     7→
+     8→  async connect(completeUrl?: string) {
+     9→    const dataAccessToken = await this.ensureValidDataToken();
+    10→
+    11→    const connectionUrl =
+    12→      completeUrl ||
+    13→      `${this.url}/discovery/trending_ws?token=${dataAccessToken}`;
+    14→
+    15→    // If already connected with the same URL, no need to reconnect
+    16→    if (
+    17→      this.ws?.readyState === WebSocket.OPEN &&
+    18→      this.ws.url === connectionUrl
+    19→    ) {
+    20→      return;
+    21→    }
+    22→
+    23→    // If already connected with different URL, disconnect first
+    24→    if (
+    25→      this.ws?.readyState === WebSocket.OPEN ||
+    26→      this.ws?.readyState === WebSocket.CONNECTING
+    27→    ) {
+    28→      this.disconnect();
+    29→    }
+    30→
+    31→    const ws = new WebSocket(connectionUrl);
+    32→    this.ws = ws;
+    33→
+    34→    this.setupConnectHandlers();
+    35→  }
+    36→
+    37→  /**
+    38→   * Subscribe to data from the already connected websocket
+    39→   * This is the Discovery-specific method for handling data updates
+    40→   */
+    41→  subscribeToData(
+    42→    onMessage: (data: DiscoveryTrendingListTokenDataMessage) => void
+    43→  ) {
+    44→    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    45→      throw new Error("WebSocket must be connected before subscribing to data");
+    46→    }
+    47→
+    48→    // Ensure only one message handler is attached at a time
+    49→    if (this.hasMessageListener && this.removeListener) {
+    50→      this.removeListener();
+    51→      this.hasMessageListener = false;
+    52→      this.removeListener = null;
+    53→    }
+    54→
+    55→    const messageHandler = (event: MessageEvent) => {
+    56→      const data = event.data;
+    57→      if (typeof data !== "string") return;
+    58→      if (data.length === 0 || data.charCodeAt(0) !== 123) return; // '{'
+    59→      if (data.indexOf('"pong"') !== -1) return; // healthcheck frames
+    60→      try {
+    61→        const parsed = JSON.parse(data);
+    62→        onMessage(parsed);
+    63→        // Any data message is also a pong
+    64→        this.healthcheck?.resetPongs();
+    65→      } catch (e) {
+    66→        console.error("Error parsing websocket message:", e, event.data);
+    67→      }
+    68→    };
+    69→
+    70→    this.ws.addEventListener("message", messageHandler);
+    71→
+    72→    this.hasMessageListener = true;
+    73→    this.removeListener = () => {
+    74→      this.ws?.removeEventListener("message", messageHandler);
+    75→    };
+    76→
+    77→    return this.removeListener;
+    78→  }
+    79→}
+    80→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

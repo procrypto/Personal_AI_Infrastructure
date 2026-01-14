@@ -1,0 +1,180 @@
+/**
+ * Block Kit Message Builders
+ *
+ * Builds interactive Slack Block Kit messages for QA coordination.
+ * Used for thread replies with Claim/Pass/Blocked action buttons.
+ */
+
+import type { KnownBlock, SectionBlock, ActionsBlock, ContextBlock, DividerBlock } from '@slack/types';
+import type { QATicket, TicketPriority } from '../types.js';
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Get emoji for priority level
+ */
+export function priorityEmoji(priority: TicketPriority): string {
+  switch (priority) {
+    case 'urgent':
+      return '🔴';
+    case 'high':
+      return '🟠';
+    case 'normal':
+      return '🟡';
+    case 'low':
+      return '🟢';
+    default:
+      return '⚪';
+  }
+}
+
+// ============================================================================
+// Block Kit Builders
+// ============================================================================
+
+/**
+ * Build QA assignment message blocks with action buttons.
+ * Used when a new ticket is created and needs tester attention.
+ */
+export function buildQAAssignmentBlocks(ticket: QATicket): KnownBlock[] {
+  const headerSection: SectionBlock = {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `*QA Assignment*\n<${ticket.linearUrl}|${ticket.title}>`,
+    },
+  };
+
+  const fieldsSection: SectionBlock = {
+    type: 'section',
+    fields: [
+      {
+        type: 'mrkdwn',
+        text: `*Priority:*\n${priorityEmoji(ticket.priority)} ${ticket.priority}`,
+      },
+      {
+        type: 'mrkdwn',
+        text: `*Status:*\n${ticket.status}`,
+      },
+      {
+        type: 'mrkdwn',
+        text: `*Source:*\n${ticket.source}`,
+      },
+    ],
+  };
+
+  const divider: DividerBlock = {
+    type: 'divider',
+  };
+
+  const actionsBlock: ActionsBlock = {
+    type: 'actions',
+    block_id: `qa_actions_${ticket.id}`,
+    elements: [
+      {
+        type: 'button',
+        text: {
+          type: 'plain_text',
+          text: 'Claim',
+          emoji: true,
+        },
+        style: 'primary',
+        action_id: 'qa_claim',
+        value: ticket.id,
+      },
+      {
+        type: 'button',
+        text: {
+          type: 'plain_text',
+          text: 'Pass',
+          emoji: true,
+        },
+        action_id: 'qa_pass',
+        value: ticket.id,
+      },
+      {
+        type: 'button',
+        text: {
+          type: 'plain_text',
+          text: 'Blocked',
+          emoji: true,
+        },
+        style: 'danger',
+        action_id: 'qa_blocked',
+        value: ticket.id,
+      },
+    ],
+  };
+
+  return [headerSection, fieldsSection, divider, actionsBlock];
+}
+
+/**
+ * Build status update blocks for after a button action.
+ * Replaces the action buttons with status confirmation.
+ * Used by Phase 5 button handlers.
+ */
+export function buildTicketStatusUpdateBlocks(
+  ticket: QATicket,
+  action: string,
+  userId: string
+): KnownBlock[] {
+  const actionEmojis: Record<string, string> = {
+    claimed: '✅',
+    passed: '⏭️',
+    blocked: '⏸️',
+  };
+
+  const actionLabels: Record<string, string> = {
+    claimed: 'Claimed',
+    passed: 'Passed',
+    blocked: 'Blocked',
+  };
+
+  const emoji = actionEmojis[action] || '✅';
+  const label = actionLabels[action] || action;
+
+  const headerSection: SectionBlock = {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `*QA Assignment*\n<${ticket.linearUrl}|${ticket.title}>`,
+    },
+  };
+
+  const fieldsSection: SectionBlock = {
+    type: 'section',
+    fields: [
+      {
+        type: 'mrkdwn',
+        text: `*Priority:*\n${priorityEmoji(ticket.priority)} ${ticket.priority}`,
+      },
+      {
+        type: 'mrkdwn',
+        text: `*Status:*\n${ticket.status}`,
+      },
+    ],
+  };
+
+  const statusSection: SectionBlock = {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `${emoji} *${label}* by <@${userId}>`,
+    },
+  };
+
+  const contextBlock: ContextBlock = {
+    type: 'context',
+    elements: [
+      {
+        type: 'mrkdwn',
+        text: `Updated: <!date^${Math.floor(Date.now() / 1000)}^{date_short_pretty} at {time}|${new Date().toISOString()}>`,
+      },
+    ],
+  };
+
+  return [headerSection, fieldsSection, statusSection, contextBlock];
+}

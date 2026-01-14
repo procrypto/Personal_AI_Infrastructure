@@ -1,0 +1,200 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/README.md has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   141→```
+   142→breakout 5%/20c   # 5% breakout over 20 candles
+   143→```
+   144→
+   145→### MA Crossover
+   146→Triggers on moving average crossover.
+   147→```
+   148→ma 10x50          # 10-period crosses 50-period
+   149→```
+   150→
+   151→### Rotations (Market Structure)
+   152→Detects market structure via candlestick rotations based on the Rotations v1.5.2 indicator.
+   153→
+   154→```
+   155→rotations [BOS+PB+SFP]  # All signal types enabled
+   156→rotations [BOS]          # Only break of structure
+   157→```
+   158→
+   159→**Signal Types:**
+   160→- **BOS (Break of Structure)**: New rotation established - structure shift
+   161→- **PB (Pullback)**: Price at support in uptrend, or resistance in downtrend
+   162→- **SFP (Swing Failure Pattern)**: False breakout - wick beyond level, close inside
+   163→
+   164→---
+   165→
+   166→## Rotations S/R System
+   167→
+   168→The Rotations system provides dynamic support/resistance detection based on price action structure.
+   169→
+   170→### Core Algorithm
+   171→
+   172→```
+   173→State: -1 (bearish), 0 (invalidated), +1 (bullish)
+   174→
+   175→NEW UPWARD ROTATION (+1):
+   176→  close > rotationHigh AND close > previous candle high
+   177→  → rotationHigh = current high
+   178→  → rotationLow = current low
+   179→
+   180→NEW DOWNWARD ROTATION (-1):
+   181→  close < rotationLow AND close < previous candle low
+   182→  → rotationHigh = current high
+   183→  → rotationLow = current low
+   184→
+   185→INVALIDATION (0):
+   186→  Price crosses opposite level without establishing new rotation
+   187→```
+   188→
+   189→### Visual Reference
+   190→
+   191→```
+   192→UPWARD ROTATION (State +1)
+   193→━━━━━━━━━━━━━━━━━━━━━━━━━━
+   194→    rotationHigh ─────── Resistance (Magic TP zone)
+   195→         │
+   196→         │  ← Price action
+   197→         │
+   198→    rotationLow ──────── Support (Magic SL zone)
+   199→
+   200→
+   201→DOWNWARD ROTATION (State -1)
+   202→━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   203→    rotationHigh ─────── Resistance
+   204→         │
+   205→         │  ← Price action
+   206→         │
+   207→    rotationLow ──────── Support
+   208→
+   209→
+   210→INVALIDATION (State 0)
+   211→━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   212→    rotationHigh ─────── Range top
+   213→         │
+   214→         │  ← Ranging / No direction
+   215→         │
+   216→    rotationLow ──────── Range bottom
+   217→```
+   218→
+   219→### Signal Generation
+   220→
+   221→| Signal | Condition | Action |
+   222→|--------|-----------|--------|
+   223→| New Up Rotation | State flips to +1 | BUY signal |
+   224→| New Down Rotation | State flips to -1 | SELL signal |
+   225→| Pullback to Support | State = +1, price near rotationLow | BUY signal |
+   226→| Pullback to Resistance | State = -1, price near rotationHigh | SELL signal |
+   227→| SFP Low | Wick below rotationLow, close above | BUY signal |
+   228→| SFP High | Wick above rotationHigh, close below | SELL signal |
+   229→
+   230→### Configuration
+   231→
+   232→```typescript
+   233→{
+   234→  ruleType: 'rotations',
+   235→  levelBuffer: 0.5,           // 0.5% buffer for "at level" detection
+   236→  requireHtfAlignment: false, // Require higher timeframe agreement
+   237→  signalOnRotation: true,     // Signal on new rotations (BOS)
+   238→  signalOnPullback: true,     // Signal on pullback to S/R
+   239→  signalOnSFP: true,          // Signal on false breakouts
+   240→}
+   241→```
+   242→
+   243→---
+   244→
+   245→## Magic Exit System
+   246→
+   247→Automatic exit management based on rotation support/resistance levels.
+   248→
+   249→### Magic Take Profit (TP)
+   250→
+   251→**Logic:** Auto-close long positions when price approaches rotation resistance.
+   252→
+   253→```
+   254→Trigger Condition (for longs):
+   255→  - Price within 0.5% of rotationHigh (resistance)
+   256→  - Position is in profit (unrealized P&L > 0)
+   257→
+   258→OR:
+   259→  - Price exceeds rotationHigh
+   260→  - Position is in profit
+   261→```
+   262→
+   263→**Why it works:** Rotation resistance represents the level where price previously reversed. Taking profit before/at this level captures gains before potential rejection.
+   264→
+   265→### Magic Stop Loss (SL)
+   266→
+   267→**Logic:** Auto-close long positions when price breaks below rotation support.
+   268→
+   269→```
+   270→Trigger Condition (for longs):
+   271→  - Price is 0.5%+ below rotationLow (support)
+   272→
+   273→Result:
+   274→  - Position closed immediately
+   275→  - Prevents further losses from structure breakdown
+   276→```
+   277→
+   278→**Why it works:** When price breaks below rotationLow, the bullish structure is invalidated. Cutting losses here prevents riding a trend reversal.
+   279→
+   280→### Configuration
+   281→
+   282→```typescript
+   283→{
+   284→  tpEnabled: true,
+   285→  tpTriggerPercent: 0.5,  // Within 0.5% of resistance to trigger
+   286→
+   287→  slEnabled: true,
+   288→  slTriggerPercent: 0.5,  // 0.5% below support to trigger
+   289→
+   290→  tslEnabled: false,      // Williams fractal trailing (TODO)
+   291→}
+   292→```
+   293→
+   294→### Run Loop Integration
+   295→
+   296→Magic exits are checked on every scan cycle:
+   297→
+   298→```
+   299→[time] #scan (count)  |  Magic: SYMBOL:+5.2%  |  New: ...  |  Open: ...
+   300→```
+   301→
+   302→- **Magic: SYMBOL:+X%** shows trades closed by magic exits with P&L
+   303→
+   304→---
+   305→
+   306→## Williams Fractal Trailing Stop (TODO)
+   307→
+   308→Planned feature: Trail stop loss to Williams fractal swing lows.
+   309→
+   310→### Algorithm
+   311→
+   312→```
+   313→Williams Fractal Detection:
+   314→  High Fractal: high[n] >= highest(high, leftBars + rightBars + 1)
+   315→  Low Fractal:  low[n] <= lowest(low, leftBars + rightBars + 1)
+   316→
+   317→Trailing Logic:
+   318→  - longTrail trails UP from confirmed low fractals
+   319→  - Exit when price closes below longTrail
+   320→```
+   321→
+   322→### Planned Settings
+   323→
+   324→```typescript
+   325→{
+   326→  timeframe: '1m',     // Candle resolution
+   327→  leftBars: 3,         // Bars back to confirm fractal
+   328→  rightBars: 3,        // Bars forward to confirm fractal
+   329→  // 3/3 = 7-bar window for fractal confirmation
+   330→}
+   331→```
+   332→
+   333→---
+   334→
+   335→## Run Loop Output
+   336→
+   337→The `run` command shows real-time status with color-coded P&L and source indicators:
+   338→
+   339→```

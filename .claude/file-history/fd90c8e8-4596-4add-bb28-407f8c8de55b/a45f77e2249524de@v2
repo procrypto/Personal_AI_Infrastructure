@@ -1,0 +1,95 @@
+---
+phase: 16-user-watchlist-integration
+plan: 01
+subsystem: api
+tags: [watchlist, react-query, nats, websocket]
+
+# Dependency graph
+requires:
+  - phase: 15-discovery-api-integration
+    provides: Discovery API/WebSocket for whale moves and trending tokens
+provides:
+  - User's watchlist tokens appear in Screener → Watchlist column
+  - NATS market_data subscriptions for user watchlist mints
+affects: [17-screener-signal-indicators]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [useGetWatchlist hook for user watchlist data]
+
+key-files:
+  created: []
+  modified:
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts
+    - apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+
+key-decisions:
+  - "User watchlist API replaces autopilot backend store for watchlist data"
+  - "Symbol left empty, derived from NATS market data later"
+
+patterns-established:
+  - "Flatten watchlist groups with flatMap(g => g.watchlistTokens)"
+
+issues-created: []
+
+# Metrics
+duration: 3min
+completed: 2026-01-09
+---
+
+# Phase 16 Plan 01: User Watchlist Integration Summary
+
+**User's starred tokens now appear in Screener watchlist column with live NATS price data**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-09T01:36:12Z
+- **Completed:** 2026-01-09T01:39:45Z
+- **Tasks:** 2
+- **Files modified:** 2
+
+## Accomplishments
+
+- Replaced autopilot backend store watchlist with user's watchlist API
+- Screener → Watchlist column now shows tokens user has starred in the app
+- NATS market_data subscriptions auto-subscribe for all user watchlist mints
+- No regression in trending/whales data sources
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Replace watchlist source in useAutopilotDiscoveryTokens** - `dab94493e` (feat)
+2. **Task 2: Update NATS subscriptions for user watchlist** - `559b91801` (feat)
+
+**Plan metadata:** (this commit)
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotDiscoveryTokens.ts` - Now imports useGetWatchlist and transforms user watchlist to AutopilotWatchedToken[]
+- `apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts` - Now uses useGetWatchlist for NATS mint subscriptions
+
+## Decisions Made
+
+- Symbol left empty in watchlist tokens - NATS market data will populate symbol via market_data messages
+- Flatten all watchlist groups with flatMap before mapping to AutopilotWatchedToken
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Next Phase Readiness
+
+- User watchlist integration complete
+- Ready for Phase 17: Screener Signal Indicators (rules hit = green/red glow intensity)
+
+---
+
+_Phase: 16-user-watchlist-integration_
+_Completed: 2026-01-09_

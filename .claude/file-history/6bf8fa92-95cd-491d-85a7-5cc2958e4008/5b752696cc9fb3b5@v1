@@ -1,0 +1,75 @@
+# Token Analysis Autopilot
+
+## What This Is
+
+Backend evaluation engine for the token-analysis-autopilot dashboard widget. Receives market data from the main web-terminal app via WebSocket, runs trading rules through a dual-path signal processor, generates signals, and tracks paper P&L. Architecture is LOIS-ready for future Rust rewrite.
+
+## Core Value
+
+**Fast evaluation with clean LOIS-ready architecture.** Signal generation is sub-0.1ms (100x better than 100ms target). Interfaces are clean enough to reimplement in Rust.
+
+## Current State (v1.0)
+
+**Shipped:** Signal processor architecture with:
+- WebSocket data feed handlers (market data, OHLCV, trades, CVD)
+- Dual-path processing (fast path for simple rules, OHLCV path for complex)
+- LOIS-ready interface types
+- Sub-0.1ms latency (validated with benchmarks)
+- `--new-engine` flag for gradual cutover
+- Frontend commands: close_position, close_all_positions
+
+**Tech stack:** TypeScript, 11,066 LOC across 43 files, 65 tests
+
+## Requirements
+
+### Validated
+
+- ✓ Rule engine with pluggable rules — existing
+- ✓ Paper trading with P&L tracking — existing
+- ✓ WebSocket server for frontend communication — existing
+- ✓ Williams fractal trailing stop logic — existing
+- ✓ Rotations/market structure analysis — existing
+- ✓ Magic buy/exit automation — existing
+- ✓ SOL dump protection (market filter) — existing
+- ✓ Receive data from main app instead of fetching — v1.0
+- ✓ Pre-computed metrics path for simple rules — v1.0
+- ✓ Raw OHLCV path for complex analysis — v1.0
+- ✓ Sub-100ms signal evaluation latency — v1.0 (achieved sub-0.1ms)
+- ✓ Clean interfaces suitable for Rust reimplementation — v1.0
+- ✓ Parallel development: new architecture alongside existing — v1.0
+
+### Active
+
+- [ ] Frontend integration (connect as WebSocket client, not server)
+- [ ] Production validation with real market data
+- [ ] Remove old polling code after validation complete
+
+### Out of Scope
+
+- Live LOIS trading execution — architecture only, no actual trades
+- New rule types — focus on speed, not new analysis methods
+- Accurate signal tuning — next push priority
+
+## Context
+
+**v1.0 shipped** with pure signal processor architecture. Main app can now firehose market data to this backend. Backend evaluates and emits signals. Old polling code still exists but can be bypassed with `--new-engine` flag.
+
+**Frontend integration needed:** Frontend currently starts its own WebSocket server on port 8765. Should connect as client instead.
+
+## Constraints
+
+- **None hard** — free to redesign architecture
+- **Soft preference** — gradual validation before removing old code
+
+## Key Decisions
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Main app owns data ingestion | Avoid duplicate WebSocket connections, reduce latency | ✓ Implemented v1.0 |
+| Hybrid data flow (pre-computed + raw) | Simple rules don't need OHLCV, complex ones do | ✓ Implemented v1.0 |
+| LOIS-ready interfaces over speed hacks | Enables Rust rewrite without major redesign | ✓ Implemented v1.0 |
+| Reuse existing WebSocket connections | Main app already has WS connections to frontend, reuse for data flow | ✓ Implemented v1.0 |
+| Gradual replacement cutover | Replace each piece as ready, no big-bang switch | ✓ Implemented v1.0 |
+
+---
+*Last updated: 2026-01-09 after v1.0 milestone*

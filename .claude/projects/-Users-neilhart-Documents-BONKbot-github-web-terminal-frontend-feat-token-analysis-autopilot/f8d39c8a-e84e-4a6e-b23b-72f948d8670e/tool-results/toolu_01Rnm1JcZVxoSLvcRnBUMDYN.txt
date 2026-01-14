@@ -1,0 +1,237 @@
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-1-/**
+src/hooks/useAutopilot/useTokenSignalStrength.ts:2: * useTokenSignalStrength
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-3- *
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-4- * Provides per-token signal strength for visual indicators in the screener.
+src/hooks/useAutopilot/useTokenSignalStrength.ts:5: * Builds a Map<mint, SignalStrength> from the signals array in the autopilot store.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-6- *
+src/hooks/useAutopilot/useTokenSignalStrength.ts-7- * Signal intensity is based on CONFLUENCE (number of agreeing signals):
+src/hooks/useAutopilot/useTokenSignalStrength.ts-8- * - 1 signal: low intensity (0.3)
+src/hooks/useAutopilot/useTokenSignalStrength.ts-9- * - 2 signals: medium intensity (0.5)
+src/hooks/useAutopilot/useTokenSignalStrength.ts-10- * - 3+ signals: high intensity (0.8)
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-11- *
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-12- * When a new signal arrives, TokenRow will flash briefly then settle to confluence level.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-13- */
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-14-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-15-import { useMemo, useRef } from "react";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-16-import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-17-import type { AutopilotSignal } from "@/store/memoryStore/slices/autopilot-store/types";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-18-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-19-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-20- * Breakdown of signal types for confluence detail.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-21- */
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-22-export interface SignalTypeBreakdown {
+src/hooks/useAutopilot/useTokenSignalStrength.ts-23-  magicBuy: number;
+src/hooks/useAutopilot/useTokenSignalStrength.ts-24-  magicExit: number;
+src/hooks/useAutopilot/useTokenSignalStrength.ts-25-  dumpExit: number;
+src/hooks/useAutopilot/useTokenSignalStrength.ts-26-  ruleSignal: number;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-27-}
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-28-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-29-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-30- * Signal strength for a token based on confluence count.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-31- */
+src/hooks/useAutopilot/useTokenSignalStrength.ts:32:export interface SignalStrength {
+src/hooks/useAutopilot/useTokenSignalStrength.ts-33-  /** Signal type: buy signals show green glow, sell signals show red glow */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-34-  type: "buy" | "sell" | "none";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-35-  /** Number of signals in confluence for this mint */
+src/hooks/useAutopilot/useTokenSignalStrength.ts:36:  confluenceCount: number;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-37-  /** Intensity from 0-1, based on confluence count */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-38-  intensity: number;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-39-  /** Timestamp of the most recent signal */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-40-  latestTimestamp: number;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-41-  /** True when a new signal was just added (for flash effect) */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-42-  isNew: boolean;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-43-  /** Reason from the most recent signal */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-44-  latestReason: string;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-45-  /** Breakdown of signal types for confluence detail */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-46-  breakdown: SignalTypeBreakdown;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-47-}
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-48-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-49-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-50- * Map confluence count to intensity step.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-51- * 1 signal = 0.3, 2 signals = 0.5, 3+ signals = 0.8
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-52- */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-53-function confluenceToIntensity(count: number): number {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-54-  if (count <= 0) return 0;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-55-  if (count === 1) return 0.3;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-56-  if (count === 2) return 0.5;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-57-  return 0.8; // 3+ signals
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-58-}
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-59-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-60-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-61- * Classify signal type from AutopilotSignal.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-62- */
+src/hooks/useAutopilot/useTokenSignalStrength.ts-63-function classifySignalType(signal: AutopilotSignal): "buy" | "sell" {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-64-  switch (signal.signalType) {
+src/hooks/useAutopilot/useTokenSignalStrength.ts-65-    case "magic_buy":
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-66-      return "buy";
+--
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-75-  }
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-76-}
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-77-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-78-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-79- * Hook to get signal strength for each token in the autopilot signals array.
+src/hooks/useAutopilot/useTokenSignalStrength.ts:80: * Returns a Map<mint, SignalStrength> for efficient O(1) lookups.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-81- *
+src/hooks/useAutopilot/useTokenSignalStrength.ts-82- * Confluence-based: counts how many signals agree on direction for each mint.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-83- * Tracks when new signals arrive to trigger flash animations in TokenRow.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-84- */
+src/hooks/useAutopilot/useTokenSignalStrength.ts:85:export const useTokenSignalStrength = (): Map<string, SignalStrength> => {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-86-  // Get signals array from autopilot store
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-87-  const signals = useGlobalStore(useShallow(state => state.autopilot.signals));
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-88-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-89-  // Track previous latest timestamps to detect new signals
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-90-  const prevTimestampsRef = useRef<Map<string, number>>(new Map());
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-91-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-92-  return useMemo(() => {
+src/hooks/useAutopilot/useTokenSignalStrength.ts:93:    const strengthMap = new Map<string, SignalStrength>();
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-94-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-95-    // Group signals by mint
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-96-    const signalsByMint = new Map<string, AutopilotSignal[]>();
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-97-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-98-    for (const signal of signals) {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-99-      const existing = signalsByMint.get(signal.mint) ?? [];
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-100-      existing.push(signal);
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-101-      signalsByMint.set(signal.mint, existing);
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-102-    }
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-103-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-104-    // Calculate signal strength for each mint based on confluence
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-105-    for (const [mint, mintSignals] of signalsByMint) {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-106-      // Count buy vs sell signals, track breakdown, and find latest signal
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-107-      let buyCount = 0;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-108-      let sellCount = 0;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-109-      let latestSignal = mintSignals[0];
+src/hooks/useAutopilot/useTokenSignalStrength.ts-110-      const breakdown: SignalTypeBreakdown = {
+src/hooks/useAutopilot/useTokenSignalStrength.ts-111-        magicBuy: 0,
+src/hooks/useAutopilot/useTokenSignalStrength.ts-112-        magicExit: 0,
+src/hooks/useAutopilot/useTokenSignalStrength.ts-113-        dumpExit: 0,
+src/hooks/useAutopilot/useTokenSignalStrength.ts-114-        ruleSignal: 0,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-115-      };
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-116-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-117-      for (const signal of mintSignals) {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-118-        // Track signal type breakdown
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-119-        switch (signal.signalType) {
+src/hooks/useAutopilot/useTokenSignalStrength.ts-120-          case "magic_buy":
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-121-            breakdown.magicBuy++;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-122-            break;
+src/hooks/useAutopilot/useTokenSignalStrength.ts-123-          case "magic_exit":
+--
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-143-      }
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-144-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-145-      // Determine dominant type (whichever has more signals)
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-146-      // If tied, use the most recent signal's type
+src/hooks/useAutopilot/useTokenSignalStrength.ts-147-      let dominantType: "buy" | "sell" | "none" = "none";
+src/hooks/useAutopilot/useTokenSignalStrength.ts:148:      let confluenceCount = 0;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-149-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-150-      if (buyCount > sellCount) {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-151-        dominantType = "buy";
+src/hooks/useAutopilot/useTokenSignalStrength.ts:152:        confluenceCount = buyCount;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-153-      } else if (sellCount > buyCount) {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-154-        dominantType = "sell";
+src/hooks/useAutopilot/useTokenSignalStrength.ts:155:        confluenceCount = sellCount;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-156-      } else if (buyCount > 0) {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-157-        // Tied - use most recent signal's type
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-158-        dominantType = classifySignalType(latestSignal);
+src/hooks/useAutopilot/useTokenSignalStrength.ts:159:        confluenceCount = buyCount; // or sellCount, they're equal
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-160-      }
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-161-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-162-      // Check if this is a new signal (timestamp changed)
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-163-      const prevTimestamp = prevTimestampsRef.current.get(mint) ?? 0;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-164-      const isNew = latestSignal.timestamp > prevTimestamp;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-165-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-166-      strengthMap.set(mint, {
+src/hooks/useAutopilot/useTokenSignalStrength.ts-167-        type: dominantType,
+src/hooks/useAutopilot/useTokenSignalStrength.ts:168:        confluenceCount,
+src/hooks/useAutopilot/useTokenSignalStrength.ts:169:        intensity: confluenceToIntensity(confluenceCount),
+src/hooks/useAutopilot/useTokenSignalStrength.ts-170-        latestTimestamp: latestSignal.timestamp,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-171-        isNew,
+src/hooks/useAutopilot/useTokenSignalStrength.ts-172-        latestReason: latestSignal.reason,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-173-        breakdown,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-174-      });
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-175-    }
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-176-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-177-    // Update previous timestamps for next render
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-178-    const newPrevTimestamps = new Map<string, number>();
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-179-    for (const [mint, strength] of strengthMap) {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-180-      newPrevTimestamps.set(mint, strength.latestTimestamp);
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-181-    }
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-182-    prevTimestampsRef.current = newPrevTimestamps;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-183-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-184-    return strengthMap;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-185-  }, [signals]);
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts-186-};
+--
+src/hooks/useAutopilot/types.ts-8- * - Watchlist: WebSocket watchlist store (WatchlistTokenData) - full market_data
+src/hooks/useAutopilot/types.ts-9- * - Trending: WebSocket discovery_trending_list store (DiscoveryTrendingListTokenData) - full market_data
+src/hooks/useAutopilot/types.ts-10- * - Whales: REST API /discovery/whale_moves (WhaleMoves) - limited data
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-11- */
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-12-
+src/hooks/useAutopilot/types.ts:13:import type { SignalStrength } from "./useTokenSignalStrength";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-14-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-15-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-16- * Trading statistics for a specific time window.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-17- * Used for price change calculations (current price vs earliest_price).
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-18- */
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-19-export type TradingStats = {
+src/hooks/useAutopilot/types.ts-20-  earliest_price_sol: string;
+src/hooks/useAutopilot/types.ts-21-  earliest_price_usd: string;
+src/hooks/useAutopilot/types.ts-22-  buys: number;
+src/hooks/useAutopilot/types.ts-23-  sells: number;
+src/hooks/useAutopilot/types.ts-24-  buy_volume_sol: string;
+src/hooks/useAutopilot/types.ts-25-  buy_volume_usd: string;
+src/hooks/useAutopilot/types.ts-26-  sell_volume_sol: string;
+src/hooks/useAutopilot/types.ts-27-  sell_volume_usd: string;
+src/hooks/useAutopilot/types.ts-28-  buyers: number;
+src/hooks/useAutopilot/types.ts-29-  sellers: number;
+src/hooks/useAutopilot/types.ts-30-  traders: number;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-31-};
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-32-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-33-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-34- * Screener market data - subset of TokenMarketData relevant for screener display.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-35- * All fields optional to accommodate different data sources.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-36- */
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-37-export type ScreenerMarketData = {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-38-  // Core price data
+src/hooks/useAutopilot/types.ts-39-  price_sol?: string | number;
+src/hooks/useAutopilot/types.ts-40-  price_usd?: string | number;
+src/hooks/useAutopilot/types.ts-41-  market_cap_usd?: string | number;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-42-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-43-  // Symbol (can come from market_data or token itself)
+--
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-73-  // Market data - populated from WebSocket stores or mapped from API
+src/hooks/useAutopilot/types.ts-74-  market_data?: ScreenerMarketData;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-75-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-76-  // Autopilot integration
+src/hooks/useAutopilot/types.ts-77-  hasPosition?: boolean;
+src/hooks/useAutopilot/types.ts:78:  signalStrength?: SignalStrength;
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-79-};
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-80-
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-81-/**
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-82- * Return type for useAutopilotDiscoveryTokens hook.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-83- * All three columns return the same ScreenerTokenData type.
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-84- */
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-85-export type ScreenerTokenList = {
+src/hooks/useAutopilot/types.ts-86-  watchlist: ScreenerTokenData[];
+src/hooks/useAutopilot/types.ts-87-  trending: ScreenerTokenData[];
+src/hooks/useAutopilot/types.ts-88-  whales: ScreenerTokenData[];
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/types.ts-89-};
+--
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-1-export { useAutopilotData } from "./useAutopilotData";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-2-export { useAutopilotPositions } from "./useAutopilotPositions";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-3-export { useAutopilotTokensWithPrices } from "./useAutopilotTokensWithPrices";
+src/hooks/useAutopilot/index.ts:4:export { useTokenSignalStrength } from "./useTokenSignalStrength";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-5-export { useTimeAgo } from "./useTimeAgo";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-6-export type { AutopilotPositionWithPnL } from "./useAutopilotPositions";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-7-export type {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-8-  AutopilotTokenWithPrices,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-9-  AutopilotTokenListWithPrices,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-10-} from "./useAutopilotTokensWithPrices";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-11-export type {
+src/hooks/useAutopilot/index.ts:12:  SignalStrength,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-13-  SignalTypeBreakdown,
+src/hooks/useAutopilot/index.ts:14:} from "./useTokenSignalStrength";
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-15-export type {
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-16-  ScreenerTokenData,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-17-  ScreenerTokenList,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-18-  ScreenerMarketData,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-19-  TradingStats,
+/Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/hooks/useAutopilot/index.ts-20-} from "./types";

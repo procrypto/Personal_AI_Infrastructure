@@ -1,0 +1,888 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { useState, useEffect } from "react";
+import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+import {
+  Bot,
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  Zap,
+  Target,
+  ShieldAlert,
+  Clock,
+  Eye,
+  Flame,
+  Wallet,
+  Settings,
+  RefreshCw,
+  Power,
+  Layers,
+  CheckCircle2,
+  Circle,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Switch } from "@/components/switch";
+import { Tooltip } from "@/components/tooltip";
+import { useAutopilotSubscription } from "@/hooks/useSubscriptions/useAutopilotSubscription";
+import {
+  useAutopilotData,
+  useTimeAgo,
+  type AutopilotPositionWithPnL,
+} from "@/hooks/useAutopilot";
+import type {
+  AutopilotSignal,
+  AutopilotMarketStatus,
+  AutopilotConfig,
+  AutopilotStrategies,
+  WatchedToken,
+} from "@/store/memoryStore/slices/autopilot-store/types";
+import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+
+// Market Status Badge Component
+const MarketStatusBadge = ({ status }: { status: AutopilotMarketStatus }) => {
+  const stateConfig = {
+    NORMAL: {
+      color: "bg-green-500/20 text-green-400 border-green-500/30",
+      icon: Activity,
+      label: "NORMAL",
+    },
+    CAUTION: {
+      color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+      icon: AlertTriangle,
+      label: "CAUTION",
+    },
+    DUMP: {
+      color: "bg-red-500/20 text-red-400 border-red-500/30",
+      icon: ShieldAlert,
+      label: "DUMP",
+    },
+  };
+
+  const config = stateConfig[status.state];
+  const Icon = config.icon;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-lg border px-3 py-1.5",
+        config.color
+      )}
+    >
+      <Icon className="h-4 w-4" />
+      <span className="text-xs font-semibold">{config.label}</span>
+      <span className="text-xs opacity-75">
+        SOL {status.solPriceChangePercent >= 0 ? "+" : ""}
+        {status.solPriceChangePercent.toFixed(2)}%
+      </span>
+    </div>
+  );
+};
+
+// Scan Countdown Component - shows live countdown to next scan
+const ScanCountdown = ({
+  scanTimestamp,
+  intervalMs,
+}: {
+  scanTimestamp: number | null;
+  intervalMs: number;
+}) => {
+  const [countdown, setCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (scanTimestamp === null) {
+      setCountdown(null);
+      return;
+    }
+
+    const calculateCountdown = () => {
+      const nextScanTime = scanTimestamp + intervalMs;
+      const remaining = Math.round((nextScanTime - Date.now()) / 1000);
+      return remaining;
+    };
+
+    // Initial calculation
+    setCountdown(calculateCountdown());
+
+    // Update every second
+    const intervalId = setInterval(() => {
+      setCountdown(calculateCountdown());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [scanTimestamp, intervalMs]);
+
+  if (scanTimestamp === null) {
+    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+  }
+
+  if (countdown === null) {
+    return <span className="text-text-tertiary text-[10px]">Waiting...</span>;
+  }
+
+  if (countdown <= 0) {
+    return <span className="text-[10px] text-cyan-400">Scanning...</span>;
+  }
+
+  return (
+    <span className="text-text-secondary text-[10px]">Next: {countdown}s</span>
+  );
+};
+
+// Position Card Component - handles nullable P&L from NATS market data
+const PositionCard = ({ position }: { position: AutopilotPositionWithPnL }) => {
+  const isProfit = (position.pnlPercent ?? 0) >= 0;
+  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+  const hasMarketData = position.pnlPercent !== null;
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+      <div className="flex items-center gap-3">
+        <div
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+            hasMarketData
+              ? isProfit
+                ? "bg-green-500/20 text-green-400"
+                : "bg-red-500/20 text-red-400"
+              : "bg-gray-500/20 text-gray-400"
+          )}
+        >
+          {hasMarketData ? (
+            isProfit ? (
+              <TrendingUp className="h-4 w-4" />
+            ) : (
+              <TrendingDown className="h-4 w-4" />
+            )
+          ) : (
+            <Activity className="h-4 w-4 animate-pulse" />
+          )}
+        </div>
+        <div>
+          <span className="text-text-primary text-sm font-medium">
+            ${position.symbol}
+          </span>
+          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+            <Clock className="h-3 w-3" />
+            {holdTime}m
+          </div>
+        </div>
+      </div>
+      <div className="text-right">
+        {hasMarketData ? (
+          <>
+            <div
+              className={cn(
+                "text-sm font-semibold",
+                isProfit ? "text-green-400" : "text-red-400"
+              )}
+            >
+              {isProfit ? "+" : ""}
+              {position.pnlPercent!.toFixed(2)}%
+            </div>
+            <div className="text-text-secondary text-[10px]">
+              {position.positionSizeSol.toFixed(2)} SOL
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="text-text-tertiary animate-pulse text-sm font-semibold">
+              Loading...
+            </div>
+            <div className="text-text-secondary text-[10px]">
+              {position.positionSizeSol.toFixed(2)} SOL
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Signal Item Component
+const SignalItem = ({ signal }: { signal: AutopilotSignal }) => {
+  const signalConfig = {
+    magic_buy: { color: "text-cyan-400", icon: Target, label: "BUY" },
+    magic_exit: { color: "text-purple-400", icon: Zap, label: "EXIT" },
+    dump_exit: { color: "text-red-400", icon: ShieldAlert, label: "DUMP" },
+    rule_signal: { color: "text-blue-400", icon: Activity, label: "SIGNAL" },
+  };
+
+  const config = signalConfig[signal.signalType];
+  const Icon = config.icon;
+  const time = new Date(signal.timestamp).toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  return (
+    <div className="border-border-primary/50 flex items-center gap-2 border-b py-2 last:border-0">
+      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+      <span className="text-text-secondary text-[10px]">{time}</span>
+      <span className={cn("text-xs font-medium", config.color)}>
+        {config.label}
+      </span>
+      <span className="text-text-primary text-xs">${signal.symbol}</span>
+      {signal.pnlPercent !== undefined && (
+        <span
+          className={cn(
+            "text-xs",
+            signal.pnlPercent >= 0 ? "text-green-400" : "text-red-400"
+          )}
+        >
+          {signal.pnlPercent >= 0 ? "+" : ""}
+          {signal.pnlPercent.toFixed(1)}%
+        </span>
+      )}
+    </div>
+  );
+};
+
+// Token Row Component
+const TokenRow = ({ token }: { token: WatchedToken }) => {
+  const change = token.change1h ?? 0;
+  const isPositive = change >= 0;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+        token.hasPosition
+          ? "border border-cyan-500/20 bg-cyan-500/10"
+          : "bg-bg-tertiary/30"
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-text-primary font-medium">${token.symbol}</span>
+        {token.hasPosition && (
+          <span className="text-[8px] font-semibold text-cyan-400">OPEN</span>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        {token.priceUsd !== undefined && (
+          <span className="text-text-secondary">
+            $
+            {token.priceUsd < 0.01
+              ? token.priceUsd.toExponential(2)
+              : token.priceUsd.toFixed(4)}
+          </span>
+        )}
+        <span
+          className={cn(
+            "font-medium",
+            isPositive ? "text-green-400" : "text-red-400"
+          )}
+        >
+          {isPositive ? "+" : ""}
+          {change.toFixed(1)}%
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// Token List Section Component
+const TokenListSection = ({
+  title,
+  icon: Icon,
+  tokens,
+  iconColor,
+}: {
+  title: string;
+  icon: React.ElementType;
+  tokens: WatchedToken[];
+  iconColor: string;
+}) => {
+  if (tokens.length === 0) return null;
+
+  return (
+    <div className="flex-shrink-0">
+      <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+        <Icon className={cn("h-3.5 w-3.5", iconColor)} />
+        {title} ({tokens.length})
+      </div>
+      <div className="max-h-32 space-y-1 overflow-auto">
+        {tokens.map(token => (
+          <TokenRow
+            key={token.mint}
+            token={token}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Controls Panel Component
+const ControlsPanel = ({
+  config,
+  sendCommand,
+  isConnected,
+}: {
+  config: AutopilotConfig;
+  sendCommand: (cmd: AutopilotCommand) => void;
+  isConnected: boolean;
+}) => {
+  const [showControls, setShowControls] = useState(false);
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+      {/* Header - always visible */}
+      <button
+        onClick={() => setShowControls(!showControls)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+        disabled={!isConnected}
+      >
+        <div className="flex items-center gap-2">
+          <Settings className="text-text-secondary h-3.5 w-3.5" />
+          <span className="text-text-secondary font-medium">Controls</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+              config.mode === "paper"
+                ? "bg-yellow-500/20 text-yellow-400"
+                : "bg-green-500/20 text-green-400"
+            )}
+          >
+            {config.mode.toUpperCase()}
+          </span>
+          <span className="text-text-tertiary">{showControls ? "▲" : "▼"}</span>
+        </div>
+      </button>
+
+      {/* Expandable controls */}
+      {showControls && (
+        <div className="border-border-primary/50 space-y-3 border-t px-3 py-2">
+          {/* Mode Toggle - Disabled until LOIS integration */}
+          <Tooltip
+            content="Live trading integration coming soon. Invite only 🔒"
+            side="left"
+            triggerClassName="w-full"
+          >
+            <div className="flex w-full cursor-not-allowed items-center justify-between opacity-50">
+              <div className="flex items-center gap-2">
+                <Power className="text-text-secondary h-3.5 w-3.5" />
+                <span className="text-text-secondary text-xs">
+                  Live Trading
+                </span>
+              </div>
+              <Switch
+                size="sm"
+                checked={false}
+                disabled
+              />
+            </div>
+          </Tooltip>
+
+          {/* Auto Sources Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Eye className="h-3.5 w-3.5 text-blue-400" />
+              <span className="text-text-secondary text-xs">Auto Sources</span>
+            </div>
+            <Switch
+              size="sm"
+              checked={config.autoSourcesEnabled}
+              onCheckedChange={checked =>
+                sendCommand({ command: "toggle_sources", enabled: checked })
+              }
+            />
+          </div>
+
+          {/* Trending Toggle */}
+          {config.autoSourcesEnabled && (
+            <div className="flex items-center justify-between pl-5">
+              <div className="flex items-center gap-2">
+                <Flame className="h-3 w-3 text-orange-400" />
+                <span className="text-text-tertiary text-[11px]">Trending</span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.trendingEnabled}
+                onCheckedChange={checked =>
+                  sendCommand({ command: "toggle_trending", enabled: checked })
+                }
+              />
+            </div>
+          )}
+
+          {/* Whales Toggle */}
+          {config.autoSourcesEnabled && (
+            <div className="flex items-center justify-between pl-5">
+              <div className="flex items-center gap-2">
+                <Wallet className="h-3 w-3 text-green-400" />
+                <span className="text-text-tertiary text-[11px]">
+                  Whale Moves
+                </span>
+              </div>
+              <Switch
+                size="sm"
+                checked={config.whalesEnabled}
+                onCheckedChange={checked =>
+                  sendCommand({ command: "toggle_whales", enabled: checked })
+                }
+              />
+            </div>
+          )}
+
+          {/* Market Filter Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="h-3.5 w-3.5 text-purple-400" />
+              <span className="text-text-secondary text-xs">Market Filter</span>
+            </div>
+            <Switch
+              size="sm"
+              checked={config.marketFilterEnabled}
+              onCheckedChange={checked =>
+                sendCommand({ command: "toggle_filter", enabled: checked })
+              }
+            />
+          </div>
+
+          {/* Refresh Sources Button */}
+          <button
+            onClick={() => sendCommand({ command: "refresh_sources" })}
+            className="bg-bg-tertiary/50 text-text-secondary hover:bg-bg-tertiary flex w-full items-center justify-center gap-2 rounded px-3 py-1.5 text-xs transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Refresh Sources
+          </button>
+
+          {/* Position Size Display */}
+          <div className="text-text-tertiary border-border-primary/30 flex items-center justify-between border-t pt-1 text-[10px]">
+            <span>Position Size</span>
+            <span>{config.positionSizeSol} SOL</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Strategies Panel Component
+const StrategiesPanel = ({
+  strategies,
+  sendCommand,
+  isConnected,
+}: {
+  strategies: AutopilotStrategies;
+  sendCommand: (cmd: AutopilotCommand) => void;
+  isConnected: boolean;
+}) => {
+  const [showStrategies, setShowStrategies] = useState(false);
+  const activeSet = new Set(strategies.active);
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+      {/* Header - always visible */}
+      <button
+        onClick={() => setShowStrategies(!showStrategies)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+        disabled={!isConnected}
+      >
+        <div className="flex items-center gap-2">
+          <Layers className="text-text-secondary h-3.5 w-3.5" />
+          <span className="text-text-secondary font-medium">Strategies</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+              strategies.active.length > 0
+                ? "bg-green-500/20 text-green-400"
+                : "bg-gray-500/20 text-gray-400"
+            )}
+          >
+            {strategies.active.length} ACTIVE
+          </span>
+          <span className="text-text-tertiary">
+            {showStrategies ? "▲" : "▼"}
+          </span>
+        </div>
+      </button>
+
+      {/* Expandable strategies list */}
+      {showStrategies && (
+        <div className="border-border-primary/50 space-y-2 border-t px-3 py-2">
+          {strategies.available.length === 0 ? (
+            <div className="text-text-tertiary py-2 text-center text-xs">
+              No strategies available
+            </div>
+          ) : (
+            strategies.available.map(strategy => {
+              const isActive = activeSet.has(strategy.id);
+              return (
+                <button
+                  key={strategy.id}
+                  onClick={() =>
+                    sendCommand({
+                      command: "toggle_strategy",
+                      strategyId: strategy.id,
+                      enabled: !isActive,
+                    })
+                  }
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded px-2 py-2 text-left transition-colors",
+                    isActive
+                      ? "border border-green-500/30 bg-green-500/10 hover:bg-green-500/20"
+                      : "bg-bg-tertiary/50 hover:bg-bg-tertiary border border-transparent"
+                  )}
+                >
+                  <div className="mt-0.5 flex-shrink-0">
+                    {isActive ? (
+                      <CheckCircle2 className="h-4 w-4 text-green-400" />
+                    ) : (
+                      <Circle className="text-text-tertiary h-4 w-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "text-xs font-medium",
+                          isActive ? "text-green-400" : "text-text-primary"
+                        )}
+                      >
+                        {strategy.name}
+                      </span>
+                      <span
+                        className={cn(
+                          "rounded px-1 py-0.5 text-[9px]",
+                          strategy.mode === "all"
+                            ? "bg-blue-500/20 text-blue-400"
+                            : "bg-purple-500/20 text-purple-400"
+                        )}
+                      >
+                        {strategy.mode.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-text-tertiary truncate text-[10px]">
+                      {strategy.summary}
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Stats Panel Component
+const StatsPanel = ({ stats }: { stats: AutopilotStats }) => {
+  const isProfit = stats.totalPnlSol >= 0;
+
+  return (
+    <div className="border-border-primary bg-bg-tertiary/30 grid grid-cols-4 gap-2 rounded-lg border p-3">
+      <div className="text-center">
+        <div className="text-text-primary text-lg font-bold">
+          {stats.closedTrades}
+        </div>
+        <div className="text-text-secondary text-[10px]">Trades</div>
+      </div>
+      <div className="text-center">
+        <div
+          className={cn(
+            "text-lg font-bold",
+            stats.winRate >= 0.5 ? "text-green-400" : "text-red-400"
+          )}
+        >
+          {(stats.winRate * 100).toFixed(0)}%
+        </div>
+        <div className="text-text-secondary text-[10px]">Win Rate</div>
+      </div>
+      <div className="text-center">
+        <div className="text-text-primary text-lg font-bold">
+          {stats.wins}W/{stats.losses}L
+        </div>
+        <div className="text-text-secondary text-[10px]">Record</div>
+      </div>
+      <div className="text-center">
+        <div
+          className={cn(
+            "text-lg font-bold",
+            isProfit ? "text-green-400" : "text-red-400"
+          )}
+        >
+          {isProfit ? "+" : ""}
+          <FormattedNumber
+            value={stats.totalPnlSol}
+            decimals={2}
+          />
+        </div>
+        <div className="text-text-secondary text-[10px]">P&L (SOL)</div>
+      </div>
+    </div>
+  );
+};
+
+// Last Analysis Row Component
+const LastAnalysisRow = ({
+  analysis,
+}: {
+  analysis: {
+    symbol: string;
+    timestamp: number;
+    priceChange5m: number | null;
+    priceChange1h: number | null;
+    buySellRatio: number | null;
+    rulesChecked: number;
+    rulesMatched: number;
+    outcome: string;
+    reason: string;
+  } | null;
+}) => {
+  // Use live-updating time ago hook
+  const timeStr = useTimeAgo(analysis?.timestamp);
+
+  if (!analysis) return null;
+
+  const outcomeConfig = {
+    no_signal: { color: "text-gray-400", bg: "bg-gray-500/10" },
+    buy_signal: { color: "text-green-400", bg: "bg-green-500/10" },
+    sell_signal: { color: "text-red-400", bg: "bg-red-500/10" },
+    skipped: { color: "text-yellow-400", bg: "bg-yellow-500/10" },
+  };
+
+  const config =
+    outcomeConfig[analysis.outcome as keyof typeof outcomeConfig] ||
+    outcomeConfig.no_signal;
+
+  return (
+    <div
+      className={cn("border-border-primary rounded-lg border p-2", config.bg)}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Activity className={cn("h-3.5 w-3.5", config.color)} />
+          <span className="text-text-primary text-xs font-medium">
+            ${analysis.symbol}
+          </span>
+          <span className="text-text-tertiary text-[10px]">{timeStr}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn("text-[10px] font-semibold", config.color)}>
+            {analysis.rulesMatched}/{analysis.rulesChecked}
+          </span>
+        </div>
+      </div>
+      <div className="mt-1 flex items-center gap-3 text-[10px]">
+        {analysis.priceChange5m !== null && (
+          <span
+            className={
+              analysis.priceChange5m >= 0 ? "text-green-400" : "text-red-400"
+            }
+          >
+            5m: {analysis.priceChange5m >= 0 ? "+" : ""}
+            {analysis.priceChange5m.toFixed(2)}%
+          </span>
+        )}
+        {analysis.priceChange1h !== null && (
+          <span
+            className={
+              analysis.priceChange1h >= 0 ? "text-green-400" : "text-red-400"
+            }
+          >
+            1h: {analysis.priceChange1h >= 0 ? "+" : ""}
+            {analysis.priceChange1h.toFixed(2)}%
+          </span>
+        )}
+        {analysis.buySellRatio !== null && (
+          <span className="text-text-secondary">
+            B/S: {analysis.buySellRatio.toFixed(1)}:1
+          </span>
+        )}
+      </div>
+      <div className="text-text-tertiary mt-1 truncate text-[9px]">
+        {analysis.reason}
+      </div>
+    </div>
+  );
+};
+
+// Section Header Component
+const SectionHeader = ({ children }: { children: React.ReactNode }) => (
+  <div className="text-[10px] text-text-tertiary uppercase tracking-wide font-medium mb-1.5">
+    {children}
+  </div>
+);
+
+// Main Autopilot Widget Component
+export const AutopilotWidget = () => {
+  // Connect to autopilot backend and auto-subscribe to NATS market data
+  useAutopilotSubscription({ isEnabled: true });
+
+  // Get all autopilot data from Zustand store
+  const {
+    positions,
+    signals,
+    marketStatus,
+    stats,
+    scanTick,
+    lastAnalysis,
+    tokenList,
+    config,
+    strategies,
+    isConnected,
+    sendCommand,
+  } = useAutopilotData();
+
+  const totalTokens =
+    tokenList.watchlist.length +
+    tokenList.trending.length +
+    tokenList.whales.length;
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-hidden">
+      {/* Header - Market Status */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot
+            className={cn(
+              "h-5 w-5",
+              isConnected ? "text-green-400" : "text-red-400"
+            )}
+          />
+          <span className="text-text-primary text-sm font-semibold">
+            Token Autopilot
+          </span>
+          {scanTick && (
+            <span className="text-text-secondary text-[10px]">
+              #{scanTick.scanNumber} | {totalTokens} tokens
+            </span>
+          )}
+          {isConnected && (
+            <>
+              <span className="text-text-tertiary text-[10px]">|</span>
+              <ScanCountdown
+                scanTimestamp={scanTick?.timestamp ?? null}
+                intervalMs={config.pollIntervalMs}
+              />
+            </>
+          )}
+        </div>
+        <MarketStatusBadge status={marketStatus} />
+      </div>
+
+      {/* Connection Status - Always visible when disconnected */}
+      {!isConnected && (
+        <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2">
+          <AlertTriangle className="h-4 w-4 text-yellow-400" />
+          <span className="text-xs text-yellow-400">
+            Connecting to autopilot backend...
+          </span>
+        </div>
+      )}
+
+      {/* ═══ PERFORMANCE SECTION ═══ */}
+      <div className="flex flex-col gap-2 flex-shrink-0">
+        <SectionHeader>Performance</SectionHeader>
+        <StatsPanel stats={stats} />
+
+        {/* Open Positions */}
+        {positions.length > 0 && (
+          <div>
+            <div className="text-text-secondary mb-2 flex items-center gap-2 text-xs font-medium">
+              <Target className="h-3.5 w-3.5" />
+              Open Positions ({positions.length})
+            </div>
+            <div className="max-h-40 space-y-2 overflow-auto">
+              {positions.map(pos => (
+                <PositionCard
+                  key={pos.mint}
+                  position={pos}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ ACTIVITY SECTION ═══ */}
+      <div className="flex flex-col gap-2 flex-shrink-0">
+        <SectionHeader>Activity</SectionHeader>
+        <LastAnalysisRow analysis={lastAnalysis} />
+
+        {/* Recent Signals */}
+        {signals.length > 0 && (
+          <div>
+            <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+              <Zap className="h-3.5 w-3.5" />
+              Recent Signals
+            </div>
+            <div className="max-h-24 overflow-auto">
+              <div className="space-y-0">
+                {signals.slice(0, 5).map((signal, idx) => (
+                  <SignalItem
+                    key={`${signal.timestamp}-${idx}`}
+                    signal={signal}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ TOKEN WATCH SECTION ═══ (Main scrollable area) */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
+        <SectionHeader>Tokens</SectionHeader>
+
+        {/* Watchlist */}
+        <TokenListSection
+          title="Watchlist"
+          icon={Eye}
+          tokens={tokenList.watchlist}
+          iconColor="text-blue-400"
+        />
+
+        {/* Trending */}
+        <TokenListSection
+          title="Trending"
+          icon={Flame}
+          tokens={tokenList.trending}
+          iconColor="text-orange-400"
+        />
+
+        {/* Whale Moves */}
+        <TokenListSection
+          title="Whale Moves"
+          icon={Wallet}
+          tokens={tokenList.whales}
+          iconColor="text-green-400"
+        />
+
+        {/* Empty state if no tokens */}
+        {totalTokens === 0 && isConnected && (
+          <div className="text-text-secondary border-border-primary/50 rounded-lg border border-dashed p-4 text-center text-xs">
+            No tokens being watched. Enable auto-sources or add to watchlist.
+          </div>
+        )}
+      </div>
+
+      {/* ═══ CONFIGURATION SECTION ═══ */}
+      <div className="flex flex-col gap-2 flex-shrink-0 border-t border-border-primary/30 pt-3">
+        <SectionHeader>Configuration</SectionHeader>
+        <ControlsPanel
+          config={config}
+          sendCommand={sendCommand}
+          isConnected={isConnected}
+        />
+        <StrategiesPanel
+          strategies={strategies}
+          sendCommand={sendCommand}
+          isConnected={isConnected}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default AutopilotWidget;

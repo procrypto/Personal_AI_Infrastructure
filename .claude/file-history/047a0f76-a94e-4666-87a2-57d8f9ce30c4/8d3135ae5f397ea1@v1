@@ -1,0 +1,229 @@
+/**
+ * Search Text Endpoint
+ *
+ * Text-based token search (symbol/name) matching production `/data/search`.
+ *
+ * ⚠️  This fetches PRODUCTION data. Use strict limits.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, escapeString } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const SEARCH_LIMIT = 5;
+const TABLE_RECENT = "materializer_token_market_data_searchable_recent";
+const TABLE_LEGACY = "materializer_token_market_data_searchable";
+const MIN_MARKET_CAP_USD = 5000;
+const MIN_LIQUIDITY_USD = 10000;
+const MIN_AGE_DAYS_FOR_FILTER = 30;
+const MIN_TRADING_BOT_VOLUME_PCT = 5;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type SearchTextQueryParams = {
+    text?: string;
+    fast_search?: string | boolean;
+    enable_spam_filter?: string | boolean;
+};
+
+type TokenSearchResult = {
+    search_data_source: string;
+    mint: string;
+    exchange: string;
+    created: string;
+    name: string;
+    symbol: string;
+    description: string;
+    image: string;
+    website: string | null;
+    telegram: string | null;
+    twitter: string | null;
+    discord: string | null;
+    dex_website: string | null;
+    dex_twitter: string | null;
+    dex_discord: string | null;
+    dex_docs: string | null;
+    dex_telegram: string | null;
+    dex_tiktok: string | null;
+    dex_links: unknown[] | null;
+    twitter_royalties: unknown[] | null;
+    market_cap_usd: string;
+    volume_24h_usd: string;
+    liquidity_usd: string;
+    price_usd: string;
+    price_change_24h_usd: string;
+};
+
+type SearchTextResponse =
+    | { ok: true; results: TokenSearchResult[] }
+    | { ok: false; error: string };
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+const parseBoolean = (value: string | boolean | undefined, defaultValue: boolean): boolean => {
+    if (value === undefined) return defaultValue;
+    if (typeof value === "boolean") return value;
+    const normalized = value.toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+    return defaultValue;
+};
+
+const hasSpecialChars = (text: string): boolean => /[^a-zA-Z0-9]/.test(text);
+
+export const validateSearchTextRequest = (
+    query: SearchTextQueryParams
+): { ok: true; input: { text: string; fastSearch: boolean; enableSpamFilter: boolean } } | { ok: false; error: string } => {
+    const textRaw = (query.text ?? "").toString();
+    const text = textRaw.trim().toLowerCase();
+    if (text.length > 64) {
+        return { ok: false, error: "text too long (max 64 chars)" };
+    }
+
+    const fastSearch = parseBoolean(query.fast_search, true);
+    const enableSpamFilter = parseBoolean(query.enable_spam_filter, true);
+
+    return {
+        ok: true,
+        input: { text, fastSearch, enableSpamFilter },
+    };
+};
+
+const buildWhereCondition = (text: string, useLike: boolean, enableSpamFilter: boolean): string => {
+    const conditions: string[] = [];
+
+    if (text.length > 0) {
+        const escaped = escapeString(text);
+        const searchCondition = useLike
+            ? `lower_symbol LIKE '%${escaped}%'`
+            : `hasToken(lower_symbol, '${escaped}')`;
+        conditions.push(searchCondition);
+    }
+
+    if (enableSpamFilter) {
+        const minAgeNanos = MIN_AGE_DAYS_FOR_FILTER * 24 * 60 * 60 * 1_000_000_000;
+        conditions.push(
+            `market_cap_usd >= ${MIN_MARKET_CAP_USD} AND liquidity_usd >= ${MIN_LIQUIDITY_USD} AND (created <= (toUnixTimestamp(now()) * 1000000000 - ${minAgeNanos}) OR (launchpad IS NOT NULL AND trading_bot_volume_pct_24h >= ${MIN_TRADING_BOT_VOLUME_PCT}))`
+        );
+    }
+
+    if (conditions.length === 0) {
+        return "";
+    }
+
+    return `WHERE ${conditions.join(" AND ")}`;
+};
+
+const buildInnerSelect = (table: string, whereCondition: string): string => {
+    return `
+        SELECT
+            'clickhouse' AS search_data_source,
+            mint,
+            exchange,
+            created,
+            name,
+            symbol,
+            description,
+            image,
+            website,
+            telegram,
+            twitter,
+            discord,
+            dex_website,
+            dex_twitter,
+            dex_discord,
+            dex_docs,
+            dex_telegram,
+            dex_tiktok,
+            dex_links,
+            twitter_royalties,
+            market_cap_usd,
+            volume_24h_usd,
+            liquidity_usd,
+            price_usd,
+            CASE
+                WHEN earliest_price_usd_24h = 0 THEN 0
+                ELSE ((price_usd - earliest_price_usd_24h) / earliest_price_usd_24h) * 100
+            END AS price_change_24h_usd
+        FROM ${table}
+        ${whereCondition}
+        ORDER BY mint, timestamp DESC
+        LIMIT 1 BY mint
+    `;
+};
+
+export const buildSearchTextSql = (params: {
+    text: string;
+    fastSearch: boolean;
+    enableSpamFilter: boolean;
+}): string => {
+    const { text, fastSearch, enableSpamFilter } = params;
+    const useLike = hasSpecialChars(text);
+    const whereCondition = buildWhereCondition(text, useLike, enableSpamFilter);
+
+    const recent = buildInnerSelect(TABLE_RECENT, whereCondition);
+    const legacy = buildInnerSelect(TABLE_LEGACY, whereCondition);
+
+    if (fastSearch) {
+        return `
+            SELECT *
+            FROM (
+                ${recent}
+            )
+            ORDER BY liquidity_usd DESC
+            LIMIT ${SEARCH_LIMIT}
+        `;
+    }
+
+    return `
+        SELECT *
+        FROM (
+            ${recent}
+            UNION ALL
+            ${legacy}
+        )
+        ORDER BY liquidity_usd DESC
+        LIMIT 1 BY mint
+        LIMIT ${SEARCH_LIMIT}
+    `;
+};
+
+export const formatSearchTextResponse = (rows: TokenSearchResult[]): SearchTextResponse => {
+    return { ok: true, results: rows };
+};
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerSearchTextRoutes = (app: Elysia) => {
+    app.get("/search", async ({ query }) => {
+        const validation = validateSearchTextRequest(query as SearchTextQueryParams);
+        if (!validation.ok) {
+            return validation;
+        }
+
+        const sql = buildSearchTextSql(validation.input);
+        const result = await clickhouseQuery<TokenSearchResult>(sql);
+
+        if (!result.success) {
+            return { ok: false, error: result.error } as SearchTextResponse;
+        }
+
+        return formatSearchTextResponse(result.data);
+    });
+};
+
+
+
+
+
+
+

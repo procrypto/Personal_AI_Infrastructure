@@ -1,0 +1,202 @@
+---
+phase: 04-data-accuracy
+plan: 02
+type: execute
+---
+
+<objective>
+Update Intel Grid to use token amounts for accurate holdingPercent calculation.
+
+Purpose: Current holdingPercent uses SOL amounts (currentValueSol/entryAmountSol) which fluctuate with price. Token amounts provide accurate position tracking for badges and filtering.
+Output: Intel Grid badges and position filters use token-based holdingPercent.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/04-data-accuracy/04-01-PLAN.md
+
+# Key source files:
+@apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx
+@apps/web-terminal/src/store/trenchBenchStore.ts
+
+**Prior decisions:**
+- [01-01] Token amount tracking for position exit detection (not SOL amounts)
+- [02-01] Badge holdingPercent uses SOL amounts (functional; token amounts enhancement for future)
+
+**Tech stack available:**
+- trenchBenchStore.holdingsMatrix: Map<trader, Map<token, currentTokenAmount>>
+- trenchBenchStore.costBasisMatrix: Map<trader, Map<token, {totalCostSol, totalTokens}>>
+- Intel Grid local KolPosition type with entryAmountSol, currentValueSol
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Extend Intel Grid to access token amounts from store</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx</files>
+  <action>
+1. Update the useTrenchBenchStore subscription (around line 2180-2193) to also extract `holdingsMatrix` and `costBasisMatrix`:
+```typescript
+const {
+  tokenIndex,
+  positionsByToken,
+  holdingsMatrix,
+  costBasisMatrix,
+  selectedTokenMints: sharedSelectedTokens,
+  toggleToken: toggleSharedToken,
+  isHydrated: trenchHydrated,
+} = useTrenchBenchStore(
+  useShallow(state => ({
+    tokenIndex: state.tokenIndex,
+    positionsByToken: state.positionsByToken,
+    holdingsMatrix: state.holdingsMatrix,
+    costBasisMatrix: state.costBasisMatrix,
+    selectedTokenMints: state.selectedTokenMints,
+    toggleToken: state.toggleToken,
+    isHydrated: state.isHydrated,
+  }))
+);
+```
+
+2. Update the local `KolPosition` type (around line 91-100) to include token amounts:
+```typescript
+type KolPosition = {
+  kolAddress: string;
+  kolName: string;
+  kolEmoji: string;
+  kolAvatar: string | null;
+  kolTwitter: string | null;
+  entryAmountSol: number;
+  entryMc: number;
+  currentValueSol: number;
+  entryTimestamp: number;
+  lastTradeTimestamp: number;
+  isBuying: boolean;
+  // Token-based position tracking (for accurate holdingPercent)
+  entryTokens: number;
+  currentTokens: number;
+};
+```
+
+3. In the position mapping (around line 2316), populate the token amounts:
+```typescript
+const enrichedPositions = rawPositions
+  .filter(pos => !EXCLUDED_WALLETS.has(pos.kolAddress))
+  .map(pos => {
+    const kolLower = pos.kolAddress.toLowerCase();
+    const mintLower = token.mint.toLowerCase();
+
+    // Get token amounts from matrices
+    const currentTokens = holdingsMatrix.get(kolLower)?.get(mintLower) || 0;
+    const costBasis = costBasisMatrix.get(kolLower)?.get(mintLower);
+    const entryTokens = costBasis?.totalTokens || 0;
+
+    // ... existing metadata resolution ...
+
+    return {
+      kolAddress: pos.kolAddress,
+      kolName: metadata.name,
+      kolEmoji: metadata.emoji,
+      kolAvatar: metadata.avatar,
+      kolTwitter: metadata.twitter,
+      entryAmountSol: pos.entryAmountSol,
+      entryMc: pos.entryMcUsd,
+      currentValueSol: pos.currentHoldingSol,
+      entryTimestamp: pos.entryTimestamp,
+      lastTradeTimestamp: pos.lastTradeTimestamp,
+      isBuying: pos.isBuying,
+      entryTokens,
+      currentTokens,
+    };
+  });
+```
+
+Add holdingsMatrix and costBasisMatrix to the useMemo dependency array.
+  </action>
+  <verify>npx tsc --noEmit passes, token amounts are populated in enrichedPositions</verify>
+  <done>Intel Grid KolPosition includes entryTokens and currentTokens from store matrices</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Update holdingPercent calculations to use token amounts</name>
+  <files>apps/web-terminal/src/ui/dashboard/widgets/intel-grid-widget.tsx</files>
+  <action>
+Update all holdingPercent calculations to use token amounts instead of SOL amounts:
+
+1. Badge calculation (around line 1184-1189):
+```typescript
+const kolsHoldingStrong = token.kolPositions.filter(pos => {
+  // Use token amounts for accurate position tracking
+  const holdingPercent =
+    pos.entryTokens > 0
+      ? (pos.currentTokens / pos.entryTokens) * 100
+      : 0;
+  return holdingPercent > 50;
+}).length;
+```
+
+2. Position card exit detection (around line 732-736):
+```typescript
+// Check if KOL has exited (< 5% of original position remaining)
+const holdingPercent =
+  position.entryTokens > 0
+    ? (position.currentTokens / position.entryTokens) * 100
+    : 0;
+const hasExited = holdingPercent < 5;
+```
+
+3. Filter logic for active positions (around line 2458-2461):
+```typescript
+const hasActivePosition = token.kolPositions.some(pos => {
+  if (pos.entryTokens <= 0) return false;
+  const holdingPercent = (pos.currentTokens / pos.entryTokens) * 100;
+  return holdingPercent >= 5;
+});
+```
+
+4. Debug logging (around line 2562-2567):
+```typescript
+const kolsHoldingStrong = token.kolPositions.filter(pos => {
+  const holdingPercent =
+    pos.entryTokens > 0
+      ? (pos.currentTokens / pos.entryTokens) * 100
+      : 0;
+  return holdingPercent > 50;
+}).length;
+```
+
+Keep the SOL amount fields (entryAmountSol, currentValueSol) for display purposes - only change the holdingPercent logic.
+  </action>
+  <verify>npx tsc --noEmit passes, grep confirms all holdingPercent uses entryTokens/currentTokens</verify>
+  <done>All holdingPercent calculations use token amounts for accurate position tracking</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` passes without errors
+- [ ] KolPosition type includes entryTokens and currentTokens
+- [ ] All 4 holdingPercent calculations use token amounts
+- [ ] Badge logic still functions correctly
+- [ ] Position filtering still functions correctly
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- holdingPercent accurately reflects token position sizes
+- Phase 4 complete
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/04-data-accuracy/04-02-SUMMARY.md`
+</output>

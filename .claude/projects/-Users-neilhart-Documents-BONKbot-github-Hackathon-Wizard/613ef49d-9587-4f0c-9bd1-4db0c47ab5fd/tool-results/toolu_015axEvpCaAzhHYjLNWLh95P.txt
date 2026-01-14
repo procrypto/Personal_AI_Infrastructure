@@ -1,0 +1,653 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { useState, useEffect, useCallback, useRef } from "react";
+     3→import { FormattedNumber } from "@/components/formatted-number/formatted-number";
+     4→import { Bot, AlertTriangle, TrendingUp, TrendingDown, Activity, Zap, Target, ShieldAlert, Clock, Eye, Flame, Wallet, Settings, RefreshCw, Power } from "lucide-react";
+     5→import { cn } from "@/lib/utils";
+     6→import { Switch } from "@/components/switch";
+     7→
+     8→// Types matching the backend WebSocket events
+     9→interface PositionData {
+    10→  mint: string;
+    11→  symbol: string;
+    12→  action: "buy" | "sell";
+    13→  entryPriceSol: number;
+    14→  currentPriceSol: number;
+    15→  positionSizeSol: number;
+    16→  pnlPercent: number;
+    17→  pnlSol: number;
+    18→  entryTime: number;
+    19→}
+    20→
+    21→interface SignalData {
+    22→  timestamp: number;
+    23→  mint: string;
+    24→  symbol: string;
+    25→  signalType: "magic_buy" | "magic_exit" | "dump_exit" | "rule_signal";
+    26→  action: "buy" | "sell" | "close";
+    27→  reason: string;
+    28→  pnlPercent?: number;
+    29→  entryType?: string;
+    30→}
+    31→
+    32→interface MarketStatusData {
+    33→  state: "NORMAL" | "CAUTION" | "DUMP";
+    34→  solPriceChangePercent: number;
+    35→  blockEntries: boolean;
+    36→  exitAll: boolean;
+    37→}
+    38→
+    39→interface StatsData {
+    40→  totalTrades: number;
+    41→  openTrades: number;
+    42→  closedTrades: number;
+    43→  wins: number;
+    44→  losses: number;
+    45→  winRate: number;
+    46→  totalPnlSol: number;
+    47→  totalPnlUsd: number;
+    48→  avgPnlPercent: number;
+    49→}
+    50→
+    51→interface ScanTickData {
+    52→  timestamp: number;
+    53→  scanNumber: number;
+    54→  tokenCount: number;
+    55→  openPositions: number;
+    56→}
+    57→
+    58→interface WatchedToken {
+    59→  mint: string;
+    60→  symbol: string;
+    61→  source: "watchlist" | "trending" | "whales";
+    62→  priceSol?: number;
+    63→  priceUsd?: number;
+    64→  change1h?: number;
+    65→  change24h?: number;
+    66→  volume24h?: number;
+    67→  mcap?: number;
+    68→  hasPosition?: boolean;
+    69→}
+    70→
+    71→interface TokenListData {
+    72→  watchlist: WatchedToken[];
+    73→  trending: WatchedToken[];
+    74→  whales: WatchedToken[];
+    75→}
+    76→
+    77→interface ConfigData {
+    78→  autoSourcesEnabled: boolean;
+    79→  trendingEnabled: boolean;
+    80→  whalesEnabled: boolean;
+    81→  marketFilterEnabled: boolean;
+    82→  mode: "paper" | "live";
+    83→  positionSizeSol: number;
+    84→  pollIntervalMs: number;
+    85→}
+    86→
+    87→type AutopilotCommand =
+    88→  | { command: "toggle_sources"; enabled: boolean }
+    89→  | { command: "toggle_trending"; enabled: boolean }
+    90→  | { command: "toggle_whales"; enabled: boolean }
+    91→  | { command: "toggle_filter"; enabled: boolean }
+    92→  | { command: "set_mode"; mode: "paper" | "live" }
+    93→  | { command: "set_position_size"; sizeSol: number }
+    94→  | { command: "refresh_sources" }
+    95→  | { command: "get_config" };
+    96→
+    97→type AutopilotEvent =
+    98→  | { type: "position_update"; positions: PositionData[] }
+    99→  | { type: "signal"; signal: SignalData }
+   100→  | { type: "market_status"; status: MarketStatusData }
+   101→  | { type: "stats_update"; stats: StatsData }
+   102→  | { type: "scan_tick"; tick: ScanTickData }
+   103→  | { type: "token_list"; tokens: TokenListData }
+   104→  | { type: "config"; config: ConfigData };
+   105→
+   106→// Determine WebSocket URL based on protocol (use proxy for HTTPS)
+   107→const getAutopilotWsUrl = () => {
+   108→  if (typeof window === "undefined") return "ws://localhost:8765";
+   109→  // Use vite proxy when on HTTPS to avoid mixed content
+   110→  if (window.location.protocol === "https:") {
+   111→    return `wss://${window.location.host}/autopilot-ws`;
+   112→  }
+   113→  return "ws://localhost:8765";
+   114→};
+   115→
+   116→// WebSocket hook for autopilot backend
+   117→function useAutopilotWebSocket(wsUrl: string = getAutopilotWsUrl()) {
+   118→  const [positions, setPositions] = useState<PositionData[]>([]);
+   119→  const [signals, setSignals] = useState<SignalData[]>([]);
+   120→  const [marketStatus, setMarketStatus] = useState<MarketStatusData>({
+   121→    state: "NORMAL",
+   122→    solPriceChangePercent: 0,
+   123→    blockEntries: false,
+   124→    exitAll: false,
+   125→  });
+   126→  const [stats, setStats] = useState<StatsData>({
+   127→    totalTrades: 0,
+   128→    openTrades: 0,
+   129→    closedTrades: 0,
+   130→    wins: 0,
+   131→    losses: 0,
+   132→    winRate: 0,
+   133→    totalPnlSol: 0,
+   134→    totalPnlUsd: 0,
+   135→    avgPnlPercent: 0,
+   136→  });
+   137→  const [scanTick, setScanTick] = useState<ScanTickData | null>(null);
+   138→  const [tokenList, setTokenList] = useState<TokenListData>({
+   139→    watchlist: [],
+   140→    trending: [],
+   141→    whales: [],
+   142→  });
+   143→  const [config, setConfig] = useState<ConfigData>({
+   144→    autoSourcesEnabled: true,
+   145→    trendingEnabled: true,
+   146→    whalesEnabled: true,
+   147→    marketFilterEnabled: true,
+   148→    mode: "paper",
+   149→    positionSizeSol: 0.1,
+   150→    pollIntervalMs: 30000,
+   151→  });
+   152→  const [isConnected, setIsConnected] = useState(false);
+   153→  const wsRef = useRef<WebSocket | null>(null);
+   154→  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   155→
+   156→  const sendCommand = useCallback((command: AutopilotCommand) => {
+   157→    if (wsRef.current?.readyState === WebSocket.OPEN) {
+   158→      wsRef.current.send(JSON.stringify(command));
+   159→    }
+   160→  }, []);
+   161→
+   162→  const connect = useCallback(() => {
+   163→    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+   164→
+   165→    try {
+   166→      const ws = new WebSocket(wsUrl);
+   167→      wsRef.current = ws;
+   168→
+   169→      ws.onopen = () => {
+   170→        setIsConnected(true);
+   171→        console.log("[Autopilot] WebSocket connected");
+   172→      };
+   173→
+   174→      ws.onclose = () => {
+   175→        setIsConnected(false);
+   176→        console.log("[Autopilot] WebSocket disconnected, reconnecting...");
+   177→        // Reconnect after 3 seconds
+   178→        reconnectTimeoutRef.current = setTimeout(connect, 3000);
+   179→      };
+   180→
+   181→      ws.onerror = (err) => {
+   182→        console.error("[Autopilot] WebSocket error:", err);
+   183→      };
+   184→
+   185→      ws.onmessage = (event) => {
+   186→        try {
+   187→          const data = JSON.parse(event.data) as AutopilotEvent;
+   188→
+   189→          switch (data.type) {
+   190→            case "position_update":
+   191→              setPositions(data.positions);
+   192→              break;
+   193→            case "signal":
+   194→              setSignals((prev) => [data.signal, ...prev].slice(0, 50)); // Keep last 50 signals
+   195→              break;
+   196→            case "market_status":
+   197→              setMarketStatus(data.status);
+   198→              break;
+   199→            case "stats_update":
+   200→              setStats(data.stats);
+   201→              break;
+   202→            case "scan_tick":
+   203→              setScanTick(data.tick);
+   204→              break;
+   205→            case "token_list":
+   206→              setTokenList(data.tokens);
+   207→              break;
+   208→            case "config":
+   209→              setConfig(data.config);
+   210→              break;
+   211→          }
+   212→        } catch (err) {
+   213→          console.error("[Autopilot] Failed to parse message:", err);
+   214→        }
+   215→      };
+   216→    } catch (err) {
+   217→      console.error("[Autopilot] Failed to connect:", err);
+   218→      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+   219→    }
+   220→  }, [wsUrl]);
+   221→
+   222→  useEffect(() => {
+   223→    connect();
+   224→    return () => {
+   225→      if (reconnectTimeoutRef.current) {
+   226→        clearTimeout(reconnectTimeoutRef.current);
+   227→      }
+   228→      wsRef.current?.close();
+   229→    };
+   230→  }, [connect]);
+   231→
+   232→  return { positions, signals, marketStatus, stats, scanTick, tokenList, config, isConnected, sendCommand };
+   233→}
+   234→
+   235→// Market Status Badge Component
+   236→const MarketStatusBadge = ({ status }: { status: MarketStatusData }) => {
+   237→  const stateConfig = {
+   238→    NORMAL: { color: "bg-green-500/20 text-green-400 border-green-500/30", icon: Activity, label: "NORMAL" },
+   239→    CAUTION: { color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30", icon: AlertTriangle, label: "CAUTION" },
+   240→    DUMP: { color: "bg-red-500/20 text-red-400 border-red-500/30", icon: ShieldAlert, label: "DUMP" },
+   241→  };
+   242→
+   243→  const config = stateConfig[status.state];
+   244→  const Icon = config.icon;
+   245→
+   246→  return (
+   247→    <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-1.5", config.color)}>
+   248→      <Icon className="h-4 w-4" />
+   249→      <span className="text-xs font-semibold">{config.label}</span>
+   250→      <span className="text-xs opacity-75">
+   251→        SOL {status.solPriceChangePercent >= 0 ? "+" : ""}
+   252→        {status.solPriceChangePercent.toFixed(2)}%
+   253→      </span>
+   254→    </div>
+   255→  );
+   256→};
+   257→
+   258→// Position Card Component
+   259→const PositionCard = ({ position }: { position: PositionData }) => {
+   260→  const isProfit = position.pnlPercent >= 0;
+   261→  const holdTime = Math.floor((Date.now() - position.entryTime) / 60000); // minutes
+   262→
+   263→  return (
+   264→    <div className="border-border-primary bg-bg-tertiary/50 flex items-center justify-between rounded-lg border p-3">
+   265→      <div className="flex items-center gap-3">
+   266→        <div
+   267→          className={cn(
+   268→            "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
+   269→            isProfit ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"
+   270→          )}
+   271→        >
+   272→          {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+   273→        </div>
+   274→        <div>
+   275→          <span className="text-text-primary text-sm font-medium">${position.symbol}</span>
+   276→          <div className="text-text-secondary flex items-center gap-1 text-[10px]">
+   277→            <Clock className="h-3 w-3" />
+   278→            {holdTime}m
+   279→          </div>
+   280→        </div>
+   281→      </div>
+   282→      <div className="text-right">
+   283→        <div className={cn("text-sm font-semibold", isProfit ? "text-green-400" : "text-red-400")}>
+   284→          {isProfit ? "+" : ""}
+   285→          {position.pnlPercent.toFixed(2)}%
+   286→        </div>
+   287→        <div className="text-text-secondary text-[10px]">
+   288→          {position.positionSizeSol.toFixed(2)} SOL
+   289→        </div>
+   290→      </div>
+   291→    </div>
+   292→  );
+   293→};
+   294→
+   295→// Signal Item Component
+   296→const SignalItem = ({ signal }: { signal: SignalData }) => {
+   297→  const signalConfig = {
+   298→    magic_buy: { color: "text-cyan-400", icon: Target, label: "BUY" },
+   299→    magic_exit: { color: "text-purple-400", icon: Zap, label: "EXIT" },
+   300→    dump_exit: { color: "text-red-400", icon: ShieldAlert, label: "DUMP" },
+   301→    rule_signal: { color: "text-blue-400", icon: Activity, label: "SIGNAL" },
+   302→  };
+   303→
+   304→  const config = signalConfig[signal.signalType];
+   305→  const Icon = config.icon;
+   306→  const time = new Date(signal.timestamp).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+   307→
+   308→  return (
+   309→    <div className="border-border-primary/50 flex items-center gap-2 border-b py-2 last:border-0">
+   310→      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+   311→      <span className="text-text-secondary text-[10px]">{time}</span>
+   312→      <span className={cn("text-xs font-medium", config.color)}>{config.label}</span>
+   313→      <span className="text-text-primary text-xs">${signal.symbol}</span>
+   314→      {signal.pnlPercent !== undefined && (
+   315→        <span className={cn("text-xs", signal.pnlPercent >= 0 ? "text-green-400" : "text-red-400")}>
+   316→          {signal.pnlPercent >= 0 ? "+" : ""}
+   317→          {signal.pnlPercent.toFixed(1)}%
+   318→        </span>
+   319→      )}
+   320→    </div>
+   321→  );
+   322→};
+   323→
+   324→// Token Row Component
+   325→const TokenRow = ({ token }: { token: WatchedToken }) => {
+   326→  const change = token.change1h ?? 0;
+   327→  const isPositive = change >= 0;
+   328→
+   329→  return (
+   330→    <div className={cn(
+   331→      "flex items-center justify-between rounded px-2 py-1.5 text-xs",
+   332→      token.hasPosition ? "bg-cyan-500/10 border border-cyan-500/20" : "bg-bg-tertiary/30"
+   333→    )}>
+   334→      <div className="flex items-center gap-2">
+   335→        <span className="text-text-primary font-medium">${token.symbol}</span>
+   336→        {token.hasPosition && (
+   337→          <span className="text-[8px] text-cyan-400 font-semibold">OPEN</span>
+   338→        )}
+   339→      </div>
+   340→      <div className="flex items-center gap-3">
+   341→        {token.priceUsd !== undefined && (
+   342→          <span className="text-text-secondary">
+   343→            ${token.priceUsd < 0.01 ? token.priceUsd.toExponential(2) : token.priceUsd.toFixed(4)}
+   344→          </span>
+   345→        )}
+   346→        <span className={cn("font-medium", isPositive ? "text-green-400" : "text-red-400")}>
+   347→          {isPositive ? "+" : ""}{change.toFixed(1)}%
+   348→        </span>
+   349→      </div>
+   350→    </div>
+   351→  );
+   352→};
+   353→
+   354→// Token List Section Component
+   355→const TokenListSection = ({
+   356→  title,
+   357→  icon: Icon,
+   358→  tokens,
+   359→  iconColor
+   360→}: {
+   361→  title: string;
+   362→  icon: React.ElementType;
+   363→  tokens: WatchedToken[];
+   364→  iconColor: string;
+   365→}) => {
+   366→  if (tokens.length === 0) return null;
+   367→
+   368→  return (
+   369→    <div className="flex-shrink-0">
+   370→      <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+   371→        <Icon className={cn("h-3.5 w-3.5", iconColor)} />
+   372→        {title} ({tokens.length})
+   373→      </div>
+   374→      <div className="max-h-32 space-y-1 overflow-auto">
+   375→        {tokens.map((token) => (
+   376→          <TokenRow key={token.mint} token={token} />
+   377→        ))}
+   378→      </div>
+   379→    </div>
+   380→  );
+   381→};
+   382→
+   383→// Controls Panel Component
+   384→const ControlsPanel = ({
+   385→  config,
+   386→  sendCommand,
+   387→  isConnected,
+   388→}: {
+   389→  config: ConfigData;
+   390→  sendCommand: (cmd: AutopilotCommand) => void;
+   391→  isConnected: boolean;
+   392→}) => {
+   393→  const [showControls, setShowControls] = useState(false);
+   394→
+   395→  return (
+   396→    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+   397→      {/* Header - always visible */}
+   398→      <button
+   399→        onClick={() => setShowControls(!showControls)}
+   400→        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+   401→        disabled={!isConnected}
+   402→      >
+   403→        <div className="flex items-center gap-2">
+   404→          <Settings className="h-3.5 w-3.5 text-text-secondary" />
+   405→          <span className="text-text-secondary font-medium">Controls</span>
+   406→        </div>
+   407→        <div className="flex items-center gap-2">
+   408→          <span className={cn(
+   409→            "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+   410→            config.mode === "paper" ? "bg-yellow-500/20 text-yellow-400" : "bg-green-500/20 text-green-400"
+   411→          )}>
+   412→            {config.mode.toUpperCase()}
+   413→          </span>
+   414→          <span className="text-text-tertiary">{showControls ? "▲" : "▼"}</span>
+   415→        </div>
+   416→      </button>
+   417→
+   418→      {/* Expandable controls */}
+   419→      {showControls && (
+   420→        <div className="border-t border-border-primary/50 px-3 py-2 space-y-3">
+   421→          {/* Mode Toggle */}
+   422→          <div className="flex items-center justify-between">
+   423→            <div className="flex items-center gap-2">
+   424→              <Power className="h-3.5 w-3.5 text-text-secondary" />
+   425→              <span className="text-xs text-text-secondary">Live Trading</span>
+   426→            </div>
+   427→            <Switch
+   428→              size="sm"
+   429→              checked={config.mode === "live"}
+   430→              onCheckedChange={(checked) => sendCommand({ command: "set_mode", mode: checked ? "live" : "paper" })}
+   431→            />
+   432→          </div>
+   433→
+   434→          {/* Auto Sources Toggle */}
+   435→          <div className="flex items-center justify-between">
+   436→            <div className="flex items-center gap-2">
+   437→              <Eye className="h-3.5 w-3.5 text-blue-400" />
+   438→              <span className="text-xs text-text-secondary">Auto Sources</span>
+   439→            </div>
+   440→            <Switch
+   441→              size="sm"
+   442→              checked={config.autoSourcesEnabled}
+   443→              onCheckedChange={(checked) => sendCommand({ command: "toggle_sources", enabled: checked })}
+   444→            />
+   445→          </div>
+   446→
+   447→          {/* Trending Toggle */}
+   448→          {config.autoSourcesEnabled && (
+   449→            <div className="flex items-center justify-between pl-5">
+   450→              <div className="flex items-center gap-2">
+   451→                <Flame className="h-3 w-3 text-orange-400" />
+   452→                <span className="text-[11px] text-text-tertiary">Trending</span>
+   453→              </div>
+   454→              <Switch
+   455→                size="sm"
+   456→                checked={config.trendingEnabled}
+   457→                onCheckedChange={(checked) => sendCommand({ command: "toggle_trending", enabled: checked })}
+   458→              />
+   459→            </div>
+   460→          )}
+   461→
+   462→          {/* Whales Toggle */}
+   463→          {config.autoSourcesEnabled && (
+   464→            <div className="flex items-center justify-between pl-5">
+   465→              <div className="flex items-center gap-2">
+   466→                <Wallet className="h-3 w-3 text-green-400" />
+   467→                <span className="text-[11px] text-text-tertiary">Whale Moves</span>
+   468→              </div>
+   469→              <Switch
+   470→                size="sm"
+   471→                checked={config.whalesEnabled}
+   472→                onCheckedChange={(checked) => sendCommand({ command: "toggle_whales", enabled: checked })}
+   473→              />
+   474→            </div>
+   475→          )}
+   476→
+   477→          {/* Market Filter Toggle */}
+   478→          <div className="flex items-center justify-between">
+   479→            <div className="flex items-center gap-2">
+   480→              <ShieldAlert className="h-3.5 w-3.5 text-purple-400" />
+   481→              <span className="text-xs text-text-secondary">Market Filter</span>
+   482→            </div>
+   483→            <Switch
+   484→              size="sm"
+   485→              checked={config.marketFilterEnabled}
+   486→              onCheckedChange={(checked) => sendCommand({ command: "toggle_filter", enabled: checked })}
+   487→            />
+   488→          </div>
+   489→
+   490→          {/* Refresh Sources Button */}
+   491→          <button
+   492→            onClick={() => sendCommand({ command: "refresh_sources" })}
+   493→            className="flex w-full items-center justify-center gap-2 rounded bg-bg-tertiary/50 px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-tertiary transition-colors"
+   494→          >
+   495→            <RefreshCw className="h-3 w-3" />
+   496→            Refresh Sources
+   497→          </button>
+   498→
+   499→          {/* Position Size Display */}
+   500→          <div className="flex items-center justify-between text-[10px] text-text-tertiary pt-1 border-t border-border-primary/30">
+   501→            <span>Position Size</span>
+   502→            <span>{config.positionSizeSol} SOL</span>
+   503→          </div>
+   504→        </div>
+   505→      )}
+   506→    </div>
+   507→  );
+   508→};
+   509→
+   510→// Stats Panel Component
+   511→const StatsPanel = ({ stats }: { stats: StatsData }) => {
+   512→  const isProfit = stats.totalPnlSol >= 0;
+   513→
+   514→  return (
+   515→    <div className="border-border-primary bg-bg-tertiary/30 grid grid-cols-4 gap-2 rounded-lg border p-3">
+   516→      <div className="text-center">
+   517→        <div className="text-text-primary text-lg font-bold">{stats.closedTrades}</div>
+   518→        <div className="text-text-secondary text-[10px]">Trades</div>
+   519→      </div>
+   520→      <div className="text-center">
+   521→        <div className={cn("text-lg font-bold", stats.winRate >= 0.5 ? "text-green-400" : "text-red-400")}>
+   522→          {(stats.winRate * 100).toFixed(0)}%
+   523→        </div>
+   524→        <div className="text-text-secondary text-[10px]">Win Rate</div>
+   525→      </div>
+   526→      <div className="text-center">
+   527→        <div className="text-text-primary text-lg font-bold">
+   528→          {stats.wins}W/{stats.losses}L
+   529→        </div>
+   530→        <div className="text-text-secondary text-[10px]">Record</div>
+   531→      </div>
+   532→      <div className="text-center">
+   533→        <div className={cn("text-lg font-bold", isProfit ? "text-green-400" : "text-red-400")}>
+   534→          {isProfit ? "+" : ""}
+   535→          <FormattedNumber value={stats.totalPnlSol} decimals={2} />
+   536→        </div>
+   537→        <div className="text-text-secondary text-[10px]">P&L (SOL)</div>
+   538→      </div>
+   539→    </div>
+   540→  );
+   541→};
+   542→
+   543→// Main Autopilot Widget Component
+   544→export const AutopilotWidget = () => {
+   545→  const { positions, signals, marketStatus, stats, scanTick, tokenList, config, isConnected, sendCommand } = useAutopilotWebSocket();
+   546→
+   547→  const totalTokens = tokenList.watchlist.length + tokenList.trending.length + tokenList.whales.length;
+   548→
+   549→  return (
+   550→    <div className="flex h-full flex-col gap-3 overflow-hidden">
+   551→      {/* Header - Market Status */}
+   552→      <div className="flex items-center justify-between">
+   553→        <div className="flex items-center gap-2">
+   554→          <Bot className={cn("h-5 w-5", isConnected ? "text-green-400" : "text-red-400")} />
+   555→          <span className="text-text-primary text-sm font-semibold">Token Autopilot</span>
+   556→          {scanTick && (
+   557→            <span className="text-text-secondary text-[10px]">
+   558→              #{scanTick.scanNumber} | {totalTokens} tokens
+   559→            </span>
+   560→          )}
+   561→        </div>
+   562→        <MarketStatusBadge status={marketStatus} />
+   563→      </div>
+   564→
+   565→      {/* Connection Status (shown when disconnected) */}
+   566→      {!isConnected && (
+   567→        <div className="bg-yellow-500/10 border-yellow-500/30 flex items-center gap-2 rounded-lg border px-3 py-2">
+   568→          <AlertTriangle className="h-4 w-4 text-yellow-400" />
+   569→          <span className="text-xs text-yellow-400">Connecting to autopilot backend...</span>
+   570→        </div>
+   571→      )}
+   572→
+   573→      {/* Controls Panel */}
+   574→      <ControlsPanel config={config} sendCommand={sendCommand} isConnected={isConnected} />
+   575→
+   576→      {/* Stats Panel */}
+   577→      <StatsPanel stats={stats} />
+   578→
+   579→      {/* Open Positions */}
+   580→      {positions.length > 0 && (
+   581→        <div className="flex-shrink-0">
+   582→          <div className="text-text-secondary mb-2 flex items-center gap-2 text-xs font-medium">
+   583→            <Target className="h-3.5 w-3.5" />
+   584→            Open Positions ({positions.length})
+   585→          </div>
+   586→          <div className="max-h-40 space-y-2 overflow-auto">
+   587→            {positions.map((pos) => (
+   588→              <PositionCard key={pos.mint} position={pos} />
+   589→            ))}
+   590→          </div>
+   591→        </div>
+   592→      )}
+   593→
+   594→      {/* Watched Token Lists - Main scrollable area */}
+   595→      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+   596→        {/* Watchlist */}
+   597→        <TokenListSection
+   598→          title="Watchlist"
+   599→          icon={Eye}
+   600→          tokens={tokenList.watchlist}
+   601→          iconColor="text-blue-400"
+   602→        />
+   603→
+   604→        {/* Trending */}
+   605→        <TokenListSection
+   606→          title="Trending"
+   607→          icon={Flame}
+   608→          tokens={tokenList.trending}
+   609→          iconColor="text-orange-400"
+   610→        />
+   611→
+   612→        {/* Whale Moves */}
+   613→        <TokenListSection
+   614→          title="Whale Moves"
+   615→          icon={Wallet}
+   616→          tokens={tokenList.whales}
+   617→          iconColor="text-green-400"
+   618→        />
+   619→
+   620→        {/* Empty state if no tokens */}
+   621→        {totalTokens === 0 && isConnected && (
+   622→          <div className="text-text-secondary border-border-primary/50 rounded-lg border border-dashed p-4 text-center text-xs">
+   623→            No tokens being watched. Enable auto-sources or add to watchlist.
+   624→          </div>
+   625→        )}
+   626→      </div>
+   627→
+   628→      {/* Signal Feed - Collapsible at bottom */}
+   629→      {signals.length > 0 && (
+   630→        <div className="flex-shrink-0 border-t border-border-primary/30 pt-2">
+   631→          <div className="text-text-secondary mb-1.5 flex items-center gap-2 text-xs font-medium">
+   632→            <Zap className="h-3.5 w-3.5" />
+   633→            Recent Signals
+   634→          </div>
+   635→          <div className="max-h-24 overflow-auto">
+   636→            <div className="space-y-0">
+   637→              {signals.slice(0, 5).map((signal, idx) => (
+   638→                <SignalItem key={`${signal.timestamp}-${idx}`} signal={signal} />
+   639→              ))}
+   640→            </div>
+   641→          </div>
+   642→        </div>
+   643→      )}
+   644→    </div>
+   645→  );
+   646→};
+   647→
+   648→export default AutopilotWidget;
+   649→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

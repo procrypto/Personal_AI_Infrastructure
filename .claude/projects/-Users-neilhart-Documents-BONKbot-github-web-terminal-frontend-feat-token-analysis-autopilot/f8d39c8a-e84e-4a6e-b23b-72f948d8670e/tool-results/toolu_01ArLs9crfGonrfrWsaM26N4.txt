@@ -1,0 +1,104 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+     3→import { createPortal } from "react-dom";
+     4→import SolanaIcon from "@/assets/icons/solana.svg";
+     5→import {
+     6→  Bot,
+     7→  AlertTriangle,
+     8→  TrendingUp,
+     9→  TrendingDown,
+    10→  Activity,
+    11→  Target,
+    12→  ShieldAlert,
+    13→  Clock,
+    14→  Eye,
+    15→  Flame,
+    16→  Wallet,
+    17→  Settings,
+    18→  RefreshCw,
+    19→  Power,
+    20→  Layers,
+    21→  CheckCircle2,
+    22→  Circle,
+    23→  X,
+    24→  Bug,
+    25→} from "lucide-react";
+    26→import { cn } from "@/lib/utils";
+    27→import { Switch } from "@/components/switch";
+    28→import { Tooltip } from "@/components/tooltip";
+    29→import { useAutopilotSubscription } from "@/hooks/useSubscriptions/useAutopilotSubscription";
+    30→import {
+    31→  useAutopilotData,
+    32→  useTokenSignalStrength,
+    33→  useTimeAgo,
+    34→  type AutopilotPositionWithPnL,
+    35→  type AutopilotTokenWithPrices,
+    36→  type SignalStrength,
+    37→} from "@/hooks/useAutopilot";
+    38→import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+    39→import type {
+    40→  AutopilotMarketStatus,
+    41→  AutopilotConfig,
+    42→  AutopilotStrategies,
+    43→  AutopilotStats,
+    44→} from "@/store/memoryStore/slices/autopilot-store/types";
+    45→import type { AutopilotCommand } from "@/websocket/autopilot/AutopilotWebsocket";
+    46→
+    47→// Market Status Badge Component
+    48→const MarketStatusBadge = ({ status }: { status: AutopilotMarketStatus }) => {
+    49→  const stateConfig = {
+    50→    NORMAL: {
+    51→      color: "text-text-success",
+    52→      icon: Activity,
+    53→      label: "NORMAL",
+    54→    },
+    55→    CAUTION: {
+    56→      color: "text-text-warning",
+    57→      icon: AlertTriangle,
+    58→      label: "CAUTION",
+    59→    },
+    60→    DUMP: {
+    61→      color: "text-text-error",
+    62→      icon: ShieldAlert,
+    63→      label: "DUMP",
+    64→    },
+    65→  };
+    66→
+    67→  const config = stateConfig[status.state];
+    68→  const Icon = config.icon;
+    69→  const solPrice = status.solPriceUsd ?? 0;
+    70→
+    71→  return (
+    72→    <div className="flex items-center gap-2">
+    73→      {/* SOL Price Display */}
+    74→      <div className="text-text-primary flex items-center gap-1 text-xs">
+    75→        <SolanaIcon className="h-4 w-4" />
+    76→        <span>${solPrice.toFixed(2)}</span>
+    77→      </div>
+    78→      {/* Change Indicator */}
+    79→      <div className={cn("flex items-center gap-1", config.color)}>
+    80→        <Icon className="h-3.5 w-3.5" />
+    81→        <span className="text-xs font-semibold">
+    82→          {Math.abs(status.solPriceChangePercent).toFixed(2)}%
+    83→        </span>
+    84→      </div>
+    85→    </div>
+    86→  );
+    87→};
+    88→
+    89→// Scan Countdown Component - shows live countdown to next scan
+    90→const ScanCountdown = ({
+    91→  scanTimestamp,
+    92→  intervalMs,
+    93→}: {
+    94→  scanTimestamp: number | null;
+    95→  intervalMs: number;
+    96→}) => {
+    97→  const [countdown, setCountdown] = useState<number | null>(null);
+    98→
+    99→  useEffect(() => {
+   100→    if (scanTimestamp === null) {
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

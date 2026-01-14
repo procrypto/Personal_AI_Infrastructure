@@ -1,0 +1,132 @@
+# bonkbot-mcp-server - Synthesized Context
+
+## Discovery Summary
+- **First discovered**: 2026-01-10
+- **Last updated**: 2026-01-10
+- **Discovery depth**: Standard
+- **Documentation quality**: Excellent (has CLAUDE.md + README)
+- **Status**: Experimental
+- **Creator**: Eli Krenzke, 10 commits
+
+---
+
+## System Identity
+
+**What it is**: MCP (Model Context Protocol) server that proxies Bonkbot Web API.
+
+**What it does**:
+- Enables Claude to trade on behalf of authenticated users
+- Provides 15 tools for auth, trading, portfolio, and wallet management
+- Uses Playwright for browser-based Telegram+Passkey authentication
+- Persists sessions to `~/.bonkbot/session.json`
+
+**Key insight**: This is a potential product direction - AI-powered trading interface. Allows natural language trading commands via Claude Desktop or other MCP clients.
+
+---
+
+## Tool Inventory
+
+### Total: 15 tools
+
+| Category | Tools | Destructive? |
+|----------|-------|--------------|
+| Auth | login, authenticate, auth_status | No |
+| User | get_user, get_signer_account | No |
+| Wallet | list_wallets, get_master_wallet | No |
+| Trading | get_quote, buy, sell, limit_order, cancel_order, order_status, order_history | buy/sell/limit = YES |
+| Portfolio | portfolio, open_orders | No |
+
+### Key Trading Tools
+
+```
+bonkbot_buy(token_mint, amount_sol, ...)    → Execute market buy
+bonkbot_sell(token_mint, amount, ...)       → Execute market sell
+bonkbot_limit_order(token_mint, trigger_type, trigger_value, ...)
+                                            → Create TP/SL order
+```
+
+---
+
+## Architecture Highlights
+
+### Auth Flow
+```
+bonkbot_login → Playwright browser → Telegram + Passkey
+                                           ↓
+                              Cookies extracted
+                                           ↓
+                              ~/.bonkbot/session.json
+```
+
+### Design Principles
+1. Only expose data with dedicated API endpoints
+2. Client-side filtering when API lacks params
+3. Show wallet context in multi-entity outputs
+4. Keep tools focused - one thing well
+
+---
+
+## Integration Map
+
+### Uses
+| System | Interface |
+|--------|-----------|
+| bonkbot | REST `/v1` API |
+| Telemetry | Browser auth |
+
+### Used By
+| Client | How |
+|--------|-----|
+| Claude Desktop | MCP stdio transport |
+| Claude Code | Could add as MCP server |
+
+---
+
+## Product Potential
+
+**Current:** Proof-of-concept, experimental.
+
+**Opportunity Areas:**
+- AI trading assistant in Claude Desktop
+- Voice-controlled trading
+- Natural language limit orders ("sell half when it 2x's")
+- Portfolio monitoring via conversation
+- Multi-wallet management
+
+**Value Prop:** Trade Solana tokens via natural conversation without opening the app.
+
+---
+
+## Working Here
+
+### Quick Start
+```bash
+~/.bun/bin/bun install
+~/.bun/bin/bun run dev
+```
+
+### Add New Tool
+1. Schema in `src/schemas/index.ts`
+2. Tool in `src/tools/*.ts`
+3. Register in `src/index.ts`
+
+### Common Locations
+| Task | Path |
+|------|------|
+| Add tool | `src/tools/*.ts` |
+| Add type | `src/types.ts` |
+| Modify auth | `src/services/browser-auth.ts` |
+
+---
+
+## Session Notes
+
+*Accumulated learnings:*
+
+- Created 2026-01-08 by Eli Krenzke, 10 commits
+- Uses bun exclusively (not npm)
+- Destructive tools marked with `destructiveHint: true`
+- Response formats: markdown (default) or json
+- Tool naming: `bonkbot_{action}_{resource}`
+- Tokens auto-refresh and persist across restarts
+- Reference API docs in `../reference/docs/`

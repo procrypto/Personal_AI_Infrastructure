@@ -1,0 +1,102 @@
+     1→use crate::AppData;
+     2→use actix_web::{Error, HttpRequest, HttpResponse, web};
+     3→use serde::Deserialize;
+     4→use serde_json::json;
+     5→use wt_primitives::macros::timed_fn_metrics;
+     6→
+     7→#[timed_fn_metrics("web_server_api_data_discovery_volume_rolling")]
+     8→pub async fn handle_volume_rolling(req: HttpRequest) -> Result<HttpResponse, Error> {
+     9→    let AppData {
+    10→        volume_rolling_cache, ..
+    11→    } = req.app_data::<AppData>().cloned().unwrap();
+    12→
+    13→    let query_result = volume_rolling_cache.read().await;
+    14→
+    15→    Ok(HttpResponse::Ok().json(query_result))
+    16→}
+    17→
+    18→#[timed_fn_metrics("web_server_api_data_discovery_volume_per_hour")]
+    19→pub async fn handle_volume_per_hour(req: HttpRequest) -> Result<HttpResponse, Error> {
+    20→    let AppData {
+    21→        volume_per_hour_cache,
+    22→        ..
+    23→    } = req.app_data::<AppData>().cloned().unwrap();
+    24→
+    25→    let query_result = volume_per_hour_cache.read().await;
+    26→
+    27→    Ok(HttpResponse::Ok().json(query_result))
+    28→}
+    29→
+    30→#[timed_fn_metrics("web_server_api_data_discovery_volume_per_day")]
+    31→pub async fn handle_volume_per_day(req: HttpRequest) -> Result<HttpResponse, Error> {
+    32→    let AppData {
+    33→        volume_per_day_cache, ..
+    34→    } = req.app_data::<AppData>().cloned().unwrap();
+    35→
+    36→    let query_result = volume_per_day_cache.read().await;
+    37→
+    38→    Ok(HttpResponse::Ok().json(query_result))
+    39→}
+    40→
+    41→#[timed_fn_metrics("web_server_api_data_discovery_launches_graduation")]
+    42→pub async fn handle_launches_graduation(req: HttpRequest) -> Result<HttpResponse, Error> {
+    43→    let AppData {
+    44→        launches_graduation_cache,
+    45→        ..
+    46→    } = req.app_data::<AppData>().cloned().unwrap();
+    47→
+    48→    let query_result = launches_graduation_cache.read().await;
+    49→
+    50→    Ok(HttpResponse::Ok().json(query_result))
+    51→}
+    52→
+    53→#[timed_fn_metrics("web_server_api_data_discovery_whale_moves")]
+    54→pub async fn handle_whale_moves(req: HttpRequest) -> Result<HttpResponse, Error> {
+    55→    let AppData {
+    56→        whale_moves_cache, ..
+    57→    } = req.app_data::<AppData>().cloned().unwrap();
+    58→
+    59→    let query_result = whale_moves_cache.read().await;
+    60→
+    61→    Ok(HttpResponse::Ok().json(query_result))
+    62→}
+    63→
+    64→#[derive(Debug, Deserialize, Clone)]
+    65→pub struct TrendingParams {
+    66→    limit: Option<u32>,
+    67→}
+    68→
+    69→#[timed_fn_metrics("web_server_api_data_discovery_trending")]
+    70→pub async fn handle_trending(
+    71→    req: HttpRequest,
+    72→    query: web::Query<TrendingParams>,
+    73→) -> Result<HttpResponse, Error> {
+    74→    let AppData {
+    75→        discovery_trending_cache,
+    76→        ..
+    77→    } = req.app_data::<AppData>().cloned().unwrap();
+    78→    let trending_params = query.into_inner();
+    79→
+    80→    let trending_data = discovery_trending_cache.read().await;
+    81→
+    82→    let out = trending_data
+    83→        .into_iter()
+    84→        .take(trending_params.limit.map(|l| l as usize).unwrap_or(usize::MAX))
+    85→        .map(|(trending_row, token_market_data)| {
+    86→            let mint = trending_row.mint.clone();
+    87→            let market_data = token_market_data;
+    88→            json!({
+    89→                "mint": mint,
+    90→                "trending_data": trending_row,
+    91→                "market_data": market_data
+    92→            })
+    93→        })
+    94→        .collect::<Vec<_>>();
+    95→
+    96→    Ok(HttpResponse::Ok().json(out))
+    97→}
+    98→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

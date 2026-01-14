@@ -1,0 +1,141 @@
+/**
+ * QA Ticket Store
+ *
+ * CRUD operations and queries for QA tickets stored in Vercel KV.
+ * Manages ticket lifecycle and maintains status/tester indexes.
+ */
+
+import { kv } from './kv-client.js';
+import { KV_KEYS, generateId } from './kv-client.js';
+import type { QATicket, TicketStatus } from '../types.js';
+
+/**
+ * Create a new QA ticket.
+ * Automatically sets status to 'pending' and initializes timestamps.
+ */
+export async function createTicket(
+  data: Omit<QATicket, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'assignedTo' | 'claimedAt'>
+): Promise<QATicket> {
+  // Extract Linear ID from URL if available, otherwise generate UUID
+  const id = data.linearUrl.split('/').pop() || generateId();
+  const now = new Date().toISOString();
+
+  const ticket: QATicket = {
+    ...data,
+    id,
+    status: 'pending',
+    assignedTo: null,
+    claimedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await kv.hset(KV_KEYS.ticket(id), ticket as Record<string, unknown>);
+
+  // Add to pending tickets indexes
+  await kv.sadd(KV_KEYS.ticketsByStatus('pending'), id);
+  await kv.sadd(KV_KEYS.pendingTickets(), id);
+
+  return ticket;
+}
+
+/**
+ * Get a ticket by ID.
+ * Returns null if ticket doesn't exist.
+ */
+export async function getTicket(id: string): Promise<QATicket | null> {
+  const data = await kv.hgetall(KV_KEYS.ticket(id));
+  if (!data || Object.keys(data).length === 0) return null;
+  return data as unknown as QATicket;
+}
+
+/**
+ * Update a ticket (partial update).
+ * Automatically manages status and tester indexes when those fields change.
+ */
+export async function updateTicket(
+  id: string,
+  updates: Partial<Omit<QATicket, 'id' | 'createdAt'>>
+): Promise<QATicket | null> {
+  const existing = await getTicket(id);
+  if (!existing) return null;
+
+  const oldStatus = existing.status;
+  const updated: QATicket = {
+    ...existing,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await kv.hset(KV_KEYS.ticket(id), updated as Record<string, unknown>);
+
+  // Update status indexes if status changed
+  if (updates.status && updates.status !== oldStatus) {
+    await kv.srem(KV_KEYS.ticketsByStatus(oldStatus), id);
+    await kv.sadd(KV_KEYS.ticketsByStatus(updates.status), id);
+
+    // Manage pending tickets index
+    if (oldStatus === 'pending') {
+      await kv.srem(KV_KEYS.pendingTickets(), id);
+    }
+    if (updates.status === 'pending') {
+      await kv.sadd(KV_KEYS.pendingTickets(), id);
+    }
+  }
+
+  // Update tester index if assignee changed
+  if (updates.assignedTo !== undefined) {
+    if (existing.assignedTo) {
+      await kv.srem(KV_KEYS.ticketsByTester(existing.assignedTo), id);
+    }
+    if (updates.assignedTo) {
+      await kv.sadd(KV_KEYS.ticketsByTester(updates.assignedTo), id);
+    }
+  }
+
+  return updated;
+}
+
+/**
+ * List tickets by status.
+ * Uses status index for efficient lookup.
+ */
+export async function listTicketsByStatus(status: TicketStatus): Promise<QATicket[]> {
+  const ids = await kv.smembers(KV_KEYS.ticketsByStatus(status));
+  if (!ids || ids.length === 0) return [];
+
+  const tickets = await Promise.all(ids.map(id => getTicket(id as string)));
+  return tickets.filter((t): t is QATicket => t !== null);
+}
+
+/**
+ * List all pending tickets.
+ * Convenience function using the dedicated pending tickets index.
+ */
+export async function listPendingTickets(): Promise<QATicket[]> {
+  return listTicketsByStatus('pending');
+}
+
+/**
+ * List tickets assigned to a specific tester.
+ * Uses tester index for efficient lookup.
+ */
+export async function listTicketsByTester(testerId: string): Promise<QATicket[]> {
+  const ids = await kv.smembers(KV_KEYS.ticketsByTester(testerId));
+  if (!ids || ids.length === 0) return [];
+
+  const tickets = await Promise.all(ids.map(id => getTicket(id as string)));
+  return tickets.filter((t): t is QATicket => t !== null);
+}
+
+/**
+ * Claim a ticket for a tester.
+ * Sets status to 'claimed', assigns tester, and records claim timestamp.
+ */
+export async function claimTicket(id: string, testerId: string): Promise<QATicket | null> {
+  return updateTicket(id, {
+    status: 'claimed',
+    assignedTo: testerId,
+    claimedAt: new Date().toISOString(),
+  });
+}

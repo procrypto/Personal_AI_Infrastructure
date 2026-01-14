@@ -1,0 +1,116 @@
+The file /Users/neilhart/Documents/BONKbot/github/web-terminal-frontend/feat-token-analysis-autopilot/apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   519→            <RefreshCw className="h-3 w-3" />
+   520→            Refresh Sources
+   521→          </button>
+   522→
+   523→          {/* Position Size Display */}
+   524→          <div className="flex items-center justify-between text-[10px] text-text-tertiary pt-1 border-t border-border-primary/30">
+   525→            <span>Position Size</span>
+   526→            <span>{config.positionSizeSol} SOL</span>
+   527→          </div>
+   528→        </div>
+   529→      )}
+   530→    </div>
+   531→  );
+   532→};
+   533→
+   534→// Strategies Panel Component
+   535→const StrategiesPanel = ({
+   536→  strategies,
+   537→  sendCommand,
+   538→  isConnected,
+   539→}: {
+   540→  strategies: StrategiesData;
+   541→  sendCommand: (cmd: AutopilotCommand) => void;
+   542→  isConnected: boolean;
+   543→}) => {
+   544→  const [showStrategies, setShowStrategies] = useState(false);
+   545→  const activeSet = new Set(strategies.active);
+   546→
+   547→  return (
+   548→    <div className="border-border-primary bg-bg-tertiary/30 rounded-lg border">
+   549→      {/* Header - always visible */}
+   550→      <button
+   551→        onClick={() => setShowStrategies(!showStrategies)}
+   552→        className="flex w-full items-center justify-between px-3 py-2 text-xs"
+   553→        disabled={!isConnected}
+   554→      >
+   555→        <div className="flex items-center gap-2">
+   556→          <Layers className="h-3.5 w-3.5 text-text-secondary" />
+   557→          <span className="text-text-secondary font-medium">Strategies</span>
+   558→        </div>
+   559→        <div className="flex items-center gap-2">
+   560→          <span className={cn(
+   561→            "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+   562→            strategies.active.length > 0 ? "bg-green-500/20 text-green-400" : "bg-gray-500/20 text-gray-400"
+   563→          )}>
+   564→            {strategies.active.length} ACTIVE
+   565→          </span>
+   566→          <span className="text-text-tertiary">{showStrategies ? "▲" : "▼"}</span>
+   567→        </div>
+   568→      </button>
+   569→
+   570→      {/* Expandable strategies list */}
+   571→      {showStrategies && (
+   572→        <div className="border-t border-border-primary/50 px-3 py-2 space-y-2">
+   573→          {strategies.available.length === 0 ? (
+   574→            <div className="text-text-tertiary text-xs text-center py-2">
+   575→              No strategies available
+   576→            </div>
+   577→          ) : (
+   578→            strategies.available.map((strategy) => {
+   579→              const isActive = activeSet.has(strategy.id);
+   580→              return (
+   581→                <button
+   582→                  key={strategy.id}
+   583→                  onClick={() => sendCommand({ command: "toggle_strategy", strategyId: strategy.id, enabled: !isActive })}
+   584→                  className={cn(
+   585→                    "w-full flex items-start gap-2 rounded px-2 py-2 text-left transition-colors",
+   586→                    isActive
+   587→                      ? "bg-green-500/10 border border-green-500/30 hover:bg-green-500/20"
+   588→                      : "bg-bg-tertiary/50 border border-transparent hover:bg-bg-tertiary"
+   589→                  )}
+   590→                >
+   591→                  <div className="flex-shrink-0 mt-0.5">
+   592→                    {isActive ? (
+   593→                      <CheckCircle2 className="h-4 w-4 text-green-400" />
+   594→                    ) : (
+   595→                      <Circle className="h-4 w-4 text-text-tertiary" />
+   596→                    )}
+   597→                  </div>
+   598→                  <div className="flex-1 min-w-0">
+   599→                    <div className="flex items-center gap-2">
+   600→                      <span className={cn(
+   601→                        "text-xs font-medium",
+   602→                        isActive ? "text-green-400" : "text-text-primary"
+   603→                      )}>
+   604→                        {strategy.name}
+   605→                      </span>
+   606→                      <span className={cn(
+   607→                        "text-[9px] px-1 py-0.5 rounded",
+   608→                        strategy.mode === "all"
+   609→                          ? "bg-blue-500/20 text-blue-400"
+   610→                          : "bg-purple-500/20 text-purple-400"
+   611→                      )}>
+   612→                        {strategy.mode.toUpperCase()}
+   613→                      </span>
+   614→                    </div>
+   615→                    <div className="text-[10px] text-text-tertiary truncate">
+   616→                      {strategy.summary}
+   617→                    </div>
+   618→                  </div>
+   619→                </button>
+   620→              );
+   621→            })
+   622→          )}
+   623→        </div>
+   624→      )}
+   625→    </div>
+   626→  );
+   627→};
+   628→
+   629→// Stats Panel Component
+   630→const StatsPanel = ({ stats }: { stats: StatsData }) => {
+   631→  const isProfit = stats.totalPnlSol >= 0;
+   632→
+   633→  return (

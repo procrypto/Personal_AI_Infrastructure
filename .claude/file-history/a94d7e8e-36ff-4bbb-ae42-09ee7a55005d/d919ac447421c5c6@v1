@@ -1,0 +1,96 @@
+# Plan: Remove Extension Gating
+
+**Phase**: 5 - Simplify Extensions
+**Plan**: 05-01
+**Goal**: Remove optional extension flag, make all endpoints always available
+
+## Objective
+
+Simplify the extensions system by removing the `LOCAL_API_ENABLE_EXTENSIONS` environment variable and associated gating logic. All endpoints (generic, labs, extensions) should always be available when the server starts.
+
+## Context
+
+**Current state:**
+- `LOCAL_API_ENABLE_EXTENSIONS=true` required to enable extension routes
+- `config.enableExtensions` flag gates registration in `server.ts`
+- Registry endpoint returns `enabled: true/false`
+- Labs endpoints already always-on (no gating)
+
+**Target state:**
+- No environment variable needed for extensions
+- All extension routes always registered
+- Registry endpoint simplified (no `enabled` field)
+- Consistent behavior: if code exists, endpoints are available
+
+**Files to modify:**
+- `src/config.ts` - Remove `enableExtensions` config
+- `src/server.ts` - Remove conditional registration
+- `src/extensions/register.ts` - Remove `enabled` parameter
+- `src/extensions/registry.ts` - Remove `enabled` parameter and response field
+- `env.example` - Remove `LOCAL_API_ENABLE_EXTENSIONS` documentation
+- `ENDPOINTS.md` - Update extensions documentation
+
+## Tasks
+
+### Task 1: Remove enableExtensions from config
+**File**: `src/config.ts`
+- Remove `enableExtensions: process.env.LOCAL_API_ENABLE_EXTENSIONS === "true"` from config object
+
+### Task 2: Simplify extension registration
+**File**: `src/extensions/register.ts`
+- Remove `enabled: boolean` parameter from `registerExtensionRoutes`
+- Remove the early return when `!enabled`
+- Always register extensions
+
+### Task 3: Simplify extension registry
+**File**: `src/extensions/registry.ts`
+- Remove `enabled: boolean` parameter from `registerExtensionRegistry`
+- Remove `enabled` field from response object
+
+### Task 4: Update server registration calls
+**File**: `src/server.ts`
+- Remove `config.enableExtensions` argument from `registerExtensionRegistry()` call
+- Remove `config.enableExtensions` argument from `registerExtensionRoutes()` call
+
+### Task 5: Update env.example
+**File**: `env.example`
+- Remove `LOCAL_API_ENABLE_EXTENSIONS` line and any related comments
+
+### Task 6: Update documentation
+**File**: `ENDPOINTS.md`
+- Remove "Enable with `LOCAL_API_ENABLE_EXTENSIONS=true`" text
+- Update to indicate extensions are always available
+
+## Verification
+
+```bash
+# Start server without any extension env var
+bun dev
+
+# Verify extension registry returns extensions (no 'enabled' field)
+curl http://localhost:8080/local-api/ext/registry | jq
+
+# Verify extension endpoint works
+curl http://localhost:8080/local-api/ext/search/So11111111111111111111111111111111111111112 | jq
+
+# Verify labs endpoints still work
+curl -X POST http://localhost:8080/local-api/labs/wallet_trades_snapshot \
+  -H 'content-type: application/json' \
+  -d '{"traders":["test"], "limitTotal": 1}' | jq
+```
+
+## Success Criteria
+
+- [ ] Server starts without `LOCAL_API_ENABLE_EXTENSIONS` env var
+- [ ] Extension routes are registered automatically
+- [ ] Registry endpoint returns extensions without `enabled` field
+- [ ] Extension endpoints respond correctly
+- [ ] Labs endpoints continue to work
+- [ ] No references to `LOCAL_API_ENABLE_EXTENSIONS` in codebase
+- [ ] Documentation updated
+
+## Output
+
+- Simplified extension system with no gating
+- Cleaner codebase with less conditional logic
+- Consistent endpoint availability behavior

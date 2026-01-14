@@ -1,0 +1,54 @@
+   290→        engine.addRulesFromConfig(ruleSet.rules);
+   291→      }
+   292→
+   293→      const runLoop = async () => {
+   294→        const tokens = getTokensToWatch();
+   295→        for (const token of tokens) {
+   296→          try {
+   297→            const signals = await engine.analyzeToken(token.mint);
+   298→            const result = engine.aggregateSignals(signals);
+   299→
+   300→            if (result.action !== 'hold') {
+   301→              const marketData = await localApi.getMarketData(token.mint);
+   302→
+   303→              await trigger.trigger({
+   304→                mint: token.mint,
+   305→                symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   306→                action: result.action,
+   307→                priceSol: marketData.price_sol,
+   308→                priceUsd: marketData.price_usd,
+   309→                ruleSetId: ruleSets[0].id,
+   310→                signals: result.signals,
+   311→                confidence: result.confidence,
+   312→              });
+   313→
+   314→              await paperTracker.save();
+   315→            }
+   316→          } catch (error) {
+   317→            console.error(`Error analyzing ${token.symbol || token.mint}:`, error);
+   318→          }
+   319→        }
+   320→      };
+   321→
+   322→      // Run immediately, then on interval
+   323→      await runLoop();
+   324→      setInterval(runLoop, config.pollIntervalMs);
+   325→      break;
+   326→    }
+   327→
+   328→    case 'status': {
+   329→      const openTrades = paperTracker.getOpenTrades();
+   330→      const stats = paperTracker.getStats();
+   331→      const ruleSets = configStore.getRuleSets();
+   332→      const watchlist = configStore.getWatchlist();
+   333→
+   334→      console.log('\n=== PORTFOLIO STATUS ===\n');
+   335→
+   336→      // Open positions with live P&L
+   337→      if (openTrades.length === 0) {
+   338→        console.log('Open Positions: none\n');
+   339→      } else {
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

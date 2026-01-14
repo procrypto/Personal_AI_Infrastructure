@@ -1,0 +1,44 @@
+   125→export interface TokenListData {
+   126→  watchlist: WatchedToken[];
+   127→  trending: WatchedToken[];
+   128→  whales: WatchedToken[];
+   129→}
+   130→
+   131→class AutopilotWebSocketServer {
+   132→  private wss: WebSocketServer | null = null;
+   133→  private clients: Set<WebSocket> = new Set();
+   134→  private port: number = 8765;
+   135→  private commandHandler: CommandHandler | null = null;
+   136→
+   137→  start(port: number = 8765): void {
+   138→    if (this.wss) {
+   139→      console.log('[WS] Server already running');
+   140→      return;
+   141→    }
+   142→
+   143→    this.port = port;
+   144→    this.wss = new WebSocketServer({ port });
+   145→
+   146→    this.wss.on('connection', (ws) => {
+   147→      this.clients.add(ws);
+   148→      console.log(`[WS] Client connected (${this.clients.size} total)`);
+   149→
+   150→      // Handle incoming messages (commands from frontend)
+   151→      ws.on('message', async (data) => {
+   152→        try {
+   153→          const message = JSON.parse(data.toString()) as AutopilotCommand;
+   154→          if (message.command && this.commandHandler) {
+   155→            console.log(`[WS] Command received: ${message.command}`);
+   156→            await this.commandHandler(message);
+   157→          }
+   158→        } catch (err) {
+   159→          console.error('[WS] Failed to parse command:', err);
+   160→        }
+   161→      });
+   162→
+   163→      ws.on('close', () => {
+   164→        this.clients.delete(ws);
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

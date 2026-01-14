@@ -1,0 +1,162 @@
+---
+phase: 02-containerization
+plan: 02
+type: execute
+---
+
+<objective>
+Build and verify Docker container runs correctly locally.
+
+Purpose: Validate Dockerfile works before CI/CD integration.
+Output: Confirmed working container, documented build/run commands.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+~/.claude/get-shit-done/references/checkpoints.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior plan in this phase:
+@.planning/phases/02-containerization/02-01-PLAN.md
+
+# Key source files:
+@Dockerfile
+@.dockerignore
+@src/config.ts
+
+**Established patterns:**
+- APP_ENV env var for environment (defaults to "local")
+- PORT env var for server port (defaults to 8080 in container)
+- CLICKHOUSE_* or TBKM_CLICKHOUSE_* for credentials based on environment
+
+**Verification approach:**
+- Build image locally
+- Run container with test credentials
+- Verify server responds to health check
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Build Docker image locally</name>
+  <files>N/A (uses Dockerfile from 02-01)</files>
+  <action>Build the Docker image with a local tag:
+
+```bash
+docker build -t local-api:local .
+```
+
+Verify build succeeds and check image size:
+```bash
+docker images local-api:local
+```
+
+Expected: Image builds without errors, size should be reasonable (~200-400MB for Bun base + deps).</action>
+  <verify>docker images local-api:local shows the image exists</verify>
+  <done>Docker image built successfully, image listed in docker images output</done>
+</task>
+
+<task type="checkpoint:human-verify" gate="blocking">
+  <what-built>Docker container running local-api server</what-built>
+  <how-to-verify>
+    1. Start container with test environment:
+       ```bash
+       docker run -d --name local-api-test \
+         -p 8080:8080 \
+         -e APP_ENV=local \
+         -e TBKM_CLICKHOUSE_KEY_ID=test \
+         -e TBKM_CLICKHOUSE_KEY_SECRET=test \
+         -e TBKM_CLICKHOUSE_SERVICE_ID=test \
+         local-api:local
+       ```
+
+    2. Check container is running:
+       ```bash
+       docker ps | grep local-api-test
+       ```
+
+    3. Check container logs for startup message:
+       ```bash
+       docker logs local-api-test
+       ```
+       Expected: Should show "[config] Environment: local" and server listening message
+
+    4. Test server responds (will fail ClickHouse query but proves server runs):
+       ```bash
+       curl -s http://localhost:8080/ || echo "Expected - no root endpoint"
+       ```
+
+    5. Cleanup:
+       ```bash
+       docker stop local-api-test && docker rm local-api-test
+       ```
+  </how-to-verify>
+  <resume-signal>Type "approved" if container starts and shows config log, or describe issues</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] Docker image builds without errors
+- [ ] Container starts and shows environment log
+- [ ] Server listens on port 8080
+- [ ] Container cleaned up after verification
+</verification>
+
+<success_criteria>
+- Docker image builds successfully
+- Container runs and server starts
+- Environment detection works in container context
+- Phase 2 complete, ready for Phase 3 (CI/CD Pipeline)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-containerization/02-02-SUMMARY.md`:
+
+# Phase 2 Plan 2: Docker Verification Summary
+
+**[One-liner: what was verified]**
+
+## Accomplishments
+
+- Docker image built successfully
+- Container runs with Bun runtime
+- Environment configuration works in container
+
+## Build Details
+
+- Image tag: local-api:local
+- Image size: [actual size]
+- Build time: [duration]
+
+## Verification Results
+
+- Container startup: [pass/fail]
+- Config logging: [pass/fail]
+- Port binding: [pass/fail]
+
+## Files Created/Modified
+
+- None (verification only)
+
+## Decisions Made
+
+None - verification phase.
+
+## Issues Encountered
+
+[Any issues and resolutions]
+
+## Next Phase Readiness
+
+- Phase 2 complete
+- Dockerfile and .dockerignore ready for CI/CD
+- Ready for Phase 3: CI/CD Pipeline (deploy.yml, deploy-prod.yml)
+</output>

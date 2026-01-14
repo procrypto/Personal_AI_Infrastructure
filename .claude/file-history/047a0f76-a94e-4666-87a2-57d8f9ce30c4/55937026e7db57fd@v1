@@ -1,0 +1,564 @@
+/**
+ * Discovery Trending List (direct query)
+ *
+ * Prod serves this from an in-memory cache; locally we run the ClickHouse query directly.
+ * Ports SQL from web-terminal `discovery/fetch/trending_token_stats.sql`.
+ *
+ * ⚠️ Fetches PRODUCTION data. Use responsibly.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, buildInList, clamp } from "../../clickhouse/client";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type TrendingRow = {
+    mint: string;
+    normalized_trending_score: number;
+};
+
+type TrendingTokenMarketData = {
+    mint: string;
+    name: string;
+    symbol: string;
+    image: string;
+    market_cap_usd: string;
+    price_usd: string;
+    liquidity_usd: string;
+    volume_24h_usd: string;
+    holders: string;
+    created: string;
+};
+
+type TrendingListItem = {
+    mint: string;
+    trending_data: TrendingRow;
+    market_data: TrendingTokenMarketData | null;
+};
+
+type TrendingResponse =
+    | { ok: true; data: TrendingListItem[]; count: number }
+    | { ok: false; error: string };
+
+// =============================================================================
+// SQL Builders
+// =============================================================================
+
+const buildTrendingSql = (limit: number): string => {
+    return `
+WITH
+-- Step 1: Get ATH data from dimension table
+ath_data_dim AS (
+    SELECT
+        mint,
+        max_market_cap_usd_l24h AS ath_market_cap_usd_l24h,
+        current_market_cap_usd_l24h
+    FROM discovery_dim_token_market_cap_1m_v
+    WHERE last_updated >= now() - INTERVAL 1 DAY
+        AND max_market_cap_usd_l24h > 0
+        AND current_market_cap_usd_l24h > (max_market_cap_usd_l24h * 0.4)  
+),
+
+-- Get excluded tokens
+excluded_tokens AS (
+    SELECT DISTINCT mint
+    FROM discovery_dim_excluded_token
+),
+
+-- Step 2: Combine both tables with source tracking
+combined_raw_data AS (
+    SELECT 
+        mint,
+        timestamp_seconds,
+        latest_name_state,
+        latest_symbol_state,
+        latest_description_state,
+        latest_image_state,
+        latest_created_time_state,
+        latest_price_usd_state,
+        latest_price_sol_state,
+        latest_market_cap_usd_state,
+        latest_liquidity_sol_state,
+        latest_liquidity_usd_state,
+        total_volume_24h_usd_state,
+        total_volume_6h_usd_state,
+        total_volume_1h_usd_state,
+        total_volume_5m_usd_state,
+        total_volume_24h_sol_state,
+        total_volume_6h_sol_state,
+        total_volume_1h_sol_state,
+        total_volume_5m_sol_state,
+        buy_volume_24h_usd_state,
+        sell_volume_24h_usd_state,
+        buy_volume_6h_usd_state,
+        sell_volume_6h_usd_state,
+        total_buys_24h_state,
+        total_sells_24h_state,
+        total_buys_6h_state,
+        total_sells_6h_state,
+        total_buys_1h_state,
+        total_sells_1h_state,
+        total_buys_5m_state,
+        total_sells_5m_state,
+        total_traders_24h_state,
+        total_traders_6h_state,
+        total_traders_1h_state,
+        total_traders_5m_state,
+        earliest_price_24h_usd_state,
+        earliest_price_6h_usd_state,
+        earliest_price_1h_usd_state,
+        earliest_price_5m_usd_state,
+        latest_holders_state,
+        latest_liquidity_to_mcap_ratio_state,
+        1 as source_priority 
+    FROM discovery_trending_token_stats_ts
+    WHERE timestamp_seconds >= toUnixTimestamp(now() - INTERVAL 1 DAY)
+    
+    UNION ALL
+    
+    SELECT 
+        mint,
+        timestamp_seconds,
+        latest_name_state,
+        latest_symbol_state,
+        latest_description_state,
+        latest_image_state,
+        latest_created_time_state,
+        latest_price_usd_state,
+        latest_price_sol_state,
+        latest_market_cap_usd_state,
+        latest_liquidity_sol_state,
+        latest_liquidity_usd_state,
+        total_volume_24h_usd_state,
+        total_volume_6h_usd_state,
+        total_volume_1h_usd_state,
+        total_volume_5m_usd_state,
+        total_volume_24h_sol_state,
+        total_volume_6h_sol_state,
+        total_volume_1h_sol_state,
+        total_volume_5m_sol_state,
+        buy_volume_24h_usd_state,
+        sell_volume_24h_usd_state,
+        buy_volume_6h_usd_state,
+        sell_volume_6h_usd_state,
+        total_buys_24h_state,
+        total_sells_24h_state,
+        total_buys_6h_state,
+        total_sells_6h_state,
+        total_buys_1h_state,
+        total_sells_1h_state,
+        total_buys_5m_state,
+        total_sells_5m_state,
+        total_traders_24h_state,
+        total_traders_6h_state,
+        total_traders_1h_state,
+        total_traders_5m_state,
+        earliest_price_24h_usd_state,
+        earliest_price_6h_usd_state,
+        earliest_price_1h_usd_state,
+        earliest_price_5m_usd_state,
+        latest_holders_state,
+        latest_liquidity_to_mcap_ratio_state,
+        2 as source_priority 
+    FROM discovery_high_market_cap_token_stats_ts
+    WHERE timestamp_seconds >= toUnixTimestamp(now() - INTERVAL 1 DAY)
+),
+
+-- Step 3: Aggregate the combined data, keeping track of source
+token_metrics AS (
+    SELECT
+        mint,
+
+        -- Latest metadata and market data
+        argMaxMerge(latest_name_state) as name,
+        argMaxMerge(latest_symbol_state) as symbol,
+        argMaxMerge(latest_description_state) as description,
+        argMaxMerge(latest_image_state) as image,
+        argMaxMerge(latest_created_time_state) as created_time,
+        argMaxMerge(latest_price_usd_state) as current_price_usd,
+        argMaxMerge(latest_price_sol_state) AS current_price_sol,
+        argMaxMerge(latest_market_cap_usd_state) as market_cap_usd,
+        argMaxMerge(latest_liquidity_sol_state) as liquidity_sol,
+        argMaxMerge(latest_liquidity_usd_state) as liquidity_usd,
+
+        -- Volume metrics (aggregated across time periods)
+        argMaxMerge(total_volume_24h_usd_state) as total_volume_usd_24h,
+        argMaxMerge(total_volume_6h_usd_state) as total_volume_usd_6h,
+        argMaxMerge(total_volume_1h_usd_state) as total_volume_usd_1h,
+        argMaxMerge(total_volume_5m_usd_state) as total_volume_usd_5m,
+
+        argMaxMerge(total_volume_24h_sol_state) as total_volume_sol_24h,
+        argMaxMerge(total_volume_6h_sol_state) as total_volume_sol_6h,
+        argMaxMerge(total_volume_1h_sol_state) as total_volume_sol_1h,
+        argMaxMerge(total_volume_5m_sol_state) as total_volume_sol_5m,
+
+        -- Buy/sell breakdowns
+        argMaxMerge(buy_volume_24h_usd_state) as buy_volume_usd_24h,
+        argMaxMerge(sell_volume_24h_usd_state) as sell_volume_usd_24h,
+        argMaxMerge(buy_volume_6h_usd_state) as buy_volume_usd_6h,
+        argMaxMerge(sell_volume_6h_usd_state) as sell_volume_usd_6h,
+
+        -- Transaction counts
+        argMaxMerge(total_buys_24h_state) as buys_24h,
+        argMaxMerge(total_sells_24h_state) as sells_24h,
+        argMaxMerge(total_buys_6h_state) as buys_6h,
+        argMaxMerge(total_sells_6h_state) as sells_6h,
+        argMaxMerge(total_buys_1h_state) as buys_1h,
+        argMaxMerge(total_sells_1h_state) as sells_1h,
+        argMaxMerge(total_buys_5m_state) as buys_5m,
+        argMaxMerge(total_sells_5m_state) as sells_5m,
+
+        -- Trader counts
+        argMaxMerge(total_traders_24h_state) as traders_24h,
+        argMaxMerge(total_traders_6h_state) as traders_6h,
+        argMaxMerge(total_traders_1h_state) as traders_1h,
+        argMaxMerge(total_traders_5m_state) as traders_5m,
+
+        -- Price tracking for price change calculations
+        argMaxMerge(earliest_price_24h_usd_state) as earliest_price_usd_24h,
+        argMaxMerge(earliest_price_6h_usd_state) as earliest_price_usd_6h,
+        argMaxMerge(earliest_price_1h_usd_state) as earliest_price_1h_usd,
+        argMaxMerge(earliest_price_5m_usd_state) as earliest_price_5m_usd,
+
+        -- Additional fields
+        argMaxMerge(latest_holders_state) as holders,
+        argMaxMerge(latest_liquidity_to_mcap_ratio_state) as liquidity_to_mcap_ratio,
+        
+        -- Track if this token came from the orginal table (priority source)
+        min(source_priority) as min_source_priority
+
+    FROM combined_raw_data
+    WHERE mint NOT IN (SELECT mint FROM excluded_tokens)
+    GROUP BY mint
+),
+
+-- Step 4: Calculate derived metrics and apply filters with ATH comparison
+calculated_metrics AS (
+    SELECT
+        tm.*,
+        -- Join ATH data from dimension table
+        ath_dim.ath_market_cap_usd_l24h,
+        ath_dim.current_market_cap_usd_l24h,
+
+        -- ATH Market Cap Analysis using dimension table data
+        CASE
+            WHEN COALESCE(ath_dim.ath_market_cap_usd_l24h, 0) > 0
+            THEN toFloat64(ath_dim.current_market_cap_usd_l24h) / NULLIF(toFloat64(ath_dim.ath_market_cap_usd_l24h), 0.0)
+            ELSE 0.0
+        END as market_cap_ath_ratio,
+
+        CASE
+            WHEN COALESCE(ath_dim.ath_market_cap_usd_l24h, 0) > 0
+            THEN ((toFloat64(ath_dim.current_market_cap_usd_l24h) - toFloat64(ath_dim.ath_market_cap_usd_l24h)) / NULLIF(toFloat64(ath_dim.ath_market_cap_usd_l24h), 0.0)) * 100.0
+            ELSE 0.0
+        END as market_cap_ath_change_pct,
+
+        -- Distance from ATH (how far below ATH in percentage)
+        CASE
+            WHEN COALESCE(ath_dim.ath_market_cap_usd_l24h, 0) > 0
+            THEN (1.0 - (toFloat64(ath_dim.current_market_cap_usd_l24h) / NULLIF(toFloat64(ath_dim.ath_market_cap_usd_l24h), 0.0))) * 100.0
+            ELSE 0.0
+        END as distance_from_ath_pct,
+
+        -- ATH Recovery Score (higher score for tokens closer to ATH)
+        CASE
+            WHEN COALESCE(ath_dim.ath_market_cap_usd_l24h, 0) > 0
+            THEN (toFloat64(ath_dim.current_market_cap_usd_l24h) / NULLIF(toFloat64(ath_dim.ath_market_cap_usd_l24h), 0.0)) * 100.0
+            ELSE 0.0
+        END as ath_recovery_score,
+
+        -- Calculate total transactions
+        tm.buys_24h + tm.sells_24h as transactions_24h,
+        tm.buys_6h + tm.sells_6h as transactions_6h,
+        tm.buys_1h + tm.sells_1h as transactions_1h,
+        tm.buys_5m + tm.sells_5m as transactions_5m,
+
+        -- Calculate price changes
+        CASE
+            WHEN COALESCE(tm.earliest_price_usd_24h, 0) > 0
+            THEN (toFloat64(tm.current_price_usd) - toFloat64(tm.earliest_price_usd_24h)) / NULLIF(toFloat64(tm.earliest_price_usd_24h), 0.0) * 100.0
+            ELSE 0.0
+        END as price_change_pct_24h,
+
+        CASE
+            WHEN COALESCE(tm.earliest_price_usd_6h, 0) > 0
+            THEN (toFloat64(tm.current_price_usd) - toFloat64(tm.earliest_price_usd_6h)) / NULLIF(toFloat64(tm.earliest_price_usd_6h), 0.0) * 100.0
+            ELSE 0.0
+        END as price_change_pct_6h,
+
+        CASE
+            WHEN COALESCE(tm.earliest_price_1h_usd, 0) > 0
+            THEN (toFloat64(tm.current_price_usd) - toFloat64(tm.earliest_price_1h_usd)) / NULLIF(toFloat64(tm.earliest_price_1h_usd), 0.0) * 100.0
+            ELSE 0.0
+        END as price_change_pct_1h,
+
+        CASE
+            WHEN COALESCE(tm.earliest_price_5m_usd, 0) > 0
+            THEN (toFloat64(tm.current_price_usd) - toFloat64(tm.earliest_price_5m_usd)) / NULLIF(toFloat64(tm.earliest_price_5m_usd), 0.0) * 100.0
+            ELSE 0.0
+        END as price_change_pct_5m,
+
+        -- Calculate derived ratios
+        CASE
+            WHEN COALESCE(tm.traders_24h, 0) > 0
+            THEN toFloat64(tm.buys_24h + tm.sells_24h) / NULLIF(toFloat64(tm.traders_24h), 0.0)
+            ELSE 0.0
+        END as txns_per_maker_24h,
+
+        CASE
+            WHEN (tm.buys_24h + tm.sells_24h) > 0
+            THEN toFloat64(tm.total_volume_usd_24h) / NULLIF(toFloat64(tm.buys_24h + tm.sells_24h), 0.0)
+            ELSE 0.0
+        END as volume_per_txn_24h,
+
+        CASE
+            WHEN COALESCE(tm.traders_24h, 0) > 0
+            THEN toFloat64(tm.total_volume_usd_24h) / NULLIF(toFloat64(tm.traders_24h), 0.0)
+            ELSE 0.0
+        END as volume_per_maker_24h,
+
+        -- Volume momentum and trading velocity
+        CASE
+            WHEN COALESCE(tm.total_volume_usd_24h, 0) > 0
+            THEN toFloat64(tm.total_volume_usd_6h) / NULLIF(toFloat64(tm.total_volume_usd_24h), 0.0)
+            ELSE 0.0
+        END as volume_momentum,
+
+        CASE
+            WHEN COALESCE(tm.traders_24h, 0) > 0
+            THEN toFloat64(tm.traders_1h) / NULLIF(toFloat64(tm.traders_24h), 0.0)
+            ELSE 0.0
+        END as trading_velocity,
+
+        -- Market cap calculations
+        toFloat64(tm.market_cap_usd) as fdv_usd,
+        CASE
+            WHEN COALESCE(tm.liquidity_to_mcap_ratio, 0) > 0
+            THEN toFloat64(tm.market_cap_usd) * toFloat64(tm.liquidity_to_mcap_ratio)
+            ELSE toFloat64(tm.market_cap_usd)
+        END as circulating_market_cap_usd
+
+    FROM token_metrics tm
+    LEFT JOIN ath_data_dim ath_dim ON tm.mint = ath_dim.mint
+    WHERE 
+        -- $45k market cap filter here
+        tm.market_cap_usd > 45000
+        AND
+        -- Tiered minimum requirements based on market cap
+        CASE
+            -- High market cap tokens ($50M+)
+            WHEN tm.market_cap_usd >= 50000000 THEN
+                tm.total_volume_usd_24h >= 25000
+                AND tm.traders_24h >= 100
+                AND tm.liquidity_usd >= 500000
+                AND tm.holders >= 100
+            
+            -- Mid-high market cap tokens ($10M-$50M)
+            WHEN tm.market_cap_usd >= 10000000 THEN
+                tm.total_volume_usd_24h >= 50000
+                AND tm.traders_24h >= 200
+                AND tm.liquidity_usd >= 100000
+                AND tm.holders >= 200
+                
+            -- Mid market cap tokens ($1M-$10M)
+            WHEN tm.market_cap_usd >= 1000000 THEN
+                tm.total_volume_usd_24h >= 75000
+                AND tm.traders_24h >= 300
+                AND tm.liquidity_usd >= 10000
+                AND tm.holders >= 300
+                
+            -- Lower market cap tokens (<$1M)
+            ELSE
+                tm.total_volume_usd_24h >= 100000
+                AND tm.traders_24h >= 500
+                AND tm.liquidity_usd >= 10000
+                AND tm.holders >= 500
+        END
+),
+
+filtered_tokens AS (
+    SELECT *
+    FROM calculated_metrics
+    WHERE
+        -- Apply strict quality filters only to lower market cap tokens
+        CASE
+            -- High market cap tokens ($10M+)
+            WHEN market_cap_usd >= 10000000 THEN TRUE
+
+            -- Mid market cap tokens ($1M-$10M)
+            WHEN market_cap_usd >= 1000000 THEN
+                txns_per_maker_24h >= 1.5
+                AND volume_per_txn_24h >= 0.5
+                
+            -- Lower market cap tokens (<$1M)
+            ELSE
+                txns_per_maker_24h >= 2.0
+                AND volume_per_txn_24h >= 1.0
+                AND (toUnixTimestamp(now()) - COALESCE(created_time, 0)) >= 12 * 3600
+                AND liquidity_to_mcap_ratio > 0
+                AND market_cap_usd > 0
+                AND CASE
+                    WHEN COALESCE(liquidity_to_mcap_ratio, 0) > 0 AND COALESCE(market_cap_usd, 0) > 0
+                    THEN (toFloat64(total_volume_usd_24h) / NULLIF((toFloat64(market_cap_usd) / NULLIF(toFloat64(liquidity_to_mcap_ratio), 0.0)), 0.0)) >= 0.015
+                    ELSE FALSE
+                END
+        END
+
+        -- ATH filter - 60%
+        AND distance_from_ath_pct <= 60.0
+),
+
+-- Step 5: Calculate trending scores with ATH factor and source/market cap penalties
+scored_tokens AS (
+    SELECT *,
+        (
+            -- Base trending components (using GREATEST to ensure positive inputs to log)
+            log10(GREATEST(1.0, 1.0 + COALESCE(txns_per_maker_24h, 0.0))) * 0.08 +
+            log10(GREATEST(1.0, 1.0 + COALESCE(volume_per_maker_24h, 0.0))) * 0.08 +
+            log10(GREATEST(1.0, 1.0 + COALESCE(transactions_24h, 0.0))) * 0.06 +
+            log10(GREATEST(1.0, 1.0 + COALESCE(traders_24h, 0.0))) * 0.10 +
+            log10(GREATEST(1.0, 1.0 + COALESCE(volume_per_txn_24h, 0.0))) * 0.08 +
+
+            -- Price movement component
+            (COALESCE(price_change_pct_5m, 0.0) * 0.025 +
+             COALESCE(price_change_pct_1h, 0.0) * 0.15 +
+             COALESCE(price_change_pct_6h, 0.0) * 0.78 +
+             COALESCE(price_change_pct_24h, 0.0) * 0.0) * 0.0 +
+
+            -- Market cap component
+            log10(GREATEST(1.0, 1.0 + COALESCE(market_cap_usd, 0.0))) * 0.35 +
+
+            -- Liquidity component
+            log10(GREATEST(1.0, 1.0 + COALESCE(liquidity_sol, 0.0))) * 0.2 +
+
+            -- ATH Recovery Factor (tokens closer to ATH get bonus)
+            (COALESCE(ath_recovery_score, 0.0) / 100.0) * 0.05
+        ) * (
+            -- Apply multiplicative penalties
+            -- Source penalty: tokens from high mcap table get 15% score reduction
+            CASE WHEN min_source_priority = 2 THEN 0.85 ELSE 1.0 END *
+            
+            -- Market cap penalty: gradual reduction for higher market caps
+            -- NOTE: CASE clauses must be ordered from highest to lowest threshold
+            CASE 
+                WHEN market_cap_usd >= 500000000 THEN 0.60  -- $500M+ gets 40% reduction
+                WHEN market_cap_usd >= 100000000 THEN 0.85  -- $100M+ gets 15% reduction
+                WHEN market_cap_usd >= 50000000 THEN 0.90   -- $50M+ gets 10% reduction
+                WHEN market_cap_usd >= 30000000 THEN 0.80   -- $30M+ gets 20% reduction
+                WHEN market_cap_usd >= 5000000 THEN 0.96    -- $5M+ gets 4% reduction
+                WHEN market_cap_usd >= 1000000 THEN 0.98    -- $1M+ gets 2% reduction
+                ELSE 1.0  -- <$1M no reduction
+            END
+        ) AS normalized_trending_score
+
+    FROM filtered_tokens
+)
+
+-- Final SELECT with all required trending metrics
+SELECT
+    mint,
+    normalized_trending_score
+FROM scored_tokens
+ORDER BY normalized_trending_score DESC
+LIMIT ${limit}
+    `;
+};
+
+const buildMarketDataForMintsSql = (mints: string[]): string => {
+    const mintList = buildInList(mints);
+
+    return `
+        SELECT
+            mint,
+            name,
+            symbol,
+            image,
+            market_cap_usd,
+            price_usd,
+            liquidity_usd,
+            volume_24h_usd,
+            holders,
+            created
+        FROM materializer_token_market_data_latest
+        WHERE (mint, timestamp) IN (
+            SELECT mint, max(timestamp)
+            FROM materializer_token_market_data_latest
+            WHERE mint IN (${mintList})
+            GROUP BY mint
+        )
+    `;
+};
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+export const registerTrendingRoutes = (app: Elysia) => {
+    app.get("/discovery/trending", async ({ query }) => {
+        // Parse limit from query params, default to 100.
+        const limitParam = query?.limit;
+        const parsed = typeof limitParam === "string" ? parseInt(limitParam, 10) : 100;
+        const limit = clamp(
+            Number.isNaN(parsed) ? 100 : parsed,
+            1,
+            1000
+        );
+
+        console.log(`[discovery/trending] Fetching trending tokens (limit=${limit})`);
+
+        // Step 1: Run the trending query to get mints and scores.
+        const trendingSql = buildTrendingSql(limit);
+        const trendingResult = await clickhouseQuery<TrendingRow>(trendingSql);
+
+        if (!trendingResult.success) {
+            return { ok: false, error: trendingResult.error } satisfies TrendingResponse;
+        }
+
+        const trendingRows = trendingResult.data;
+
+        if (trendingRows.length === 0) {
+            return {
+                ok: true,
+                data: [],
+                count: 0,
+            } satisfies TrendingResponse;
+        }
+
+        // Step 2: Fetch market data for all trending mints.
+        const mints = trendingRows.map((row) => row.mint);
+        const marketDataSql = buildMarketDataForMintsSql(mints);
+        const marketDataResult = await clickhouseQuery<TrendingTokenMarketData>(marketDataSql);
+
+        // Build a lookup map for market data.
+        const marketDataMap = new Map<string, TrendingTokenMarketData>();
+        if (marketDataResult.success) {
+            for (const row of marketDataResult.data) {
+                marketDataMap.set(row.mint, row);
+            }
+        }
+        else {
+            console.warn(`[discovery/trending] Failed to fetch market data: ${marketDataResult.error}`);
+        }
+
+        // Step 3: Combine trending data with market data.
+        const combined: TrendingListItem[] = trendingRows.map((trendingRow) => {
+            const marketData = marketDataMap.get(trendingRow.mint) ?? null;
+            return {
+                mint: trendingRow.mint,
+                trending_data: trendingRow,
+                market_data: marketData,
+            };
+        });
+
+        console.log(`[discovery/trending] Returned ${combined.length} trending tokens`);
+
+        return {
+            ok: true,
+            data: combined,
+            count: combined.length,
+        } satisfies TrendingResponse;
+    });
+};
+

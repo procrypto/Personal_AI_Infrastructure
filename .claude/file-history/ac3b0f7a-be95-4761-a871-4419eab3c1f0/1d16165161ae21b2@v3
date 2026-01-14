@@ -1,0 +1,3786 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { memo, useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
+import { cn } from "@/lib/utils";
+import { Users, Settings, X, BarChart3, Flame } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import XIcon from "@/assets/icons/x.svg";
+import BonkbotSignet from "@/assets/icons/bonkbot-signet.svg";
+import { Tooltip } from "@/components/tooltip";
+import { ChartPreviewTooltip } from "@/components/TradingViewChart/chart-preview-tooltip";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import { useGetTrackedWallets } from "@/api/walletTracking/useTrackedWallets";
+import { useKols, type Kol } from "@bonkbot/pvp";
+import { socketIOManagerPvp } from "@/websocket/socketio/socketIOInstance";
+import { useWalletTrackerSubscription } from "@/hooks/useSubscriptions/useWalletTrackerSubscription";
+import type { LiveTrade } from "@/store/memoryStore/slices/wallet-tracking-store/types";
+import type { OHLCVMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+import { useQueries } from "@tanstack/react-query";
+import { xUserProfileQueryOptions } from "@/api/social/useXUserProfileApi";
+import { useActiveWallet } from "@/hooks/useActiveWallet";
+import { request } from "@/api/api";
+import { useUserTradeInjector } from "@/hooks/useUserTradeInjector";
+import { useTrenchBenchBackfill } from "@/hooks/useTrenchBenchBackfill";
+import { useTrenchBenchStore } from "@/store/trenchBenchStore";
+import { useUserActivePositionsV2 } from "@/api/user/useUserActivePositionsV2";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type TraderBubble = {
+  id: string;
+  name: string;
+  icon: string | null;
+  emoji: string | null;
+  source: "tracked" | "kol" | "user";
+  isUser: boolean;
+  // Metrics
+  buys: number;
+  sells: number;
+  buyVolume: number; // SOL volume of buys
+  sellVolume: number; // SOL volume of sells
+  netPosition: number; // buyVolume - sellVolume (positive = accumulating, negative = distributing)
+  volume: number; // Total SOL volume
+  pnl: number; // Profit/loss in USD (estimated)
+  // Momentum alignment (for Y-axis positioning)
+  momentumSum: number; // Σ(solAmount × momentum_5m) for buys
+  momentumVolume: number; // Σ(solAmount) for buys used in momentum calc
+  avgMomentum: number; // momentumSum / momentumVolume (weighted avg momentum)
+  // Position
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  // Visual
+  size: number;
+  pulse: number; // 0-1 animation state for trade activity
+  clickPulse: number; // 0-1 animation state for click feedback (blue)
+  // Recent activity
+  lastTradeTimestamp: number;
+  recentTrades: {
+    type: "buy" | "sell";
+    amount: number; // SOL amount
+    tokenAmount: number; // Token amount (for accurate position tracking)
+    token: string;
+    tokenMint: string;
+    tokenImage: string;
+    timestamp: number;
+  }[];
+  // KOL info
+  twitter: string | null;
+  // Streak tracking
+  winStreak: number; // Consecutive profitable trades
+  lossStreak: number; // Consecutive losing trades
+  sessionPnl: number; // P/L for current session
+};
+
+type BaseBubbleData = {
+  id: string;
+  name: string;
+  icon: string | null;
+  emoji: string | null;
+  source: "tracked" | "kol" | "user";
+  isUser: boolean;
+  twitter: string | null;
+  buys: number;
+  sells: number;
+  buyVolume: number;
+  sellVolume: number;
+  netPosition: number;
+  volume: number;
+  pnlUsd: number;
+  avgMomentum: number;
+  lastTradeTimestamp: number;
+  winStreak: number;
+  lossStreak: number;
+};
+
+type FloatingText = {
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  alpha: number;
+  vy: number; // velocity Y
+};
+
+type PulseEffect = {
+  x: number;
+  y: number;
+  radius: number;
+  color: string;
+  alpha: number;
+};
+
+type FireParticle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  alpha: number;
+  color: string;
+  bubbleId: string;
+};
+
+type VantageViewMode = "performance" | "streak";
+
+type VantageYAxisMode = "momentum" | "buySellRatio";
+
+type TokenBag = {
+  mint: string;
+  symbol: string;
+  image: string;
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  size: number;
+  kolCount: number;
+  totalVolume: number; // Total SOL held by all KOLs
+  holders: { bubbleId: string; amount: number }[];
+};
+
+type FlowParticle = {
+  connectionKey: string; // mint::bubbleId
+  mint: string;
+  bubbleId: string;
+  progress: number; // 0-1 along the line
+  speed: number;
+  size: number;
+  alpha: number;
+};
+
+// =============================================================================
+// OHLCV Types and Utilities for Momentum Alignment
+// =============================================================================
+
+// Lookup map: mint -> (timestamp_secs -> candle data)
+type OhlcvLookup = Map<string, Map<number, { o_usd: number; c_usd: number }>>;
+
+// Enriched trade type with momentum data
+// Fetch OHLCV data for multiple mints in batches
+const fetchOhlcvForMints = async (
+  mints: string[],
+  startTimestamp: number,
+  countback: number
+): Promise<OhlcvLookup> => {
+  const lookup: OhlcvLookup = new Map();
+
+  // Batch fetch in parallel (batches of 10 to avoid overwhelming the API)
+  const batchSize = 10;
+  const batches: Promise<void>[] = [];
+
+  for (let i = 0; i < mints.length; i += batchSize) {
+    const batch = mints.slice(i, i + batchSize);
+    batches.push(
+      Promise.all(
+        batch.map(async mint => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(
+            () => controller.abort(),
+            OHLCV_REQUEST_TIMEOUT_MS
+          );
+
+          try {
+            const candles = await request<undefined, OHLCVMessage[]>({
+              client: "apiData",
+              method: "GET",
+              path: `/ohlcv/token/${mint}/5m?start_date=${startTimestamp}&countback=${countback}`,
+              signal: controller.signal,
+            });
+
+            const mintMap = new Map<number, { o_usd: number; c_usd: number }>();
+            candles.forEach(c => {
+              mintMap.set(c.timestamp_secs, {
+                o_usd: parseFloat(String(c.o_usd)),
+                c_usd: parseFloat(String(c.c_usd)),
+              });
+            });
+            lookup.set(mint, mintMap);
+          } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") {
+              console.warn(`OHLCV fetch timeout for ${mint}`);
+            } else {
+              console.warn(`Failed to fetch OHLCV for ${mint}:`, err);
+            }
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        })
+      ).then(() => {})
+    );
+  }
+
+  await Promise.all(batches);
+
+  return lookup;
+};
+
+// Compute momentum (% change) from a candle
+const _computeMomentumFromCandle = (candle: {
+  o_usd: number;
+  c_usd: number;
+}): number => {
+  if (candle.o_usd <= 0) return 0;
+  return ((candle.c_usd - candle.o_usd) / candle.o_usd) * 100;
+};
+
+// Find the nearest 5m candle for a given trade timestamp
+const _findNearestCandle = (
+  mintLookup: Map<number, { o_usd: number; c_usd: number }> | undefined,
+  tradeTimestampNano: string
+): { o_usd: number; c_usd: number } | null => {
+  if (!mintLookup || mintLookup.size === 0) return null;
+
+  const tradeSecs = Math.floor(parseInt(tradeTimestampNano) / 1e9);
+  const candleSecs =
+    Math.floor(tradeSecs / OHLCV_BUCKET_SECS) * OHLCV_BUCKET_SECS; // Round down to 5m bucket
+
+  // Try exact bucket first
+  const exactCandle = mintLookup.get(candleSecs);
+  if (exactCandle) return exactCandle;
+
+  // Try one bucket earlier (in case trade happened at bucket boundary)
+  const prevCandle = mintLookup.get(candleSecs - OHLCV_BUCKET_SECS);
+  if (prevCandle) return prevCandle;
+
+  return null;
+};
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const LERP_SPEED = 0.03;
+const AMBIENT_STRENGTH = 0.3;
+const MIN_BUBBLE_SIZE = 20;
+const MAX_BUBBLE_SIZE = 70;
+const PADDING = 60; // Canvas padding
+const COLLISION_STRENGTH = 0.5; // How strongly bubbles push each other apart
+const OHLCV_BUCKET_SECS = 300; // 5 minutes in seconds
+const OHLCV_FETCH_INTERVAL_MS = 10000; // 10 seconds
+const OHLCV_CLEANUP_INTERVAL_MS = 300000; // 5 minutes
+const OHLCV_CACHE_MAX_AGE_SECS = 1800; // 30 minutes
+const OHLCV_REQUEST_TIMEOUT_MS = 10000; // 10 second timeout per request
+
+// Colors - matching KOL leaderboard success/error colors
+const COLOR_PROFIT = "#b4e559"; // success-950 (green/profit)
+const COLOR_LOSS = "#dc575b"; // error-950 (red/loss)
+const COLOR_USER = "#3b82f6"; // blue-500 (user's bubble)
+const COLOR_BG_DARK = "#1a1f2e"; // Dark background for bubbles
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+// Simple deterministic hash function for jitter
+const hashString = (str: string): number => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return hash;
+};
+
+// Get deterministic jitter value between -1 and 1 based on string
+const getJitter = (id: string, seed: number): number => {
+  const hash = hashString(id + seed.toString());
+  return (hash % 1000) / 500 - 1; // Returns -1 to 1
+};
+
+const formatNumber = (num: number): string => {
+  if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + "M";
+  if (num >= 1_000) return (num / 1_000).toFixed(1) + "K";
+  return num.toFixed(0);
+};
+
+const formatSol = (num: number): string => {
+  if (num >= 1000) return formatNumber(num);
+  if (num >= 1) return num.toFixed(1);
+  return num.toFixed(2);
+};
+
+// =============================================================================
+// Settings Panel
+// =============================================================================
+
+// =============================================================================
+// Draggable Hook (Fixed positioning for dragging anywhere on screen)
+// =============================================================================
+
+const useDraggable = () => {
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(
+    null
+  );
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const positionStartRef = useRef({ x: 0, y: 0 });
+  const elementRef = useRef<HTMLDivElement>(null);
+
+  // Initialize position from element's current position on first interaction
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const element = elementRef.current;
+      if (!element) return;
+
+      const rect = element.getBoundingClientRect();
+      const currentPos = position ?? { x: rect.left, y: rect.top };
+
+      setIsDragging(true);
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      positionStartRef.current = currentPos;
+
+      if (!position) {
+        setPosition(currentPos);
+      }
+    },
+    [position]
+  );
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - dragStartRef.current.x;
+      const deltaY = e.clientY - dragStartRef.current.y;
+      setPosition({
+        x: positionStartRef.current.x + deltaX,
+        y: positionStartRef.current.y + deltaY,
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDragging]);
+
+  return { position, isDragging, handleMouseDown, elementRef };
+};
+
+// =============================================================================
+// Settings Panel
+// =============================================================================
+
+type SettingsPanelProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  showNames: boolean;
+  setShowNames: (v: boolean) => void;
+  showTooltips: boolean;
+  setShowTooltips: (v: boolean) => void;
+  showLeaderboard: boolean;
+  setShowLeaderboard: (v: boolean) => void;
+  showUserBubble: boolean;
+  setShowUserBubble: (v: boolean) => void;
+  showBags: boolean;
+  setShowBags: (v: boolean) => void;
+  maxBubbles: number;
+  setMaxBubbles: (v: number) => void;
+  yAxisMode: VantageYAxisMode;
+  setYAxisMode: (v: VantageYAxisMode) => void;
+};
+
+const SettingsPanel = memo(
+  ({
+    isOpen,
+    onClose,
+    showNames,
+    setShowNames,
+    showTooltips,
+    setShowTooltips,
+    showLeaderboard,
+    setShowLeaderboard,
+    showUserBubble,
+    setShowUserBubble,
+    showBags,
+    setShowBags,
+    maxBubbles,
+    setMaxBubbles,
+    yAxisMode,
+    setYAxisMode,
+  }: SettingsPanelProps) => {
+    const { position, isDragging, handleMouseDown, elementRef } =
+      useDraggable();
+
+    if (!isOpen) return null;
+
+    // Use fixed positioning when dragged, absolute for initial placement (top-right)
+    const style = position
+      ? {
+          position: "fixed" as const,
+          left: position.x,
+          top: position.y,
+          zIndex: 9999,
+        }
+      : { position: "absolute" as const, right: 12, top: 12, zIndex: 50 };
+
+    const panel = (
+      <div
+        ref={elementRef}
+        className="bg-bg-secondary border-border-primary min-w-[160px] rounded-lg border shadow-xl"
+        style={style}
+      >
+        <div
+          className={cn(
+            "border-border-primary flex items-center justify-between border-b px-3 py-2",
+            isDragging ? "cursor-grabbing" : "cursor-grab"
+          )}
+          onMouseDown={handleMouseDown}
+        >
+          <span className="text-[10px] font-semibold tracking-wide text-white/60 uppercase select-none">
+            Settings
+          </span>
+          <button
+            onClick={onClose}
+            onMouseDown={e => e.stopPropagation()}
+            className="text-text-secondary hover:text-text-primary transition-colors"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+        <div className="space-y-1 p-2">
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-white/5">
+            <input
+              type="checkbox"
+              checked={showUserBubble}
+              onChange={e => setShowUserBubble(e.target.checked)}
+              className="accent-blue size-3.5 rounded"
+            />
+            <span className="text-[11px] text-white/70">Show My Trades</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-white/5">
+            <input
+              type="checkbox"
+              checked={showNames}
+              onChange={e => setShowNames(e.target.checked)}
+              className="accent-blue size-3.5 rounded"
+            />
+            <span className="text-[11px] text-white/70">Show Names</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-white/5">
+            <input
+              type="checkbox"
+              checked={showTooltips}
+              onChange={e => setShowTooltips(e.target.checked)}
+              className="accent-blue size-3.5 rounded"
+            />
+            <span className="text-[11px] text-white/70">Show Tooltips</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-white/5">
+            <input
+              type="checkbox"
+              checked={showLeaderboard}
+              onChange={e => setShowLeaderboard(e.target.checked)}
+              className="accent-blue size-3.5 rounded"
+            />
+            <span className="text-[11px] text-white/70">Leaderboard</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-white/5">
+            <input
+              type="checkbox"
+              checked={showBags}
+              onChange={e => setShowBags(e.target.checked)}
+              className="accent-blue size-3.5 rounded"
+            />
+            <span className="text-[11px] text-white/70">Show Bags</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-white/5">
+            <input
+              type="checkbox"
+              checked={yAxisMode === "momentum"}
+              onChange={e =>
+                setYAxisMode(e.target.checked ? "momentum" : "buySellRatio")
+              }
+              className="accent-blue size-3.5 rounded"
+            />
+            <span className="text-[11px] text-white/70">Momentum Y-Axis</span>
+          </label>
+          <div className="px-2 py-1.5">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[11px] text-white/70">Max Bubbles</span>
+              <span className="text-[11px] font-medium text-white/90">
+                {maxBubbles}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={500}
+              step={1}
+              value={maxBubbles}
+              onChange={e => {
+                const newValue = Number(e.target.value);
+                if (newValue !== maxBubbles) {
+                  setMaxBubbles(newValue);
+                }
+              }}
+              className="accent-blue h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10"
+            />
+          </div>
+        </div>
+      </div>
+    );
+
+    // Use portal when dragged to escape stacking context
+    return position ? createPortal(panel, document.body) : panel;
+  }
+);
+SettingsPanel.displayName = "SettingsPanel";
+
+// =============================================================================
+// Tooltip Component (Hoverable with token icons)
+// =============================================================================
+
+type BubbleTooltipProps = {
+  bubble: TraderBubble | null;
+  x: number;
+  y: number;
+  containerWidth: number;
+  containerHeight: number;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+};
+
+const TOOLTIP_WIDTH = 200;
+const TOOLTIP_HEIGHT = 160;
+
+const BubbleTooltip = memo(
+  ({
+    bubble,
+    x,
+    y,
+    containerWidth,
+    containerHeight,
+    onMouseEnter,
+    onMouseLeave,
+  }: BubbleTooltipProps) => {
+    const navigate = useNavigate();
+
+    if (!bubble) return null;
+
+    const pnlColor = bubble.pnl >= 0 ? "text-text-success" : "text-text-error";
+    const pnlSign = bubble.pnl >= 0 ? "+" : "";
+
+    // Get unique tokens from recent trades
+    const uniqueTokens = useMemo(() => {
+      const seen = new Set<string>();
+      return bubble.recentTrades
+        .filter(t => {
+          if (seen.has(t.tokenMint)) return false;
+          seen.add(t.tokenMint);
+          return true;
+        })
+        .slice(0, 6); // Max 6 tokens
+    }, [bubble.recentTrades]);
+
+    // Calculate position - flip to left side if near right edge, flip up if near bottom
+    const nearRightEdge = x + TOOLTIP_WIDTH + 20 > containerWidth;
+    const nearBottomEdge = y + TOOLTIP_HEIGHT / 2 > containerHeight;
+    const nearTopEdge = y - TOOLTIP_HEIGHT / 2 < 0;
+
+    const leftPos = nearRightEdge ? x - TOOLTIP_WIDTH - 10 : x + 10;
+    const topPos = nearBottomEdge
+      ? y - TOOLTIP_HEIGHT + 20
+      : nearTopEdge
+        ? 10
+        : y;
+    const transformY = nearBottomEdge
+      ? "none"
+      : nearTopEdge
+        ? "none"
+        : "translateY(-50%)";
+
+    const handleTokenClick = (mint: string) => {
+      navigate({ to: "/trading/$mint", params: { mint } });
+    };
+
+    return (
+      <div
+        className="bg-bg-secondary border-border-primary absolute z-50 min-w-[180px] rounded-lg border p-2.5 shadow-xl"
+        style={{
+          left: leftPos,
+          top: topPos,
+          transform: transformY,
+        }}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+      >
+        {/* Header with avatar, name, and social link */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {bubble.icon ? (
+              <img
+                src={bubble.icon}
+                alt={bubble.name}
+                className="size-7 rounded-md object-cover"
+              />
+            ) : (
+              <div className="bg-bg-tertiary text-text-primary flex size-7 items-center justify-center rounded-md text-base">
+                {bubble.emoji || bubble.name.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <div>
+              <div className="text-text-primary text-xs font-semibold">
+                {bubble.name}
+              </div>
+              <div className="text-text-secondary text-[10px]">
+                {bubble.source === "user"
+                  ? "You"
+                  : bubble.source === "kol"
+                    ? "KOL"
+                    : "Tracked"}
+              </div>
+            </div>
+          </div>
+          {bubble.twitter && (
+            <a
+              href={
+                bubble.twitter.startsWith("http")
+                  ? bubble.twitter
+                  : `https://x.com/${bubble.twitter}`
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-text-tertiary hover:text-text-primary transition-colors"
+              onClick={e => e.stopPropagation()}
+            >
+              <XIcon className="size-4" />
+            </a>
+          )}
+        </div>
+
+        {/* Stats */}
+        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+          <div className="text-text-secondary">Volume</div>
+          <div className="text-text-primary text-right">
+            {formatSol(bubble.volume)} SOL
+          </div>
+          <div className="text-text-secondary">Buys</div>
+          <div className="text-text-success text-right">{bubble.buys}</div>
+          <div className="text-text-secondary">Sells</div>
+          <div className="text-text-error text-right">{bubble.sells}</div>
+          <div className="text-text-secondary">P/L</div>
+          <div className={cn("text-right", pnlColor)}>
+            {pnlSign}${formatNumber(Math.abs(bubble.pnl))}
+          </div>
+        </div>
+
+        {/* Token icons */}
+        {uniqueTokens.length > 0 && (
+          <div className="border-border-primary mt-2 border-t pt-2">
+            <div className="text-text-secondary mb-1.5 text-[10px]">
+              Trading
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {uniqueTokens.map(trade => (
+                <Tooltip
+                  key={trade.tokenMint}
+                  content={trade.token}
+                >
+                  <button
+                    onClick={() => handleTokenClick(trade.tokenMint)}
+                    className="border-border-secondary hover:border-border-primary size-6 overflow-hidden rounded-full border transition-colors hover:scale-110"
+                  >
+                    {trade.tokenImage ? (
+                      <img
+                        src={trade.tokenImage}
+                        alt={trade.token}
+                        className="size-full object-cover"
+                      />
+                    ) : (
+                      <div className="bg-bg-tertiary text-text-secondary flex size-full items-center justify-center text-[8px]">
+                        {trade.token.slice(0, 2)}
+                      </div>
+                    )}
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+BubbleTooltip.displayName = "BubbleTooltip";
+
+// =============================================================================
+// Leaderboard Component
+// =============================================================================
+
+type LeaderboardProps = {
+  bubbles: TraderBubble[];
+  isVisible: boolean;
+  onClose: () => void;
+  onKolClick?: (kolId: string) => void;
+  selectedKolId?: string | null;
+  showUserBubble?: boolean;
+};
+
+const Leaderboard = memo(
+  ({
+    bubbles,
+    isVisible,
+    onClose,
+    onKolClick,
+    selectedKolId,
+    showUserBubble,
+  }: LeaderboardProps) => {
+    const { position, isDragging, handleMouseDown, elementRef } =
+      useDraggable();
+
+    if (!isVisible || bubbles.length === 0) return null;
+
+    // Sort all bubbles by P/L to calculate ranks
+    const sortedBubbles = [...bubbles].sort((a, b) => b.pnl - a.pnl);
+
+    // Find user bubble and their rank
+    const userBubble = sortedBubbles.find(b => b.isUser);
+    const userRank = userBubble ? sortedBubbles.findIndex(b => b.isUser) : -1;
+    const userInTop5 = showUserBubble && userRank >= 0 && userRank < 5;
+
+    // Get top 5 - include user if they're in top 5
+    const top5 = sortedBubbles.slice(0, 5);
+
+    const getRankIcon = (rank: number) => {
+      if (rank === 0) return "👑";
+      if (rank === 1) return "🥈";
+      if (rank === 2) return "🥉";
+      return `${rank + 1}`;
+    };
+
+    // Use fixed positioning when dragged, absolute for initial placement (top-left)
+    const style = position
+      ? {
+          position: "fixed" as const,
+          left: position.x,
+          top: position.y,
+          zIndex: 9999,
+        }
+      : { position: "absolute" as const, left: 12, top: 12, zIndex: 40 };
+
+    const panel = (
+      <div
+        ref={elementRef}
+        className="bg-bg-secondary border-border-primary min-w-[160px] rounded-lg border shadow-xl"
+        style={style}
+      >
+        <div
+          className={cn(
+            "text-text-secondary border-border-primary flex items-center justify-between gap-1.5 border-b px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase",
+            isDragging ? "cursor-grabbing" : "cursor-grab"
+          )}
+          onMouseDown={handleMouseDown}
+        >
+          <div className="flex items-center gap-1.5 select-none">
+            <span>🏆</span>
+            <span>Top Performers</span>
+          </div>
+          <button
+            onClick={onClose}
+            onMouseDown={e => e.stopPropagation()}
+            className="text-text-secondary hover:text-text-primary transition-colors"
+          >
+            <X className="size-3" />
+          </button>
+        </div>
+        <div className="p-1.5">
+          {top5.map((bubble, idx) => {
+            const pnlColor =
+              bubble.pnl >= 0 ? "text-text-success" : "text-text-error";
+            const pnlSign = bubble.pnl >= 0 ? "+" : "";
+            const isSelected = selectedKolId === bubble.id;
+            const isUserRow = bubble.isUser && showUserBubble;
+
+            return (
+              <div
+                key={bubble.id}
+                onClick={() => onKolClick?.(bubble.id)}
+                className={cn(
+                  "relative flex cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors",
+                  isSelected
+                    ? "bg-blue/20 ring-blue/40 z-10 ring-1"
+                    : isUserRow
+                      ? "bg-gradient-to-r from-amber-500/10 to-transparent ring-1 ring-amber-500/30 hover:from-amber-500/20"
+                      : "hover:bg-bg-tertiary"
+                )}
+              >
+                <span
+                  className={cn(
+                    "w-5 text-center text-xs",
+                    isUserRow
+                      ? "font-medium text-amber-400"
+                      : "text-text-secondary"
+                  )}
+                >
+                  {getRankIcon(idx)}
+                </span>
+                {isUserRow ? (
+                  <BonkbotSignet className="size-5" />
+                ) : bubble.icon ? (
+                  <img
+                    src={bubble.icon}
+                    alt={bubble.name}
+                    className="size-5 rounded-md object-cover"
+                  />
+                ) : (
+                  <div className="bg-bg-tertiary text-text-primary flex size-5 items-center justify-center rounded-md text-xs">
+                    {bubble.emoji || bubble.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={cn(
+                      "truncate text-[11px] font-medium",
+                      isUserRow ? "text-amber-400" : "text-text-primary"
+                    )}
+                  >
+                    {isUserRow ? "You" : bubble.name}
+                  </div>
+                  <div className={cn("text-[10px]", pnlColor)}>
+                    {pnlSign}${formatNumber(Math.abs(bubble.pnl))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* User row - only shown at bottom if NOT in top 5 */}
+          {showUserBubble && userBubble && !userInTop5 && (
+            <>
+              <div className="border-border-primary my-1.5 border-t" />
+              <div
+                onClick={() => onKolClick?.(userBubble.id)}
+                className={cn(
+                  "relative flex cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors",
+                  selectedKolId === userBubble.id
+                    ? "bg-blue/20 ring-blue/40 z-10 ring-1"
+                    : "bg-gradient-to-r from-amber-500/10 to-transparent ring-1 ring-amber-500/30 hover:from-amber-500/20"
+                )}
+              >
+                <span className="w-5 text-center text-xs font-medium text-amber-400">
+                  #{userRank + 1}
+                </span>
+                <BonkbotSignet className="size-5" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[11px] font-medium text-amber-400">
+                    You
+                  </div>
+                  <div
+                    className={cn(
+                      "text-[10px]",
+                      userBubble.pnl >= 0
+                        ? "text-text-success"
+                        : "text-text-error"
+                    )}
+                  >
+                    {userBubble.pnl >= 0 ? "+" : ""}$
+                    {formatNumber(Math.abs(userBubble.pnl))}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+
+    // Use portal when dragged to escape stacking context
+    return position ? createPortal(panel, document.body) : panel;
+  }
+);
+Leaderboard.displayName = "Leaderboard";
+
+// =============================================================================
+// Header Controls
+// =============================================================================
+
+// Store for syncing settings state between header and widget
+const settingsOpenStore = new Map<string, boolean>([["default", false]]);
+const viewModeStore = new Map<string, VantageViewMode>([
+  ["default", "performance"],
+]);
+
+export const VantageWidgetHeaderControls = ({
+  widgetId,
+}: {
+  widgetId?: string;
+}) => {
+  const key = widgetId || "default";
+  const [isOpen, setIsOpen] = useState(settingsOpenStore.get(key) || false);
+  const [viewMode, setViewMode] = useState<VantageViewMode>(
+    viewModeStore.get(key) || "performance"
+  );
+
+  const handleSettingsClick = () => {
+    const newValue = !isOpen;
+    setIsOpen(newValue);
+    settingsOpenStore.set(key, newValue);
+    window.dispatchEvent(
+      new CustomEvent("vantage-settings-toggle", {
+        detail: { widgetId: key, isOpen: newValue },
+      })
+    );
+  };
+
+  const handleViewModeChange = (mode: VantageViewMode) => {
+    setViewMode(mode);
+    viewModeStore.set(key, mode);
+    window.dispatchEvent(
+      new CustomEvent("vantage-view-mode-change", {
+        detail: { widgetId: key, viewMode: mode },
+      })
+    );
+  };
+
+  // Listen for external changes
+  useEffect(() => {
+    const handleSettingsChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setIsOpen(e.detail.isOpen);
+      }
+    };
+    const handleViewModeChangeEvent = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setViewMode(e.detail.viewMode);
+      }
+    };
+    window.addEventListener(
+      "vantage-settings-toggle",
+      handleSettingsChange as EventListener
+    );
+    window.addEventListener(
+      "vantage-view-mode-change",
+      handleViewModeChangeEvent as EventListener
+    );
+    return () => {
+      window.removeEventListener(
+        "vantage-settings-toggle",
+        handleSettingsChange as EventListener
+      );
+      window.removeEventListener(
+        "vantage-view-mode-change",
+        handleViewModeChangeEvent as EventListener
+      );
+    };
+  }, [key]);
+
+  return (
+    <div className="flex items-center gap-1">
+      {/* View Mode Toggle */}
+      <div className="flex items-center rounded-md border border-white/10">
+        <Tooltip content="Performance view">
+          <button
+            onClick={() => handleViewModeChange("performance")}
+            className={cn(
+              "p-1.5 transition-colors",
+              viewMode === "performance"
+                ? "bg-bg-tertiary text-text-primary"
+                : "text-text-tertiary hover:text-text-secondary"
+            )}
+          >
+            <BarChart3 className="size-3.5" />
+          </button>
+        </Tooltip>
+        <Tooltip content="Streak view">
+          <button
+            onClick={() => handleViewModeChange("streak")}
+            className={cn(
+              "p-1.5 transition-colors",
+              viewMode === "streak"
+                ? "bg-bg-tertiary text-text-primary"
+                : "text-text-tertiary hover:text-text-secondary"
+            )}
+          >
+            <Flame className="size-3.5" />
+          </button>
+        </Tooltip>
+      </div>
+
+      <Tooltip content="Display settings">
+        <button
+          onClick={handleSettingsClick}
+          className={cn(
+            "text-text-secondary hover:text-text-primary rounded p-1 transition-colors",
+            isOpen && "bg-bg-tertiary text-text-primary"
+          )}
+        >
+          <Settings className="size-3.5" />
+        </button>
+      </Tooltip>
+    </div>
+  );
+};
+
+// =============================================================================
+// Main Widget
+// =============================================================================
+
+export const VantageWidget = memo(({ widgetId }: { widgetId?: string }) => {
+  // Ensure wallet tracker subscription is active
+  useWalletTrackerSubscription();
+
+  // Canvas ref
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const animationRef = useRef<number | null>(null);
+
+  // State
+  const key = widgetId || "default";
+  const [settingsOpen, setSettingsOpen] = useState(
+    settingsOpenStore.get(key) || false
+  );
+  const [viewMode, setViewMode] = useState<VantageViewMode>(
+    viewModeStore.get(key) || "performance"
+  );
+  const [showNames, setShowNames] = useState(true);
+  const [showTooltips, setShowTooltips] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(true);
+  const [showUserBubble, setShowUserBubble] = useState(true);
+  const [showBags, setShowBags] = useState(false);
+  const [maxBubbles, setMaxBubbles] = useState(() => {
+    const stored = localStorage.getItem("vantage-maxBubbles");
+    return stored ? parseInt(stored, 10) : 50;
+  });
+  const [yAxisMode, setYAxisMode] = useState<VantageYAxisMode>("momentum");
+
+  // Use centralized backfill - shared across all TrenchBench widgets
+  // This triggers the backfill if not already running; data arrives in live_trades store
+  useTrenchBenchBackfill();
+
+  // Inject user trades into live_trades when user bubble is enabled
+  useUserTradeInjector(showUserBubble);
+
+  // Fetch user's closed positions for accurate PNL (backend has historical USD prices)
+  const { data: closedPositions } = useUserActivePositionsV2(
+    {
+      fetch_type: "closed",
+      sort_by: "last_trade_desc",
+      offset: 0,
+      limit: 1000, // Fetch all closed positions (high limit to capture full history)
+      return_agg: true,
+      refetchInterval: 5000, // Refetch every 5 seconds for reasonably up-to-date PNL
+    },
+    showUserBubble
+  );
+
+  // Calculate total realized PNL from closed positions
+  // Uses same formula as Closed Positions page: sold_total_usd - invested_total_usd
+  const userRealizedPnl = useMemo(() => {
+    if (!closedPositions || closedPositions.length === 0) return 0;
+    return closedPositions
+      .filter(pos => pos.grouping_agg === "mint") // Only count aggregated totals, not per-wallet duplicates
+      .reduce((sum, pos) => {
+        // Match Closed Positions page: Realized PNL = Sold - Invested
+        const sold = parseFloat(pos.sold_total_usd || "0");
+        const invested = parseFloat(pos.invested_total_usd || "0");
+        return sum + (sold - invested);
+      }, 0);
+  }, [closedPositions]);
+
+  // Store in ref for animation loop access and update user bubble when data refreshes
+  const userRealizedPnlRef = useRef(0);
+  useEffect(() => {
+    userRealizedPnlRef.current = userRealizedPnl;
+
+    // Also update the user bubble directly when closed positions data refreshes
+    // (so PNL updates even without new trades coming in)
+    if (showUserBubble && userRealizedPnl !== 0) {
+      for (const [_id, bubble] of bubblesRef.current) {
+        if (bubble.isUser) {
+          bubble.pnl = userRealizedPnl;
+          break;
+        }
+      }
+      // Trigger re-render to update leaderboard
+      setStatsVersion(v => v + 1);
+    }
+  }, [userRealizedPnl, showUserBubble]);
+
+  // Hover state
+  const [hoveredBubble, setHoveredBubble] = useState<TraderBubble | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [isOverInteractive, setIsOverInteractive] = useState(false); // For cursor pointer
+  const isHoveringTooltipRef = useRef(false);
+  const hideTooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastMousePosRef = useRef({ x: 0, y: 0 });
+
+  // Force stats update
+  const [statsVersion, setStatsVersion] = useState(0);
+
+  // Bag positions for DOM tooltip triggers (updated periodically)
+  const [bagPositions, setBagPositions] = useState<TokenBag[]>([]);
+
+  // Selected bags for highlighting (multiple can be selected from Intel Grid)
+  const [selectedBagMints, setSelectedBagMints] = useState<Set<string>>(
+    new Set()
+  );
+
+  // Selected KOL for leaderboard highlighting
+  const [selectedKolId, setSelectedKolId] = useState<string | null>(null);
+
+  // Data refs (for animation loop access)
+  const bubblesRef = useRef<Map<string, TraderBubble>>(new Map());
+  const floatingTextsRef = useRef<FloatingText[]>([]);
+  const pulsesRef = useRef<PulseEffect[]>([]);
+  const imagesRef = useRef<Map<string, HTMLImageElement | null>>(new Map());
+  const processedTradesRef = useRef<Set<string>>(new Set());
+  const ohlcvLookupRef = useRef<OhlcvLookup>(new Map());
+  const pendingOhlcvMintsRef = useRef<Set<string>>(new Set());
+  const justReturnedFromBackgroundRef = useRef(false);
+  const lastVisibilityChangeRef = useRef(Date.now());
+  const tokenBagsRef = useRef<Map<string, TokenBag>>(new Map());
+  const viewModeRef = useRef<VantageViewMode>(viewMode);
+  const fireParticlesRef = useRef<FireParticle[]>([]);
+  const showBagsRef = useRef(showBags);
+  const yAxisModeRef = useRef<VantageYAxisMode>(yAxisMode);
+  const selectedBagMintsRef = useRef<Set<string>>(new Set());
+  const connectionProgressRef = useRef<Map<string, number>>(new Map()); // Track line draw-in progress (0-1)
+  const flowParticlesRef = useRef<FlowParticle[]>([]); // Animated particles on connection lines
+  const hoveredKolIdRef = useRef<string | null>(null); // KOL being hovered (to highlight their bags)
+  const hoveredBagMintRef = useRef<string | null>(null); // Bag being hovered (to highlight its holders)
+  const filteredKolIdRef = useRef<string | null>(null); // KOL clicked to filter (show only their bags)
+  const maxBubblesRef = useRef(maxBubbles); // Display limit for bubbles (not data eviction)
+
+  // Listen for settings toggle from header
+  useEffect(() => {
+    const handleSettingsToggle = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setSettingsOpen(e.detail.isOpen);
+      }
+    };
+    window.addEventListener(
+      "vantage-settings-toggle",
+      handleSettingsToggle as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "vantage-settings-toggle",
+        handleSettingsToggle as EventListener
+      );
+  }, [key]);
+
+  // Listen for view mode changes from header
+  useEffect(() => {
+    const handleViewModeChange = (e: CustomEvent) => {
+      if (e.detail.widgetId === key) {
+        setViewMode(e.detail.viewMode);
+        viewModeRef.current = e.detail.viewMode;
+      }
+    };
+    window.addEventListener(
+      "vantage-view-mode-change",
+      handleViewModeChange as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        "vantage-view-mode-change",
+        handleViewModeChange as EventListener
+      );
+  }, [key]);
+
+  // Sync viewModeRef
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+  }, [viewMode]);
+
+  // Sync showBagsRef
+  useEffect(() => {
+    showBagsRef.current = showBags;
+  }, [showBags]);
+
+  // Sync yAxisModeRef
+  useEffect(() => {
+    yAxisModeRef.current = yAxisMode;
+  }, [yAxisMode]);
+
+  // Sync maxBubblesRef (display limit, not data eviction)
+  useEffect(() => {
+    maxBubblesRef.current = maxBubbles;
+  }, [maxBubbles]);
+
+  // Persist maxBubbles to localStorage
+  useEffect(() => {
+    localStorage.setItem("vantage-maxBubbles", String(maxBubbles));
+  }, [maxBubbles]);
+
+  // Periodic fetch of OHLCV for new mints not in cache
+  useEffect(() => {
+    const fetchPendingOhlcv = async () => {
+      const pending = pendingOhlcvMintsRef.current;
+      if (pending.size === 0) return;
+
+      const mints = [...pending];
+      pending.clear();
+
+      const now = Math.floor(Date.now() / 1000);
+      const newLookup = await fetchOhlcvForMints(mints, now, 6); // Last 30min
+
+      // Merge into existing lookup
+      for (const [mint, timeMap] of newLookup) {
+        const existing = ohlcvLookupRef.current.get(mint);
+        if (existing) {
+          for (const [ts, candle] of timeMap) {
+            existing.set(ts, candle);
+          }
+        } else {
+          ohlcvLookupRef.current.set(mint, timeMap);
+        }
+      }
+    };
+
+    const interval = setInterval(fetchPendingOhlcv, OHLCV_FETCH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Periodic cleanup of old OHLCV cache entries (prevents memory leak)
+  useEffect(() => {
+    const cleanupOldOhlcv = () => {
+      const cutoff = Math.floor(Date.now() / 1000) - OHLCV_CACHE_MAX_AGE_SECS;
+      for (const [mint, timeMap] of ohlcvLookupRef.current) {
+        for (const [ts] of timeMap) {
+          if (ts < cutoff) {
+            timeMap.delete(ts);
+          }
+        }
+        if (timeMap.size === 0) {
+          ohlcvLookupRef.current.delete(mint);
+        }
+      }
+    };
+
+    const interval = setInterval(cleanupOldOhlcv, OHLCV_CLEANUP_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Sync selectedBagMintsRef
+  useEffect(() => {
+    selectedBagMintsRef.current = selectedBagMints;
+  }, [selectedBagMints]);
+
+  // NOTE: Cross-widget selection is now handled through the shared store
+  // (sharedSelectedTokens subscription above). CustomEvent listeners were removed
+  // for both Intel Grid and Anomalyzer token selection.
+
+  // Update bag positions for DOM tooltip triggers
+  useEffect(() => {
+    // Show bag positions if showBags is on, OR if there's an Intel Grid selection
+    const shouldShowBags = showBags || selectedBagMints.size > 0;
+
+    if (!shouldShowBags) {
+      setBagPositions([]);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const bags = Array.from(tokenBagsRef.current.values());
+      // If showBags is off but we have selections, only include the selected bags
+      const filteredBags = showBags
+        ? bags
+        : bags.filter(b => selectedBagMints.has(b.mint));
+      setBagPositions(filteredBags.map(b => ({ ...b })));
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [showBags, selectedBagMints]);
+
+  // Handle tab visibility changes - skip effects when returning from background
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Tab is being hidden
+        lastVisibilityChangeRef.current = Date.now();
+      } else {
+        // Tab is becoming visible - check if we were hidden for a while
+        const hiddenDuration = Date.now() - lastVisibilityChangeRef.current;
+        if (hiddenDuration > 2000) {
+          // Was hidden for more than 2 seconds, suppress effects briefly
+          justReturnedFromBackgroundRef.current = true;
+          // Clear any accumulated effects
+          floatingTextsRef.current = [];
+          pulsesRef.current = [];
+          // Reset after a short delay
+          setTimeout(() => {
+            justReturnedFromBackgroundRef.current = false;
+          }, 500);
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  // Data sources
+  const { data: trackedWalletsData } = useGetTrackedWallets();
+  const { kols } = useKols({ socketManager: socketIOManagerPvp });
+  const { activeWallet } = useActiveWallet();
+
+  // Get user's wallet addresses (including bundle sub-wallets)
+  const userWalletAddresses = useMemo(() => {
+    const addresses = new Set<string>();
+    if (activeWallet?.publicKey) {
+      addresses.add(activeWallet.publicKey.toLowerCase());
+    }
+    // If it's a bundle, add all sub-wallet addresses
+    if (activeWallet && "wallets" in activeWallet) {
+      const bundle = activeWallet as { wallets: Array<{ publicKey: string }> };
+      bundle.wallets.forEach(w => {
+        addresses.add(w.publicKey.toLowerCase());
+      });
+    }
+    return addresses;
+  }, [activeWallet]);
+
+  // Get live trades from store
+  const liveTradeMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.live_trades.itemsMap)
+  );
+
+  // Create lookup maps for wallet info
+  const trackedWalletsMap = useMemo(() => {
+    const map = new Map<string, { name: string; emoji: string | null }>();
+    trackedWalletsData?.trackedWallets?.forEach(w => {
+      map.set(w.walletAddress.toLowerCase(), {
+        name: w.nickname || `Wallet ${w.walletAddress.slice(0, 4)}...`,
+        emoji: w.emoji || null,
+      });
+    });
+    return map;
+  }, [trackedWalletsData]);
+
+  const kolsMap = useMemo(() => {
+    const map = new Map<string, Kol>();
+    kols?.forEach(kol => {
+      // Map KOL's wallet address to the KOL object
+      if (kol.address) {
+        map.set(kol.address.toLowerCase(), kol);
+      }
+    });
+    return map;
+  }, [kols]);
+
+  // Get list of KOLs with Twitter handles for profile fetching
+  const kolsWithTwitter = useMemo(
+    () => (kols ?? []).filter(kol => kol.twitter),
+    [kols]
+  );
+
+  // Shared TrenchBench store data
+  const {
+    traderIndex,
+    tokenIndex,
+    holdingsMatrix,
+    selectedTokenMints: sharedSelectedTokens,
+    toggleToken: toggleSharedToken,
+    clearTokenSelections,
+  } = useTrenchBenchStore(
+    useShallow(state => ({
+      traderIndex: state.traderIndex,
+      tokenIndex: state.tokenIndex,
+      holdingsMatrix: state.holdingsMatrix,
+      selectedTokenMints: state.selectedTokenMints,
+      toggleToken: state.toggleToken,
+      clearTokenSelections: state.clearTokenSelections,
+    }))
+  );
+  const trenchLastSync = useTrenchBenchStore(state => state.lastSync);
+
+  // Sync local selection state from shared store
+  useEffect(() => {
+    const newSet = new Set(sharedSelectedTokens);
+    selectedBagMintsRef.current = newSet;
+    setSelectedBagMints(newSet);
+  }, [sharedSelectedTokens]);
+
+  // Derive token -> holders mapping from holdingsMatrix (inverted view)
+  // This replaces the locally-built tokenBagsRef for selection highlighting
+  const tokenHoldersMap = useMemo(() => {
+    const map = new Map<string, { traderId: string; amount: number }[]>();
+    holdingsMatrix.forEach((tokenAmounts, traderId) => {
+      tokenAmounts.forEach((amount, mintLower) => {
+        if (amount > 0) {
+          const existing = map.get(mintLower) || [];
+          existing.push({ traderId, amount });
+          map.set(mintLower, existing);
+        }
+      });
+    });
+    return map;
+  }, [holdingsMatrix]);
+
+  // Keep a ref for animation loop access
+  const tokenHoldersMapRef = useRef(tokenHoldersMap);
+  useEffect(() => {
+    tokenHoldersMapRef.current = tokenHoldersMap;
+  }, [tokenHoldersMap]);
+
+  // Sync bag selection from shared store (cross-widget selection sync)
+  // Creates bags from shared store data for visualization
+  useEffect(() => {
+    // Convert shared token selection to local state for highlighting
+    const newSelectedMints = new Set<string>(sharedSelectedTokens);
+
+    // If Intel Grid has selections and we had a KOL filter active, clear the filter
+    // (switching from KOL exploration to Intel Grid selection mode)
+    if (newSelectedMints.size > 0 && filteredKolIdRef.current) {
+      filteredKolIdRef.current = null;
+      setSelectedKolId(null);
+    }
+
+    // Create/update bags for selected tokens from shared store data
+    const canvas = canvasRef.current;
+    const width = canvas?.width || 800;
+    const height = canvas?.height || 600;
+
+    newSelectedMints.forEach(mintLower => {
+      // Check if bag already exists
+      const existingBag = tokenBagsRef.current.get(mintLower);
+      if (existingBag) return; // Already have this bag
+
+      // Get token metadata from shared store
+      const tokenData = tokenIndex.get(mintLower);
+      // Get holders from tokenHoldersMap (derived from holdingsMatrix)
+      const holders = tokenHoldersMapRef.current.get(mintLower) || [];
+
+      // Build holders array for the bag
+      const holdersArray = holders.map(h => ({
+        bubbleId: h.traderId,
+        amount: h.amount,
+      }));
+      const totalVolume = holders.reduce((sum, h) => sum + h.amount, 0);
+
+      // Calculate bag size based on holders
+      const volumeSize = Math.min(30, Math.log10(totalVolume + 1) * 12);
+      const kolSize = Math.min(15, holdersArray.length * 4);
+      const bagSize = 20 + volumeSize + kolSize;
+
+      // Create the bag with random position (will be positioned by physics)
+      tokenBagsRef.current.set(mintLower, {
+        mint: mintLower,
+        symbol: tokenData?.symbol || mintLower.slice(0, 6),
+        image: tokenData?.image || "",
+        x: width / 2 + (Math.random() - 0.5) * 100,
+        y: height / 2 + (Math.random() - 0.5) * 100,
+        targetX: width / 2,
+        targetY: height / 2,
+        size: bagSize,
+        kolCount: holdersArray.length,
+        totalVolume,
+        holders: holdersArray,
+      });
+    });
+
+    // Only update state if different
+    if (newSelectedMints.size !== selectedBagMints.size) {
+      setSelectedBagMints(newSelectedMints);
+      selectedBagMintsRef.current = newSelectedMints;
+    } else {
+      let isDifferent = false;
+      for (const mint of newSelectedMints) {
+        if (!selectedBagMints.has(mint)) {
+          isDifferent = true;
+          break;
+        }
+      }
+      if (isDifferent) {
+        setSelectedBagMints(newSelectedMints);
+        selectedBagMintsRef.current = newSelectedMints;
+      }
+    }
+  }, [sharedSelectedTokens, selectedBagMints, tokenIndex]);
+
+  // Fetch Twitter profile images for all KOLs
+  const kolTwitterProfiles = useQueries({
+    queries: kolsWithTwitter.map(kol => xUserProfileQueryOptions(kol.twitter)),
+  });
+
+  // Create stable avatar data string to avoid unnecessary re-renders
+  const kolAvatarDataKey = useMemo(() => {
+    return kolsWithTwitter
+      .map((kol, index) => {
+        const result = kolTwitterProfiles[index];
+        return result?.data?.avatarUrl
+          ? `${kol.name}:${result.data.avatarUrl}`
+          : "";
+      })
+      .filter(Boolean)
+      .join("|");
+  }, [kolsWithTwitter, kolTwitterProfiles]);
+
+  // Map KOL name -> avatar URL (only recalculate when actual avatar data changes)
+  const kolAvatarsMap = useMemo(() => {
+    const map = new Map<string, string>();
+    kolsWithTwitter.forEach((kol, index) => {
+      const result = kolTwitterProfiles[index];
+      if (result?.data?.avatarUrl) {
+        map.set(kol.name, result.data.avatarUrl);
+      }
+    });
+    return map;
+  }, [kolAvatarDataKey]);
+
+  // Load image helper
+  const loadImage = useCallback(
+    (url: string): Promise<HTMLImageElement | null> => {
+      return new Promise(resolve => {
+        if (imagesRef.current.has(url)) {
+          resolve(imagesRef.current.get(url) || null);
+          return;
+        }
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          imagesRef.current.set(url, img);
+          resolve(img);
+        };
+        img.onerror = () => {
+          imagesRef.current.set(url, null);
+          resolve(null);
+        };
+        img.src = url;
+      });
+    },
+    []
+  );
+
+  const resolveActorMetadata = useCallback(
+    (addressLower: string) => {
+      const isUser = userWalletAddresses.has(addressLower);
+      const kol = kolsMap.get(addressLower);
+      const tracked = trackedWalletsMap.get(addressLower);
+      const name = isUser
+        ? "You"
+        : kol?.name || tracked?.name || `Wallet ${addressLower.slice(0, 4)}...`;
+      const emoji = isUser ? "👤" : kol?.emoji || tracked?.emoji || null;
+      const icon =
+        isUser || !kol?.name ? null : (kolAvatarsMap.get(kol.name) ?? null);
+      const twitter = isUser ? null : kol?.twitter || null;
+      const source: "tracked" | "kol" | "user" = isUser
+        ? "user"
+        : kol
+          ? "kol"
+          : "tracked";
+      return { name, emoji, icon, twitter, source, isUser };
+    },
+    [kolsMap, kolAvatarsMap, trackedWalletsMap, userWalletAddresses]
+  );
+
+  const baseBubbleData = useMemo(() => {
+    const map = new Map<string, BaseBubbleData>();
+    traderIndex.forEach((metrics, address) => {
+      const id = address.toLowerCase();
+      const meta = resolveActorMetadata(id);
+      map.set(id, {
+        id,
+        name: meta.name,
+        icon: meta.icon,
+        emoji: meta.emoji,
+        source: meta.source,
+        isUser: meta.isUser,
+        twitter: meta.twitter,
+        buys: metrics.buys,
+        sells: metrics.sells,
+        buyVolume: metrics.buyVolumeSol,
+        sellVolume: metrics.sellVolumeSol,
+        netPosition: metrics.netPositionSol,
+        volume: metrics.buyVolumeSol + metrics.sellVolumeSol,
+        pnlUsd: metrics.totalPnlUsd,
+        avgMomentum: metrics.avgMomentum,
+        lastTradeTimestamp: metrics.lastTradeTimestamp,
+        winStreak: metrics.winStreak,
+        lossStreak: metrics.lossStreak,
+      });
+    });
+    return map;
+  }, [resolveActorMetadata, traderIndex, trenchLastSync]);
+
+  // Update existing bubbles when KOL avatars become available
+  useEffect(() => {
+    if (kolAvatarsMap.size === 0) return;
+
+    // Go through existing KOL bubbles and update their icons if they don't have one yet
+    bubblesRef.current.forEach((bubble, walletAddress) => {
+      if (bubble.source === "kol" && !bubble.icon) {
+        const kol = kolsMap.get(walletAddress);
+        if (kol?.name) {
+          const avatarUrl = kolAvatarsMap.get(kol.name);
+          if (avatarUrl) {
+            bubble.icon = avatarUrl;
+            // Preload the image
+            loadImage(avatarUrl);
+          }
+        }
+      }
+    });
+  }, [kolAvatarsMap, kolsMap, loadImage]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const width = canvas?.width || 800;
+    const height = canvas?.height || 600;
+
+    baseBubbleData.forEach(data => {
+      let bubble = bubblesRef.current.get(data.id);
+      if (!bubble) {
+        const startX = PADDING + Math.random() * (width - PADDING * 2);
+        const startY = PADDING + Math.random() * (height - PADDING * 2);
+        bubble = {
+          id: data.id,
+          name: data.name,
+          icon: data.icon,
+          emoji: data.emoji,
+          source: data.source,
+          isUser: data.isUser,
+          buys: data.buys,
+          sells: data.sells,
+          buyVolume: data.buyVolume,
+          sellVolume: data.sellVolume,
+          netPosition: data.netPosition,
+          volume: data.volume,
+          pnl: data.pnlUsd,
+          momentumSum: 0,
+          momentumVolume: 0,
+          avgMomentum: data.avgMomentum,
+          x: startX,
+          y: startY,
+          targetX: startX,
+          targetY: startY,
+          size: MIN_BUBBLE_SIZE,
+          pulse: 0,
+          clickPulse: 0,
+          lastTradeTimestamp: data.lastTradeTimestamp,
+          recentTrades: [],
+          twitter: data.twitter,
+          winStreak: data.winStreak,
+          lossStreak: data.lossStreak,
+          sessionPnl: data.pnlUsd,
+        };
+        bubblesRef.current.set(data.id, bubble);
+      } else {
+        bubble.name = data.name;
+        bubble.icon = data.icon;
+        bubble.emoji = data.emoji;
+        bubble.source = data.source;
+        bubble.isUser = data.isUser;
+        bubble.twitter = data.twitter;
+        bubble.buys = data.buys;
+        bubble.sells = data.sells;
+        bubble.buyVolume = data.buyVolume;
+        bubble.sellVolume = data.sellVolume;
+        bubble.netPosition = data.netPosition;
+        bubble.volume = data.volume;
+        bubble.pnl = data.pnlUsd;
+        bubble.avgMomentum = data.avgMomentum;
+        bubble.lastTradeTimestamp = data.lastTradeTimestamp;
+        bubble.winStreak = data.winStreak;
+        bubble.lossStreak = data.lossStreak;
+        bubble.sessionPnl = data.pnlUsd;
+      }
+    });
+
+    bubblesRef.current.forEach((bubble, id) => {
+      if (bubble.isUser) {
+        return;
+      }
+      if (!baseBubbleData.has(id)) {
+        bubblesRef.current.delete(id);
+      }
+    });
+
+    setStatsVersion(v => v + 1);
+  }, [baseBubbleData]);
+
+  // Track user wallet for creating user bubble
+  const userWalletKey = activeWallet?.publicKey?.toLowerCase() ?? null;
+
+  // Create/maintain user bubble when showUserBubble is enabled
+  useEffect(() => {
+    // Use lowercase for consistency with how KOL bubbles and Intel Grid store IDs
+    const userWalletKeyLower = userWalletKey?.toLowerCase() ?? null;
+
+    if (!showUserBubble || !userWalletKeyLower) {
+      // Remove user bubble when disabled
+      bubblesRef.current.forEach((bubble, id) => {
+        if (bubble.isUser) {
+          bubblesRef.current.delete(id);
+        }
+      });
+      return;
+    }
+
+    // Check if user bubble already exists (preserve stats!)
+    const existingUserBubble = bubblesRef.current.get(userWalletKeyLower);
+    if (existingUserBubble?.isUser) {
+      // User bubble already exists, don't recreate
+      return;
+    }
+
+    // Create user bubble at center (only if doesn't exist)
+    const canvas = canvasRef.current;
+    const width = canvas?.width || 800;
+    const height = canvas?.height || 600;
+    const startX = width / 2;
+    const startY = height / 2;
+
+    const userBubble: TraderBubble = {
+      id: userWalletKeyLower,
+      name: "You",
+      icon: null,
+      emoji: "👤",
+      source: "user",
+      isUser: true,
+      buys: 0,
+      sells: 0,
+      buyVolume: 0,
+      sellVolume: 0,
+      netPosition: 0,
+      volume: 0,
+      pnl: 0,
+      momentumSum: 0,
+      momentumVolume: 0,
+      avgMomentum: 0,
+      x: startX,
+      y: startY,
+      targetX: startX,
+      targetY: startY,
+      size: MIN_BUBBLE_SIZE,
+      pulse: 0,
+      clickPulse: 0,
+      lastTradeTimestamp: Date.now(),
+      recentTrades: [],
+      twitter: null,
+      winStreak: 0,
+      lossStreak: 0,
+      sessionPnl: 0,
+    };
+    bubblesRef.current.set(userWalletKeyLower, userBubble);
+  }, [showUserBubble, userWalletKey]);
+
+  // Process live trades for visual effects and recent trade history
+  useEffect(() => {
+    const trades = Array.from(liveTradeMap.values());
+    if (trades.length === 0) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    const width = canvas?.width || 800;
+    const height = canvas?.height || 600;
+
+    trades.forEach((trade: LiveTrade) => {
+      if (processedTradesRef.current.has(trade.signature)) {
+        return;
+      }
+      processedTradesRef.current.add(trade.signature);
+
+      const makerLower = trade.maker.toLowerCase();
+      const tradeTimestamp = Number(trade.timestamp) / 1_000_000; // Convert nano to ms
+
+      // sol_amount from backend might be in lamports or human-readable SOL
+      // Detect format: if it's a large integer (>= 1 million, no decimal), it's lamports
+      const rawSolStr = trade.sol_amount || "0";
+      const rawSol = parseFloat(rawSolStr);
+      const isLikelyLamports = rawSol >= 1_000_000 && !rawSolStr.includes(".");
+      const solAmount = isLikelyLamports ? rawSol / 1_000_000_000 : rawSol;
+
+      const tokenAmount = parseFloat(trade.token_amount || "0");
+      const isBuy = trade.type === "buy";
+
+      let bubble = bubblesRef.current.get(makerLower);
+      if (!bubble) {
+        const meta = resolveActorMetadata(makerLower);
+        const startX = PADDING + Math.random() * (width - PADDING * 2);
+        const startY = PADDING + Math.random() * (height - PADDING * 2);
+        bubble = {
+          id: makerLower,
+          name: meta.name,
+          icon: meta.icon,
+          emoji: meta.emoji,
+          source: meta.source,
+          isUser: meta.isUser,
+          buys: 0,
+          sells: 0,
+          buyVolume: 0,
+          sellVolume: 0,
+          netPosition: 0,
+          volume: 0,
+          pnl: 0,
+          momentumSum: 0,
+          momentumVolume: 0,
+          avgMomentum: 0,
+          x: startX,
+          y: startY,
+          targetX: startX,
+          targetY: startY,
+          size: MIN_BUBBLE_SIZE,
+          pulse: 0,
+          clickPulse: 0,
+          lastTradeTimestamp: tradeTimestamp,
+          recentTrades: [],
+          twitter: meta.twitter,
+          winStreak: 0,
+          lossStreak: 0,
+          sessionPnl: 0,
+        };
+        bubblesRef.current.set(makerLower, bubble);
+        if (meta.icon) {
+          loadImage(meta.icon);
+        }
+      }
+
+      bubble.lastTradeTimestamp = tradeTimestamp;
+      bubble.recentTrades.unshift({
+        type: isBuy ? "buy" : "sell",
+        amount: solAmount,
+        tokenAmount: tokenAmount,
+        token: trade.token_symbol || "???",
+        tokenMint: trade.mint,
+        tokenImage: trade.token_image || "",
+        timestamp: tradeTimestamp,
+      });
+      if (bubble.recentTrades.length > 10) {
+        bubble.recentTrades.pop();
+      }
+
+      if (!justReturnedFromBackgroundRef.current) {
+        bubble.pulse = 1;
+        const text = `${isBuy ? "+" : "-"}${formatSol(solAmount)} SOL`;
+        floatingTextsRef.current.push({
+          x: bubble.x + (Math.random() - 0.5) * 20,
+          y: bubble.y,
+          text,
+          color: isBuy ? COLOR_PROFIT : COLOR_LOSS,
+          alpha: 1,
+          vy: isBuy ? 1.2 : -1.2,
+        });
+
+        pulsesRef.current.push({
+          x: bubble.x,
+          y: bubble.y,
+          radius: bubble.size / 2,
+          color: isBuy ? COLOR_PROFIT : COLOR_LOSS,
+          alpha: 0.8,
+        });
+      }
+    });
+
+    if (processedTradesRef.current.size > 500) {
+      const entries = Array.from(processedTradesRef.current);
+      entries.slice(0, entries.length - 500).forEach(sig => {
+        processedTradesRef.current.delete(sig);
+      });
+    }
+
+    // Note: maxBubbles is now a display-only limit, not data eviction.
+    // Filtering happens at render time in the animation loop.
+
+    // Memory cleanup: Remove truly stale bubbles to prevent unbounded growth.
+    // This is a high limit (2000) and time-based (no trades in 2 hours).
+    // Much more permissive than the display limit, purely for memory management.
+    const MEMORY_LIMIT = 2000;
+    const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+    const now = Date.now();
+
+    if (bubblesRef.current.size > MEMORY_LIMIT) {
+      const bubbleEntries = Array.from(bubblesRef.current.entries());
+      // Sort by last trade timestamp (oldest first)
+      bubbleEntries.sort(
+        (a, b) => a[1].lastTradeTimestamp - b[1].lastTradeTimestamp
+      );
+
+      let toRemove = bubblesRef.current.size - MEMORY_LIMIT;
+      for (const [id, bubble] of bubbleEntries) {
+        if (toRemove <= 0) break;
+        // Only remove if stale (no trades in 2 hours) and not the user
+        const isStale = now - bubble.lastTradeTimestamp > STALE_THRESHOLD_MS;
+        if (isStale && !bubble.isUser) {
+          bubblesRef.current.delete(id);
+          toRemove--;
+        }
+      }
+    }
+
+    // Override user bubble's PNL with accurate value from closed positions API
+    // (The accumulated PNL from trade injection uses current SOL price, not historical)
+    if (showUserBubble && userWalletAddresses.size > 0) {
+      for (const walletAddr of userWalletAddresses) {
+        const userBubble = bubblesRef.current.get(walletAddr.toLowerCase());
+        if (userBubble && userBubble.isUser) {
+          userBubble.pnl = userRealizedPnlRef.current;
+          break; // Only one user bubble
+        }
+      }
+    }
+
+    // Trigger stats update
+    setStatsVersion(v => v + 1);
+  }, [liveTradeMap, loadImage, resolveActorMetadata]);
+
+  // Animation loop
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+
+    let lastTime = performance.now();
+
+    const animate = (currentTime: number) => {
+      const _deltaTime = (currentTime - lastTime) / 1000;
+      lastTime = currentTime;
+
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Get all bubbles
+      const bubbles = Array.from(bubblesRef.current.values());
+
+      // Calculate max volume for sizing
+      const maxVolume = Math.max(1, ...bubbles.map(b => b.volume));
+
+      // =======================================================================
+      // BAGS MODE: Token circles with gravitational pull from KOL holders
+      // =======================================================================
+      const currentViewMode = viewModeRef.current;
+      const currentShowBags = showBagsRef.current;
+      const currentIntelGridSelections = selectedBagMintsRef.current;
+
+      // Always build bags in performance mode (needed for KOL click to show connections)
+      const shouldBuildBags = currentViewMode === "performance";
+      // Only draw bags if: showBags is enabled OR there's an Intel Grid selection OR KOL is hovered/filtered
+      const currentHoveredKolForBags = hoveredKolIdRef.current;
+      const currentFilteredKolForBags = filteredKolIdRef.current;
+      const shouldDrawBags =
+        (currentShowBags ||
+          currentIntelGridSelections.size > 0 ||
+          currentHoveredKolForBags ||
+          currentFilteredKolForBags) &&
+        currentViewMode === "performance";
+
+      if (shouldBuildBags) {
+        // Build token bags from recent trades with holder amounts
+        const tokenMap = new Map<
+          string,
+          {
+            mint: string;
+            symbol: string;
+            image: string;
+            holders: Map<string, number>; // bubbleId -> token amount
+            totalVolume: number;
+          }
+        >();
+
+        // Track KOLs who have explicitly sold (position went to 0) - needed to remove them from Intel Grid bags
+        const soldKols = new Map<string, Set<string>>(); // tokenMint -> Set<bubbleId> who sold
+
+        bubbles.forEach(bubble => {
+          // Process trades oldest-first for correct net position calculation
+          // (recentTrades is stored newest-first via unshift)
+          const tradesOldestFirst = [...bubble.recentTrades].reverse();
+          tradesOldestFirst.forEach(trade => {
+            // Use TOKEN amounts for position tracking (not SOL) - this correctly detects exits
+            // when prices change. E.g., buy 1 SOL (1000 tokens), sell all tokens for 0.5 SOL
+            // Token position: 1000 - 1000 = 0 (correctly shows exit)
+            // SOL position: 1 - 0.5 = 0.5 (incorrectly shows still holding)
+            const tokenTradeAmount =
+              trade.type === "buy" ? trade.tokenAmount : -trade.tokenAmount;
+
+            const existing = tokenMap.get(trade.tokenMint);
+            if (existing) {
+              const currentTokens = existing.holders.get(bubble.id) || 0;
+              const newTokenAmount = currentTokens + tokenTradeAmount;
+
+              // Only keep positive positions (still holding tokens)
+              // Use small threshold to handle floating point
+              if (newTokenAmount > 0.0001) {
+                existing.holders.set(bubble.id, newTokenAmount);
+                // If they bought back in, remove from soldKols
+                soldKols.get(trade.tokenMint)?.delete(bubble.id);
+              } else {
+                existing.holders.delete(bubble.id);
+                // Track that this KOL sold completely
+                if (!soldKols.has(trade.tokenMint)) {
+                  soldKols.set(trade.tokenMint, new Set());
+                }
+                soldKols.get(trade.tokenMint)!.add(bubble.id);
+              }
+              existing.totalVolume += trade.amount; // Volume is always positive SOL
+            } else {
+              // Only create entry if it's a buy (positive position)
+              if (tokenTradeAmount > 0) {
+                const holders = new Map<string, number>();
+                holders.set(bubble.id, tokenTradeAmount);
+                tokenMap.set(trade.tokenMint, {
+                  mint: trade.tokenMint,
+                  symbol: trade.token,
+                  image: trade.tokenImage,
+                  holders,
+                  totalVolume: trade.amount,
+                });
+              }
+            }
+          });
+        });
+
+        // Sort tokens by holder count and volume, keep top 10
+        const sortedTokens = Array.from(tokenMap.values())
+          .sort(
+            (a, b) =>
+              b.holders.size * b.totalVolume - a.holders.size * a.totalVolume
+          )
+          .slice(0, 10);
+
+        // Update or create token bags
+        const currentBags = tokenBagsRef.current;
+        const activeMints = new Set(sortedTokens.map(t => t.mint));
+
+        // Remove bags for tokens no longer active (but keep Intel Grid selections)
+        for (const mint of currentBags.keys()) {
+          if (!activeMints.has(mint) && !currentIntelGridSelections.has(mint)) {
+            currentBags.delete(mint);
+          }
+        }
+
+        // Define userWalletKeyLower at this scope level for use in both sections below
+        const userWalletKeyLower = userWalletKey?.toLowerCase() ?? null;
+
+        // For Intel Grid selections not in top 10, sync positions from tokenMap
+        // Handle both user position AND remove KOLs who have sold
+        for (const mint of currentIntelGridSelections) {
+          if (activeMints.has(mint)) continue; // Will be handled in sortedTokens loop
+
+          const bag = currentBags.get(mint);
+          if (!bag) {
+            console.warn(
+              "[Vantage] No bag found for Intel Grid selection (not in top 10):",
+              mint.slice(0, 8)
+            );
+            continue;
+          }
+
+          // DON'T remove Intel Grid holders based on soldKols here
+          // Intel Grid holders are authoritative - they have complete position data from backend
+          // Vantage's soldKols is based on incomplete trade history (only since page load)
+          // All holders in bags not in top 10 came from Intel Grid, so we trust them
+
+          // Handle user position (we have complete user trade data)
+          if (userWalletKey && userWalletKeyLower) {
+            // Check if user has position in this token from tokenMap (now uses token amounts)
+            const tokenData = tokenMap.get(mint);
+            const userTokenAmount = tokenData?.holders.get(userWalletKey) ?? 0;
+            // Use case-insensitive comparison since Intel Grid lowercases addresses
+            const existingUserIndex = bag.holders.findIndex(
+              h => h.bubbleId.toLowerCase() === userWalletKeyLower
+            );
+
+            if (userTokenAmount > 0.0001) {
+              // User has a position - add or update
+              if (existingUserIndex >= 0) {
+                bag.holders[existingUserIndex].amount = userTokenAmount;
+              } else {
+                // Use lowercase to match Intel Grid's format
+                bag.holders = [
+                  ...bag.holders,
+                  { bubbleId: userWalletKeyLower, amount: userTokenAmount },
+                ];
+              }
+            } else if (existingUserIndex >= 0) {
+              // User sold all tokens - remove them
+              bag.holders = bag.holders.filter(
+                (_, i) => i !== existingUserIndex
+              );
+            }
+          }
+
+          bag.kolCount = bag.holders.length;
+        }
+
+        // Update/create bags for active tokens
+        sortedTokens.forEach(token => {
+          let bag = currentBags.get(token.mint);
+
+          // If this bag is selected from Intel Grid, don't overwrite its holder data
+          // Intel Grid provides authoritative, filtered holder data (excludes exited KOLs)
+          const isIntelGridSelected = currentIntelGridSelections.has(
+            token.mint
+          );
+
+          // Filter out holders with negligible amounts (essentially exited)
+          // Now using token amounts (not SOL), so use very small threshold
+          const holdersArray = Array.from(token.holders.entries())
+            .map(([id, amount]) => ({ bubbleId: id, amount }))
+            .filter(h => h.amount > 0.0001); // Only include holders with tokens remaining
+          const totalVolume = holdersArray.reduce(
+            (sum, h) => sum + h.amount,
+            0
+          );
+
+          // Size based on total volume (log scale for better distribution)
+          const volumeSize = Math.min(30, Math.log10(totalVolume + 1) * 12);
+          const kolSize = Math.min(15, holdersArray.length * 4);
+          const bagSize = 20 + volumeSize + kolSize;
+
+          if (!bag) {
+            // Initialize new bag at center
+            bag = {
+              mint: token.mint,
+              symbol: token.symbol,
+              image: token.image,
+              x: canvas.width / 2,
+              y: canvas.height / 2,
+              targetX: canvas.width / 2,
+              targetY: canvas.height / 2,
+              size: bagSize,
+              kolCount: holdersArray.length,
+              totalVolume,
+              holders: holdersArray,
+            };
+            currentBags.set(token.mint, bag);
+          } else if (!isIntelGridSelected) {
+            // Not an Intel Grid selection - fully replace holder data from live trades
+            bag.symbol = token.symbol;
+            bag.image = token.image;
+            bag.kolCount = holdersArray.length;
+            bag.totalVolume = totalVolume;
+            bag.holders = holdersArray;
+            bag.size = bagSize;
+          } else {
+            // Intel Grid selection - MERGE live trade data with existing holders
+            // IMPORTANT: Trust Intel Grid's holder list - it has complete position data from backend
+            // Vantage's soldKols is based on incomplete trade history (only since page load)
+            // so we should NOT remove Intel Grid holders based on soldKols
+            const existingHoldersMap = new Map(
+              bag.holders.map(h => [h.bubbleId.toLowerCase(), h])
+            );
+
+            // Track which holders came from Intel Grid (to distinguish from live trade additions)
+            const intelGridHolderIds = new Set(
+              bag.holders.map(h => h.bubbleId.toLowerCase())
+            );
+
+            // Only remove KOLs who were added from LIVE TRADES (not Intel Grid) and then sold
+            // Intel Grid holders are authoritative - if they say someone holds >= 5%, trust it
+            const soldKolsForToken = soldKols.get(token.mint);
+            if (soldKolsForToken) {
+              for (const soldKolId of soldKolsForToken) {
+                const soldKolIdLower = soldKolId.toLowerCase();
+                // Only remove if this KOL was added from live trades, NOT from Intel Grid
+                if (!intelGridHolderIds.has(soldKolIdLower)) {
+                  existingHoldersMap.delete(soldKolIdLower);
+                }
+              }
+            }
+
+            // Process holders from live trades: add new holders, update amounts for existing
+            holdersArray.forEach(liveHolder => {
+              const bubbleIdLower = liveHolder.bubbleId.toLowerCase();
+              const existing = existingHoldersMap.get(bubbleIdLower);
+
+              if (existing) {
+                // Update existing holder's amount from live data
+                existing.amount = liveHolder.amount;
+              } else {
+                // New KOL bought in (not from original Intel Grid list) - add them
+                existingHoldersMap.set(bubbleIdLower, {
+                  bubbleId: bubbleIdLower,
+                  amount: liveHolder.amount,
+                });
+              }
+            });
+
+            // Now handle user position specifically - check if user sold
+            // This is the authoritative check for user position
+            if (userWalletKeyLower) {
+              const tokenData = tokenMap.get(token.mint);
+              const userTokenAmount =
+                tokenData?.holders.get(userWalletKey!) ?? 0;
+
+              if (userTokenAmount > 0.0001) {
+                // User still holds - update their amount
+                existingHoldersMap.set(userWalletKeyLower, {
+                  bubbleId: userWalletKeyLower,
+                  amount: userTokenAmount,
+                });
+              } else {
+                // User sold all tokens - remove them from the bag
+                existingHoldersMap.delete(userWalletKeyLower);
+              }
+            }
+
+            // Convert back to array
+            bag.holders = Array.from(existingHoldersMap.values());
+            bag.kolCount = bag.holders.length;
+            bag.totalVolume = bag.holders.reduce((sum, h) => sum + h.amount, 0);
+          }
+
+          // Calculate weighted target position based on holder positions
+          // Use bag.holders (which includes Intel Grid holders) not just holdersArray (live trades only)
+          let totalWeight = 0;
+          let weightedX = 0;
+          let weightedY = 0;
+
+          bag.holders.forEach(({ bubbleId, amount }) => {
+            const holderBubble = bubblesRef.current.get(bubbleId);
+            if (holderBubble) {
+              const weight = amount; // Weight by position amount
+              totalWeight += weight;
+              weightedX += holderBubble.x * weight;
+              weightedY += holderBubble.y * weight;
+            }
+          });
+
+          if (totalWeight > 0) {
+            bag.targetX = weightedX / totalWeight;
+            bag.targetY = weightedY / totalWeight;
+          }
+        });
+
+        // Update bag positions with physics
+        const bags = Array.from(currentBags.values());
+
+        bags.forEach(bag => {
+          // Move toward target (gravitational pull from holders)
+          bag.x += (bag.targetX - bag.x) * 0.05;
+          bag.y += (bag.targetY - bag.y) * 0.05;
+
+          // Repulsion from other bags
+          bags.forEach(otherBag => {
+            if (otherBag.mint === bag.mint) return;
+
+            const dx = bag.x - otherBag.x;
+            const dy = bag.y - otherBag.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minDist = (bag.size + otherBag.size) / 2 + 15;
+
+            if (dist < minDist && dist > 0) {
+              const force = ((minDist - dist) / dist) * 0.3;
+              bag.x += dx * force;
+              bag.y += dy * force;
+            }
+          });
+
+          // Repulsion from KOL bubbles (keep minimum distance for visible connection lines)
+          bubbles.forEach(bubble => {
+            const dx = bag.x - bubble.x;
+            const dy = bag.y - bubble.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minDist = (bag.size + bubble.size) / 2 + 30; // Ensure visible connection line
+
+            if (dist < minDist && dist > 0) {
+              const force = ((minDist - dist) / dist) * 0.4;
+              bag.x += dx * force;
+              bag.y += dy * force;
+            }
+          });
+
+          // Keep within bounds
+          bag.x = Math.max(
+            PADDING + bag.size,
+            Math.min(canvas.width - PADDING - bag.size, bag.x)
+          );
+          bag.y = Math.max(
+            PADDING + bag.size,
+            Math.min(canvas.height - PADDING - bag.size, bag.y)
+          );
+        });
+
+        // Only draw connections and bags if enabled
+        if (shouldDrawBags) {
+          // Draw connection lines from bags to their holders (draw first, under everything)
+          const currentSelectedBags = selectedBagMintsRef.current;
+          const currentHoveredKol = hoveredKolIdRef.current;
+          const currentHoveredBag = hoveredBagMintRef.current;
+          const currentFilteredKol = filteredKolIdRef.current;
+          const activeConnections = new Set<string>();
+
+          // First pass: determine which connections should be highlighted
+          const highlightedConnections = new Set<string>();
+          bags.forEach(bag => {
+            // Skip if showBags is off and this isn't an Intel Grid selected bag
+            if (
+              !currentShowBags &&
+              currentSelectedBags.size > 0 &&
+              !currentSelectedBags.has(bag.mint)
+            ) {
+              return;
+            }
+            bag.holders.forEach(({ bubbleId }) => {
+              const connectionKey = `${bag.mint}-${bubbleId}`;
+              // Highlight if: selected bag, hovered KOL, hovered bag, or filtered KOL
+              if (
+                currentSelectedBags.has(bag.mint) ||
+                currentHoveredKol === bubbleId ||
+                currentHoveredBag === bag.mint ||
+                currentFilteredKol === bubbleId
+              ) {
+                highlightedConnections.add(connectionKey);
+              }
+            });
+          });
+
+          // Check if anything is being highlighted (to dim non-highlighted)
+          const hasHighlight =
+            currentSelectedBags.size > 0 ||
+            currentHoveredKol ||
+            currentHoveredBag ||
+            currentFilteredKol;
+
+          bags.forEach(bag => {
+            // Check if this bag belongs to hovered or filtered KOL
+            const belongsToHoveredKol =
+              currentHoveredKol &&
+              bag.holders.some(h => h.bubbleId === currentHoveredKol);
+            const belongsToFilteredKol =
+              currentFilteredKol &&
+              bag.holders.some(h => h.bubbleId === currentFilteredKol);
+
+            // Skip bags not belonging to filtered KOL (unless also belongs to hovered KOL)
+            if (
+              currentFilteredKol &&
+              !belongsToFilteredKol &&
+              !belongsToHoveredKol
+            ) {
+              return;
+            }
+
+            // If showBags is off, only show bags for: Intel Grid selection, hovered KOL, or filtered KOL
+            if (!currentShowBags) {
+              if (
+                currentSelectedBags.size > 0 &&
+                !currentSelectedBags.has(bag.mint) &&
+                !belongsToHoveredKol &&
+                !belongsToFilteredKol
+              ) {
+                return;
+              }
+              // When no Intel Grid selection, only show bags for hovered or filtered KOL
+              if (
+                currentSelectedBags.size === 0 &&
+                !belongsToHoveredKol &&
+                !belongsToFilteredKol
+              ) {
+                return;
+              }
+            }
+
+            bag.holders.forEach(({ bubbleId, amount }) => {
+              const holderBubble = bubblesRef.current.get(bubbleId);
+              if (holderBubble) {
+                const connectionKey = `${bag.mint}-${bubbleId}`;
+                activeConnections.add(connectionKey);
+
+                // Get or initialize connection progress
+                let progress = connectionProgressRef.current.get(connectionKey);
+                if (progress === undefined) {
+                  progress = 0;
+                  connectionProgressRef.current.set(connectionKey, 0);
+                }
+
+                // Animate progress toward 1
+                if (progress < 1) {
+                  progress = Math.min(1, progress + _deltaTime * 3); // Draw in over ~0.33s
+                  connectionProgressRef.current.set(connectionKey, progress);
+                }
+
+                // Determine if this connection is highlighted
+                const isHighlighted = highlightedConnections.has(connectionKey);
+                const dimmed = hasHighlight && !isHighlighted;
+
+                // Line opacity based on amount relative to total (safeguard against division by zero)
+                const safeTotal = bag.totalVolume || 1;
+                const ratio = amount / safeTotal;
+
+                // Spawn flow particles only for highlighted connections
+                if (
+                  isHighlighted &&
+                  progress >= 1 &&
+                  Math.random() < _deltaTime * 2
+                ) {
+                  flowParticlesRef.current.push({
+                    connectionKey,
+                    mint: bag.mint,
+                    bubbleId,
+                    progress: 0,
+                    speed: 0.3 + ratio * 0.4, // Faster for larger positions
+                    size: 2 + ratio * 3,
+                    alpha: 0.8,
+                  });
+                }
+                const baseAlpha = 0.1 + ratio * 0.3;
+
+                // Blue when highlighted, white otherwise, dimmed if something else is highlighted
+                let alpha = baseAlpha * progress;
+                if (isHighlighted) {
+                  alpha = baseAlpha * 1.5 * progress;
+                  ctx.strokeStyle = `rgba(83, 177, 253, ${alpha})`;
+                  ctx.lineWidth = 2 + ratio * 3;
+                } else if (dimmed) {
+                  alpha = baseAlpha * 0.15 * progress;
+                  ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                  ctx.lineWidth = 1 + ratio;
+                } else {
+                  alpha = baseAlpha * 0.4 * progress;
+                  ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                  ctx.lineWidth = 1 + ratio * 2;
+                }
+
+                // Draw line from bag toward bubble based on progress
+                const endX = bag.x + (holderBubble.x - bag.x) * progress;
+                const endY = bag.y + (holderBubble.y - bag.y) * progress;
+
+                ctx.beginPath();
+                ctx.moveTo(bag.x, bag.y);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+              }
+            });
+          });
+
+          // Update and draw flow particles (only on highlighted connections)
+          flowParticlesRef.current = flowParticlesRef.current.filter(
+            particle => {
+              // Only keep particles for highlighted connections
+              if (!highlightedConnections.has(particle.connectionKey))
+                return false;
+
+              particle.progress += particle.speed * _deltaTime;
+              particle.alpha = Math.max(0, 0.8 - particle.progress * 0.3);
+
+              if (particle.progress >= 1) return false; // Remove completed particles
+
+              // Find connection endpoints using stored references
+              const bag = tokenBagsRef.current.get(particle.mint);
+              const bubble = bubblesRef.current.get(particle.bubbleId);
+
+              if (!bag || !bubble) return false;
+
+              // Calculate position along line
+              const x = bag.x + (bubble.x - bag.x) * particle.progress;
+              const y = bag.y + (bubble.y - bag.y) * particle.progress;
+
+              // Draw particle in blue
+              ctx.fillStyle = `rgba(83, 177, 253, ${particle.alpha})`;
+              ctx.beginPath();
+              ctx.arc(x, y, particle.size, 0, Math.PI * 2);
+              ctx.fill();
+
+              return true;
+            }
+          );
+
+          // Clean up old connections that no longer exist
+          for (const key of connectionProgressRef.current.keys()) {
+            if (!activeConnections.has(key)) {
+              connectionProgressRef.current.delete(key);
+            }
+          }
+
+          // Draw bags (after lines, but we'll draw them again after bubbles)
+          // Store bags to draw later (after bubbles)
+          // Actually let's draw bags now but make them semi-transparent
+        } // End shouldDrawBags
+      }
+
+      // =======================================================================
+      // STREAK MODE: Fire particles for hot streaks
+      // =======================================================================
+      if (currentViewMode === "streak") {
+        // Draw streak axis labels
+        ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+        ctx.font = "10px -apple-system, BlinkMacSystemFont, sans-serif";
+
+        // Left: Cold streak
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "rgba(59, 130, 246, 0.5)"; // blue
+        ctx.fillText("❄️ COLD", 8, canvas.height / 2);
+
+        // Right: Hot streak
+        ctx.textAlign = "right";
+        ctx.fillStyle = "rgba(249, 115, 22, 0.5)"; // orange
+        ctx.fillText("HOT 🔥", canvas.width - 8, canvas.height / 2);
+
+        // Top: Winners
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = COLOR_PROFIT;
+        ctx.fillText("↑ WINNING", canvas.width / 2, 8);
+
+        // Bottom: Losers
+        ctx.textBaseline = "bottom";
+        ctx.fillStyle = COLOR_LOSS;
+        ctx.fillText("↓ LOSING", canvas.width / 2, canvas.height - 8);
+
+        // Update and spawn fire particles for hot streak bubbles
+        bubbles.forEach(bubble => {
+          // Simulate streak based on P/L direction and recent trades
+          // Win streak if P/L is positive and recent buys > sells
+          // For now, derive streak from pnl and activity
+          const isWinning = bubble.pnl > 0;
+          const activityStrength = Math.min(10, bubble.recentTrades.length);
+
+          // Update streaks based on current state
+          if (isWinning && activityStrength > 0) {
+            bubble.winStreak = Math.min(
+              10,
+              Math.floor(bubble.pnl / 500) + activityStrength
+            );
+            bubble.lossStreak = 0;
+          } else if (!isWinning && activityStrength > 0) {
+            bubble.lossStreak = Math.min(
+              10,
+              Math.floor(Math.abs(bubble.pnl) / 500) + activityStrength
+            );
+            bubble.winStreak = 0;
+          }
+          bubble.sessionPnl = bubble.pnl;
+
+          // Spawn fire particles for hot streaks (winStreak >= 3)
+          if (bubble.winStreak >= 3 && Math.random() < 0.3) {
+            const particleCount = Math.min(3, Math.floor(bubble.winStreak / 2));
+            for (let i = 0; i < particleCount; i++) {
+              const angle = Math.random() * Math.PI * 2;
+              const distance = bubble.size / 2 + Math.random() * 5;
+              fireParticlesRef.current.push({
+                x: bubble.x + Math.cos(angle) * distance,
+                y: bubble.y + Math.sin(angle) * distance,
+                vx: (Math.random() - 0.5) * 1.5,
+                vy: -1 - Math.random() * 2, // Float upward
+                size: 3 + Math.random() * 4,
+                alpha: 0.8 + Math.random() * 0.2,
+                color: Math.random() > 0.3 ? "#f97316" : "#fbbf24", // orange or yellow
+                bubbleId: bubble.id,
+              });
+            }
+          }
+
+          // Spawn ice particles for cold streaks (lossStreak >= 3)
+          if (bubble.lossStreak >= 3 && Math.random() < 0.2) {
+            const particleCount = Math.min(
+              2,
+              Math.floor(bubble.lossStreak / 3)
+            );
+            for (let i = 0; i < particleCount; i++) {
+              const angle = Math.random() * Math.PI * 2;
+              const distance = bubble.size / 2 + Math.random() * 5;
+              fireParticlesRef.current.push({
+                x: bubble.x + Math.cos(angle) * distance,
+                y: bubble.y + Math.sin(angle) * distance,
+                vx: (Math.random() - 0.5) * 0.8,
+                vy: 0.5 + Math.random() * 1, // Float downward (falling)
+                size: 2 + Math.random() * 3,
+                alpha: 0.6 + Math.random() * 0.3,
+                color: "#60a5fa", // blue
+                bubbleId: bubble.id,
+              });
+            }
+          }
+        });
+
+        // Update and draw fire/ice particles
+        fireParticlesRef.current = fireParticlesRef.current.filter(particle => {
+          // Update position
+          particle.x += particle.vx;
+          particle.y += particle.vy;
+          particle.alpha -= 0.02;
+          particle.size *= 0.97;
+
+          // Draw particle
+          if (particle.alpha > 0 && particle.size > 0.5) {
+            ctx.beginPath();
+            ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+            ctx.fillStyle = particle.color
+              .replace(")", `, ${particle.alpha})`)
+              .replace("rgb", "rgba")
+              .replace("#", "");
+            // Convert hex to rgba
+            const hex = particle.color;
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${particle.alpha})`;
+            ctx.fill();
+            return true;
+          }
+          return false;
+        });
+
+        // Limit particles
+        if (fireParticlesRef.current.length > 200) {
+          fireParticlesRef.current = fireParticlesRef.current.slice(-200);
+        }
+      }
+
+      // =====================================================================
+      // DISPLAY FILTERING: Show top N by volume + holders of selected tokens
+      // The slider is a display-only limit, not data eviction.
+      // All bubbles remain tracked, but only the display set is rendered.
+      // =====================================================================
+      const currentMaxBubbles = maxBubblesRef.current;
+      const currentSelectedTokens = selectedBagMintsRef.current;
+
+      // Build display set: top N by volume
+      const sortedByVolume = [...bubbles].sort((a, b) => b.volume - a.volume);
+      const topNIds = new Set(
+        sortedByVolume.slice(0, currentMaxBubbles).map(b => b.id)
+      );
+
+      // Add holders of selected tokens (from Intel Grid) even if outside top N
+      if (currentSelectedTokens.size > 0) {
+        for (const mint of currentSelectedTokens) {
+          const mintLower = mint.toLowerCase();
+          const holders = tokenHoldersMapRef.current.get(mintLower);
+          if (holders) {
+            holders.forEach(h => topNIds.add(h.traderId));
+          }
+        }
+      }
+
+      // Always show user bubble if it exists
+      if (userWalletKey) {
+        topNIds.add(userWalletKey);
+      }
+
+      const displayBubbleIds = topNIds;
+
+      // Update and draw bubbles
+      bubbles.forEach(bubble => {
+        // Calculate target position based on view mode
+        if (currentViewMode === "streak") {
+          // STREAK MODE: X = streak (cold left, hot right), Y = session P/L (losing bottom, winning top)
+          const maxStreak = Math.max(
+            1,
+            ...bubbles.map(b => Math.max(b.winStreak, b.lossStreak))
+          );
+          const maxSessionPnl = Math.max(
+            1000,
+            ...bubbles.map(b => Math.abs(b.sessionPnl))
+          );
+
+          // X: streak normalized (-1 for cold, +1 for hot)
+          const streakValue =
+            bubble.winStreak > 0 ? bubble.winStreak : -bubble.lossStreak;
+          const streakNorm = Math.max(-1, Math.min(1, streakValue / maxStreak));
+
+          // Y: session P/L normalized (1 for winning, -1 for losing)
+          const pnlNorm = Math.max(
+            -1,
+            Math.min(1, bubble.sessionPnl / maxSessionPnl)
+          );
+
+          // Add deterministic jitter
+          const jitterStrength = 0.08;
+          const jitterX =
+            getJitter(bubble.id, 1) * canvas.width * jitterStrength;
+          const jitterY =
+            getJitter(bubble.id, 2) * canvas.height * jitterStrength;
+
+          bubble.targetX =
+            canvas.width / 2 +
+            streakNorm * (canvas.width / 2 - PADDING) +
+            jitterX;
+          bubble.targetY =
+            canvas.height / 2 -
+            pnlNorm * (canvas.height / 2 - PADDING) +
+            jitterY;
+        } else {
+          // PERFORMANCE MODE: P/L (X) vs Y-axis mode (Momentum or Buy/Sell Ratio)
+          // X: P/L normalized (loss left, profit right)
+          const maxPnl = Math.max(1000, ...bubbles.map(b => Math.abs(b.pnl)));
+          const pnlNorm = Math.max(-1, Math.min(1, bubble.pnl / maxPnl));
+
+          // Add deterministic jitter based on bubble ID (±10% of canvas size)
+          const jitterStrength = 0.1;
+          const jitterX =
+            getJitter(bubble.id, 1) * canvas.width * jitterStrength;
+          const jitterY =
+            getJitter(bubble.id, 2) * canvas.height * jitterStrength;
+
+          bubble.targetX =
+            canvas.width / 2 + pnlNorm * (canvas.width / 2 - PADDING) + jitterX;
+
+          const currentYAxisMode = yAxisModeRef.current;
+          if (currentYAxisMode === "momentum") {
+            // Momentum alignment: positive = buying pumping tokens (top), negative = buying dipping tokens (bottom)
+            // Normalize to ±50% range to create good spread
+            const maxMomentum = Math.max(
+              50,
+              ...bubbles.map(b => Math.abs(b.avgMomentum))
+            );
+            const momentumNorm = Math.max(
+              -1,
+              Math.min(1, bubble.avgMomentum / maxMomentum)
+            );
+            bubble.targetY =
+              canvas.height / 2 -
+              momentumNorm * (canvas.height / 2 - PADDING) +
+              jitterY;
+          } else {
+            // Buy/Sell Ratio: 0 (all sells) = top, 1 (all buys) = bottom
+            const totalVolume = bubble.buyVolume + bubble.sellVolume;
+            const volumeRatio =
+              totalVolume > 0 ? bubble.buyVolume / totalVolume : 0.5;
+            bubble.targetY =
+              PADDING + volumeRatio * (canvas.height - PADDING * 2) + jitterY;
+          }
+        }
+
+        // Size based on volume
+        const volRatio = Math.sqrt(bubble.volume / maxVolume);
+        bubble.size =
+          MIN_BUBBLE_SIZE + volRatio * (MAX_BUBBLE_SIZE - MIN_BUBBLE_SIZE);
+
+        // Lerp position
+        bubble.x += (bubble.targetX - bubble.x) * LERP_SPEED;
+        bubble.y += (bubble.targetY - bubble.y) * LERP_SPEED;
+
+        // Collision avoidance - push bubbles apart
+        for (const otherBubble of bubbles) {
+          if (otherBubble.id === bubble.id) continue;
+
+          const dx = bubble.x - otherBubble.x;
+          const dy = bubble.y - otherBubble.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const minDist = (bubble.size + otherBubble.size) / 2 + 8; // Add some padding
+
+          if (dist < minDist && dist > 0) {
+            // Calculate push force
+            const overlap = minDist - dist;
+            const pushX = (dx / dist) * overlap * COLLISION_STRENGTH;
+            const pushY = (dy / dist) * overlap * COLLISION_STRENGTH;
+
+            // Apply push (half to each bubble)
+            bubble.x += pushX * 0.5;
+            bubble.y += pushY * 0.5;
+          }
+        }
+
+        // Keep within bounds
+        const radius = bubble.size / 2;
+        bubble.x = Math.max(
+          PADDING + radius,
+          Math.min(canvas.width - PADDING - radius, bubble.x)
+        );
+        bubble.y = Math.max(
+          PADDING + radius,
+          Math.min(canvas.height - PADDING - radius, bubble.y)
+        );
+
+        // Add ambient floating motion
+        const time = currentTime * 0.001;
+        const ambientX =
+          Math.sin(time * 0.5 + bubble.id.charCodeAt(0)) * AMBIENT_STRENGTH;
+        const ambientY =
+          Math.cos(time * 0.3 + bubble.id.charCodeAt(1)) * AMBIENT_STRENGTH;
+        bubble.x += ambientX;
+        bubble.y += ambientY;
+
+        // Decay pulse
+        if (bubble.pulse > 0) {
+          bubble.pulse *= 0.95;
+          if (bubble.pulse < 0.01) bubble.pulse = 0;
+        }
+
+        // Decay click pulse (blue feedback)
+        if (bubble.clickPulse > 0) {
+          bubble.clickPulse *= 0.95;
+          if (bubble.clickPulse < 0.01) bubble.clickPulse = 0;
+        }
+
+        // Skip drawing if bubble is not in the display set (but keep position updates above)
+        if (!displayBubbleIds.has(bubble.id)) {
+          return; // Continue to next bubble - this one is tracked but not displayed
+        }
+
+        // Check if this bubble should be highlighted or dimmed (for bags feature)
+        const currentFilteredKol = filteredKolIdRef.current;
+        const currentHoveredBag = hoveredBagMintRef.current;
+        const currentHoveredKol = hoveredKolIdRef.current;
+        const currentSelectedBags = selectedBagMintsRef.current;
+
+        // Determine if bubble should be highlighted
+        const isFilteredKol = currentFilteredKol === bubble.id;
+        const isHoveredKol = currentHoveredKol === bubble.id;
+        // Use shared holdingsMatrix for hover highlighting (fallback to local bags for backward compat)
+        const isHolderOfHoveredBag =
+          currentHoveredBag &&
+          (tokenHoldersMapRef.current
+            .get(currentHoveredBag.toLowerCase())
+            ?.some(h => h.traderId === bubble.id) ||
+            tokenBagsRef.current
+              .get(currentHoveredBag)
+              ?.holders.some(h => h.bubbleId === bubble.id));
+        // Check if holder of ANY selected token using shared holdingsMatrix
+        const isHolderOfSelectedBag =
+          currentSelectedBags.size > 0 &&
+          Array.from(currentSelectedBags).some(mint => {
+            const mintLower = mint.toLowerCase();
+            // Primary: use shared store holdingsMatrix
+            const holders = tokenHoldersMapRef.current.get(mintLower);
+            if (holders?.some(h => h.traderId === bubble.id)) {
+              return true;
+            }
+            // Fallback: check local bags for backward compatibility
+            return tokenBagsRef.current
+              .get(mint)
+              ?.holders.some(h => h.bubbleId === bubble.id);
+          });
+
+        // Highlight when: showBags is on with any highlight, OR there's a selected bag (from Intel Grid)
+        const hasAnyBagHighlight =
+          (currentShowBags || currentSelectedBags.size > 0) &&
+          (currentFilteredKol ||
+            currentHoveredBag ||
+            currentSelectedBags.size > 0);
+        const isBubbleHighlighted =
+          isFilteredKol ||
+          isHoveredKol ||
+          isHolderOfHoveredBag ||
+          isHolderOfSelectedBag;
+        const isBubbleDimmed =
+          (currentShowBags || currentSelectedBags.size > 0) &&
+          hasAnyBagHighlight &&
+          !isBubbleHighlighted;
+
+        // Border color - blue for user, green/red for others based on P/L
+        // Dimmed if filtering and this bubble is not part of filter
+        let borderColor = bubble.isUser
+          ? COLOR_USER
+          : bubble.pnl >= 0
+            ? COLOR_PROFIT
+            : COLOR_LOSS;
+
+        // Blue highlight if connected to hovered/selected bag
+        if (
+          isBubbleHighlighted &&
+          (isHolderOfHoveredBag || isHolderOfSelectedBag)
+        ) {
+          borderColor = "rgba(83, 177, 253, 1)"; // Blue
+        }
+
+        // Draw fire/ice glow for streaks (only in streak mode)
+        if (currentViewMode === "streak") {
+          const isOnFire = bubble.winStreak >= 5;
+          const isFreezing = bubble.lossStreak >= 5;
+
+          if (isOnFire) {
+            // Fire glow effect - animated
+            const fireIntensity = Math.min(1, bubble.winStreak / 10);
+            const pulseTime = currentTime * 0.003;
+            const pulse =
+              0.7 + Math.sin(pulseTime + bubble.id.charCodeAt(0)) * 0.3;
+
+            const fireGradient = ctx.createRadialGradient(
+              bubble.x,
+              bubble.y,
+              bubble.size * 0.3,
+              bubble.x,
+              bubble.y,
+              bubble.size * (1.5 + fireIntensity * 0.5) * pulse
+            );
+            fireGradient.addColorStop(
+              0,
+              `rgba(249, 115, 22, ${0.4 * fireIntensity})`
+            ); // orange
+            fireGradient.addColorStop(
+              0.4,
+              `rgba(251, 191, 36, ${0.3 * fireIntensity})`
+            ); // yellow
+            fireGradient.addColorStop(1, "transparent");
+            ctx.fillStyle = fireGradient;
+            ctx.beginPath();
+            ctx.arc(
+              bubble.x,
+              bubble.y,
+              bubble.size * 2 * pulse,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+          } else if (isFreezing) {
+            // Ice glow effect
+            const iceIntensity = Math.min(1, bubble.lossStreak / 10);
+
+            const iceGradient = ctx.createRadialGradient(
+              bubble.x,
+              bubble.y,
+              bubble.size * 0.3,
+              bubble.x,
+              bubble.y,
+              bubble.size * 1.5
+            );
+            iceGradient.addColorStop(
+              0,
+              `rgba(96, 165, 250, ${0.3 * iceIntensity})`
+            ); // blue
+            iceGradient.addColorStop(
+              0.5,
+              `rgba(147, 197, 253, ${0.2 * iceIntensity})`
+            ); // light blue
+            iceGradient.addColorStop(1, "transparent");
+            ctx.fillStyle = iceGradient;
+            ctx.beginPath();
+            ctx.arc(bubble.x, bubble.y, bubble.size * 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // Draw pulse ring (green for trade activity)
+        if (bubble.pulse > 0.05) {
+          ctx.beginPath();
+          ctx.arc(
+            bubble.x,
+            bubble.y,
+            bubble.size / 2 + 15 * bubble.pulse,
+            0,
+            Math.PI * 2
+          );
+          // Blue pulse for user, green for others
+          const pulseColor = bubble.isUser
+            ? `rgba(59, 130, 246, ${bubble.pulse * 0.6})`
+            : `rgba(180, 229, 89, ${bubble.pulse * 0.6})`;
+          ctx.strokeStyle = pulseColor;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        // Draw click pulse ring (blue for click feedback when no bags)
+        if (bubble.clickPulse > 0.05) {
+          ctx.beginPath();
+          ctx.arc(
+            bubble.x,
+            bubble.y,
+            bubble.size / 2 + 15 * bubble.clickPulse,
+            0,
+            Math.PI * 2
+          );
+          ctx.strokeStyle = `rgba(83, 177, 253, ${bubble.clickPulse * 0.6})`; // Blue (#53b1fd)
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        // Draw bubble (radius already defined above for bounds checking)
+        // Apply dimming via globalAlpha if filtered out
+        const prevAlpha = ctx.globalAlpha;
+        if (isBubbleDimmed) {
+          ctx.globalAlpha = 0.25;
+        }
+
+        // Draw dark background circle first
+        ctx.beginPath();
+        ctx.arc(bubble.x, bubble.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = COLOR_BG_DARK;
+        ctx.fill();
+
+        // Draw image or fallback content
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(bubble.x, bubble.y, radius - 2, 0, Math.PI * 2); // Slightly smaller for border
+        ctx.clip();
+
+        const img = imagesRef.current.get(bubble.icon || "");
+        if (img) {
+          ctx.drawImage(
+            img,
+            bubble.x - radius + 2,
+            bubble.y - radius + 2,
+            (radius - 2) * 2,
+            (radius - 2) * 2
+          );
+        } else {
+          // Fallback: show emoji or initial on dark background
+          ctx.fillStyle = "#fff";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          if (bubble.emoji) {
+            // Show emoji - slightly larger for visibility
+            ctx.font = `${radius * 1.1}px sans-serif`;
+            ctx.fillText(bubble.emoji, bubble.x, bubble.y);
+          } else {
+            // Show first letter as last resort
+            ctx.font = `bold ${radius * 0.9}px sans-serif`;
+            ctx.fillText(
+              bubble.name.charAt(0).toUpperCase(),
+              bubble.x,
+              bubble.y
+            );
+          }
+        }
+        ctx.restore();
+
+        // Draw border
+        ctx.beginPath();
+        ctx.arc(bubble.x, bubble.y, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = isBubbleHighlighted ? 4 : 3;
+        ctx.stroke();
+
+        // Restore alpha
+        ctx.globalAlpha = prevAlpha;
+
+        // Draw name (not dimmed)
+        if (showNames && !isBubbleDimmed) {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+          ctx.font = "11px -apple-system, BlinkMacSystemFont, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "top";
+          ctx.fillText(bubble.name, bubble.x, bubble.y + radius + 5);
+        }
+      });
+
+      // Draw crown on top performer (highest P/L)
+      if (bubbles.length > 0) {
+        const topPerformer = bubbles.reduce((best, b) =>
+          b.pnl > best.pnl ? b : best
+        );
+
+        // Only show crown if they have positive P/L
+        if (topPerformer.pnl > 0) {
+          const crownX = topPerformer.x;
+          const crownY = topPerformer.y - topPerformer.size / 2 - 12;
+
+          // Draw crown emoji
+          ctx.font = "16px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("👑", crownX, crownY);
+        }
+      }
+
+      // Draw floating texts
+      floatingTextsRef.current = floatingTextsRef.current.filter(ft => {
+        ft.y += ft.vy;
+        ft.alpha -= 0.015;
+
+        if (ft.alpha <= 0) return false;
+
+        ctx.fillStyle = ft.color
+          .replace(")", `, ${ft.alpha})`)
+          .replace("rgb", "rgba");
+        ctx.font = "bold 12px -apple-system, BlinkMacSystemFont, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(ft.text, ft.x, ft.y);
+
+        return true;
+      });
+
+      // Draw pulse effects
+      pulsesRef.current = pulsesRef.current.filter(p => {
+        p.radius += 2;
+        p.alpha -= 0.03;
+
+        if (p.alpha <= 0) return false;
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        const hex = p.color.replace("#", "");
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${p.alpha})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        return true;
+      });
+
+      // Draw token bags on top of everything (if enabled or Intel Grid selection)
+      if (shouldDrawBags) {
+        const bags = Array.from(tokenBagsRef.current.values());
+        const currentSelectedBags = selectedBagMintsRef.current;
+        const currentHoveredKol = hoveredKolIdRef.current;
+        const currentHoveredBag = hoveredBagMintRef.current;
+        const currentFilteredKol = filteredKolIdRef.current;
+
+        // Check if anything is being highlighted
+        const hasHighlight =
+          currentSelectedBags.size > 0 ||
+          currentHoveredKol ||
+          currentHoveredBag ||
+          currentFilteredKol;
+
+        bags.forEach(bag => {
+          // Check if this bag belongs to hovered or filtered KOL
+          const belongsToHoveredKol =
+            currentHoveredKol &&
+            bag.holders.some(h => h.bubbleId === currentHoveredKol);
+          const belongsToFilteredKol =
+            currentFilteredKol &&
+            bag.holders.some(h => h.bubbleId === currentFilteredKol);
+
+          // Skip bags not belonging to filtered KOL (unless also belongs to hovered KOL)
+          if (
+            currentFilteredKol &&
+            !belongsToFilteredKol &&
+            !belongsToHoveredKol
+          ) {
+            return;
+          }
+
+          // If showBags is off, only show bags for: Intel Grid selection, hovered KOL, or filtered KOL
+          if (!currentShowBags) {
+            if (
+              currentSelectedBags.size > 0 &&
+              !currentSelectedBags.has(bag.mint) &&
+              !belongsToHoveredKol &&
+              !belongsToFilteredKol
+            ) {
+              return;
+            }
+            if (
+              currentSelectedBags.size === 0 &&
+              !belongsToHoveredKol &&
+              !belongsToFilteredKol
+            ) {
+              return;
+            }
+          }
+
+          // Determine if this bag should be highlighted
+          const isSelected = currentSelectedBags.has(bag.mint);
+          const isHoveredBag = currentHoveredBag === bag.mint;
+          const isConnectedToHoveredKol = belongsToHoveredKol;
+          const isHighlighted =
+            isSelected ||
+            isHoveredBag ||
+            isConnectedToHoveredKol ||
+            belongsToFilteredKol;
+          const isDimmed = hasHighlight && !isHighlighted;
+
+          // Colors: blue (#53b1fd) when highlighted, white/neutral otherwise, dimmed if something else is highlighted
+          const glowColor = isHighlighted ? "83, 177, 253" : "255, 255, 255";
+          const glowAlpha = isHighlighted ? 0.2 : 0.05;
+          const borderColor = isHighlighted ? "83, 177, 253" : "255, 255, 255";
+          const borderAlpha = isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.4;
+          const badgeColor = isHighlighted ? "83, 177, 253" : "255, 255, 255";
+          const badgeAlpha = isDimmed ? 0.3 : isHighlighted ? 1.0 : 0.7;
+          const imageAlpha = isDimmed ? 0.3 : 1.0;
+
+          // Draw subtle glow (only when highlighted)
+          if (isHighlighted) {
+            const glowGradient = ctx.createRadialGradient(
+              bag.x,
+              bag.y,
+              bag.size / 2,
+              bag.x,
+              bag.y,
+              bag.size * 0.8
+            );
+            glowGradient.addColorStop(0, `rgba(${glowColor}, ${glowAlpha})`);
+            glowGradient.addColorStop(1, `rgba(${glowColor}, 0)`);
+            ctx.fillStyle = glowGradient;
+            ctx.beginPath();
+            ctx.arc(bag.x, bag.y, bag.size * 0.8, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Draw token image or fallback
+          const img = imagesRef.current.get(bag.image);
+          if (img) {
+            ctx.save();
+            ctx.globalAlpha = imageAlpha;
+            ctx.beginPath();
+            ctx.arc(bag.x, bag.y, bag.size / 2, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(
+              img,
+              bag.x - bag.size / 2,
+              bag.y - bag.size / 2,
+              bag.size,
+              bag.size
+            );
+            ctx.restore();
+            ctx.globalAlpha = 1;
+
+            // Draw border
+            ctx.strokeStyle = `rgba(${borderColor}, ${borderAlpha})`;
+            ctx.lineWidth = isHighlighted ? 3 : 2;
+            ctx.beginPath();
+            ctx.arc(bag.x, bag.y, bag.size / 2, 0, Math.PI * 2);
+            ctx.stroke();
+          } else {
+            // Fallback - draw circle with symbol
+            ctx.fillStyle = isDimmed
+              ? "rgba(30, 30, 46, 0.5)"
+              : "rgba(30, 30, 46, 0.95)";
+            ctx.beginPath();
+            ctx.arc(bag.x, bag.y, bag.size / 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = `rgba(${borderColor}, ${borderAlpha})`;
+            ctx.lineWidth = isHighlighted ? 3 : 2;
+            ctx.stroke();
+
+            ctx.fillStyle = isDimmed
+              ? "rgba(255, 255, 255, 0.4)"
+              : "rgba(255, 255, 255, 0.9)";
+            ctx.font = `bold ${Math.max(8, bag.size / 3)}px system-ui`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(bag.symbol.slice(0, 4), bag.x, bag.y);
+
+            // Load image for next frame
+            if (bag.image && !imagesRef.current.has(bag.image)) {
+              const newImg = new Image();
+              newImg.crossOrigin = "anonymous";
+              newImg.src = bag.image;
+              newImg.onload = () => imagesRef.current.set(bag.image, newImg);
+              newImg.onerror = () => imagesRef.current.set(bag.image, null);
+              imagesRef.current.set(bag.image, null);
+            }
+          }
+
+          // Draw KOL count badge
+          if (bag.kolCount > 0 && !isDimmed) {
+            const badgeX = bag.x + bag.size / 2 - 6;
+            const badgeY = bag.y - bag.size / 2 + 6;
+            ctx.fillStyle = `rgba(${badgeColor}, ${badgeAlpha})`;
+            ctx.beginPath();
+            ctx.arc(badgeX, badgeY, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#000";
+            ctx.font = "bold 9px system-ui";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(bag.kolCount.toString(), badgeX, badgeY);
+          }
+        });
+      }
+
+      // Draw axis labels / mode hints
+      if (currentViewMode === "streak") {
+        // Streak mode - labels already drawn in the streak section
+        // No additional labels needed here
+      } else {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+        ctx.font = "10px -apple-system, BlinkMacSystemFont, sans-serif";
+
+        const currentYAxisMode = yAxisModeRef.current;
+
+        // Y-axis labels depend on mode
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        if (currentYAxisMode === "momentum") {
+          ctx.fillText("↑ MOMENTUM CHASING", canvas.width / 2, 8);
+        } else {
+          ctx.fillText("↑ SELLS", canvas.width / 2, 8);
+        }
+
+        ctx.textBaseline = "bottom";
+        if (currentYAxisMode === "momentum") {
+          ctx.fillText("↓ CONTRARIAN", canvas.width / 2, canvas.height - 8);
+        } else {
+          ctx.fillText("↓ BUYS", canvas.width / 2, canvas.height - 8);
+        }
+
+        // Left: LOSS
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText("LOSS ←", 8, canvas.height / 2);
+
+        // Right: PROFIT
+        ctx.textAlign = "right";
+        ctx.fillText("→ PROFIT", canvas.width - 8, canvas.height / 2);
+
+        // Draw grid lines (subtle)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+        ctx.lineWidth = 1;
+
+        // Vertical center
+        ctx.beginPath();
+        ctx.moveTo(canvas.width / 2, 0);
+        ctx.lineTo(canvas.width / 2, canvas.height);
+        ctx.stroke();
+
+        // Horizontal center
+        ctx.beginPath();
+        ctx.moveTo(0, canvas.height / 2);
+        ctx.lineTo(canvas.width, canvas.height / 2);
+        ctx.stroke();
+      }
+
+      animationRef.current = requestAnimationFrame(animate);
+    };
+
+    animationRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [showNames, userWalletKey]);
+
+  // Resize canvas to container
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+
+    const resizeObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        canvas.width = Math.floor(width);
+        canvas.height = Math.floor(height);
+        setContainerSize({
+          width: Math.floor(width),
+          height: Math.floor(height),
+        });
+      }
+    });
+
+    resizeObserver.observe(container);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // Track current hovered bubble ID to avoid unnecessary state updates
+  const hoveredBubbleIdRef = useRef<string | null>(null);
+
+  // Handle mouse move for tooltip and bag highlighting
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // Store in ref for immediate access
+      lastMousePosRef.current = { x, y };
+
+      // Check for hovered bag (for highlighting connections)
+      let foundBag: TokenBag | null = null;
+      if (showBags) {
+        for (const bag of tokenBagsRef.current.values()) {
+          const dist = Math.sqrt(
+            Math.pow(x - bag.x, 2) + Math.pow(y - bag.y, 2)
+          );
+          if (dist <= bag.size / 2) {
+            foundBag = bag;
+            break;
+          }
+        }
+      }
+      hoveredBagMintRef.current = foundBag?.mint || null;
+
+      // Check for hovered KOL bubble (for highlighting their bags)
+      let foundKol: TraderBubble | null = null;
+      for (const bubble of bubblesRef.current.values()) {
+        const dist = Math.sqrt(
+          Math.pow(x - bubble.x, 2) + Math.pow(y - bubble.y, 2)
+        );
+        if (dist <= bubble.size / 2) {
+          foundKol = bubble;
+          break;
+        }
+      }
+      hoveredKolIdRef.current = foundKol?.id || null;
+
+      // Update cursor state - pointer when over any bubble or bag
+      setIsOverInteractive(!!foundKol || !!foundBag);
+
+      // Determine if tooltips should show for this bubble
+      // If showTooltips is enabled (user preference): always show
+      // If showTooltips is disabled (default): only show in focus mode for highlighted KOLs
+      let shouldShowTooltip = showTooltips;
+      if (!showTooltips && foundKol && filteredKolIdRef.current) {
+        // In focus mode - check if this bubble is highlighted (connected to filtered KOL's bags)
+        const isFilteredKol = foundKol.id === filteredKolIdRef.current;
+        const isConnectedToFilteredKol = Array.from(
+          tokenBagsRef.current.values()
+        ).some(
+          bag =>
+            bag.holders.some(h => h.bubbleId === filteredKolIdRef.current) &&
+            bag.holders.some(h => h.bubbleId === foundKol.id)
+        );
+        shouldShowTooltip = isFilteredKol || isConnectedToFilteredKol;
+      }
+
+      if (!shouldShowTooltip) {
+        if (hoveredBubbleIdRef.current !== null) {
+          hoveredBubbleIdRef.current = null;
+          setHoveredBubble(null);
+        }
+        return;
+      }
+
+      // Find bubble under cursor for tooltip
+      const found: TraderBubble | null = foundKol;
+
+      // Only update hovered bubble if it changed
+      if (found) {
+        // Clear any pending hide timeout since we're on a bubble
+        if (hideTooltipTimeoutRef.current) {
+          clearTimeout(hideTooltipTimeoutRef.current);
+          hideTooltipTimeoutRef.current = null;
+        }
+        // Only update state if bubble changed
+        if (hoveredBubbleIdRef.current !== found.id) {
+          hoveredBubbleIdRef.current = found.id;
+          setMousePos({ x, y }); // Update position when showing new tooltip
+          setHoveredBubble(found);
+        }
+      } else if (
+        !isHoveringTooltipRef.current &&
+        !hideTooltipTimeoutRef.current &&
+        hoveredBubbleIdRef.current !== null
+      ) {
+        // Not on a bubble and not heading to tooltip - start delayed hide
+        hideTooltipTimeoutRef.current = setTimeout(() => {
+          if (!isHoveringTooltipRef.current) {
+            hoveredBubbleIdRef.current = null;
+            setHoveredBubble(null);
+          }
+          hideTooltipTimeoutRef.current = null;
+        }, 200);
+      }
+    },
+    [showTooltips, showBags]
+  );
+
+  const handleMouseLeave = useCallback(() => {
+    // Clear hover refs
+    hoveredKolIdRef.current = null;
+    hoveredBagMintRef.current = null;
+    setIsOverInteractive(false);
+
+    // Delay hiding tooltip to allow moving to tooltip
+    if (hideTooltipTimeoutRef.current) {
+      clearTimeout(hideTooltipTimeoutRef.current);
+    }
+    hideTooltipTimeoutRef.current = setTimeout(() => {
+      if (!isHoveringTooltipRef.current) {
+        hoveredBubbleIdRef.current = null;
+        setHoveredBubble(null);
+      }
+      hideTooltipTimeoutRef.current = null;
+    }, 300);
+  }, []);
+
+  // Handle click for KOL filtering and bag selection (works regardless of showBags)
+  const handleCanvasClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // Check if clicked on a token bag first (only if bags are visible)
+      if (showBags || selectedBagMintsRef.current.size > 0) {
+        for (const bag of tokenBagsRef.current.values()) {
+          const dist = Math.sqrt(
+            Math.pow(x - bag.x, 2) + Math.pow(y - bag.y, 2)
+          );
+          if (dist <= bag.size / 2) {
+            // Toggle selection within the set
+            const wasSelected = selectedBagMintsRef.current.has(bag.mint);
+
+            // Toggle in shared store - this syncs to Intel Grid automatically
+            toggleSharedToken(bag.mint.toLowerCase());
+
+            // Clear KOL filter when selecting a bag
+            if (!wasSelected) {
+              filteredKolIdRef.current = null;
+            }
+            return;
+          }
+        }
+      }
+
+      // Check if clicked on a KOL bubble
+      for (const bubble of bubblesRef.current.values()) {
+        const dist = Math.sqrt(
+          Math.pow(x - bubble.x, 2) + Math.pow(y - bubble.y, 2)
+        );
+        if (dist <= bubble.size / 2) {
+          // Find all tokens this KOL holds using shared holdingsMatrix
+          const kolTokens = holdingsMatrix.get(bubble.id);
+          const kolBags: string[] = kolTokens
+            ? Array.from(kolTokens.entries())
+                .filter(([, amount]) => amount > 0)
+                .map(([mint]) => mint)
+            : [];
+
+          // If no bags, trigger blue click pulse as feedback
+          if (kolBags.length === 0) {
+            bubble.clickPulse = 1;
+          }
+
+          // Toggle - if already filtering this KOL, clear everything
+          if (filteredKolIdRef.current === bubble.id) {
+            filteredKolIdRef.current = null;
+            setSelectedKolId(null);
+            // Clear selections via shared store
+            clearTokenSelections();
+          } else {
+            // Clear any previous selection first
+            clearTokenSelections();
+
+            filteredKolIdRef.current = bubble.id;
+            setSelectedKolId(bubble.id);
+            // Select all tokens this KOL holds via shared store
+            kolBags.forEach(mint => {
+              toggleSharedToken(mint);
+            });
+          }
+          return;
+        }
+      }
+
+      // Clicked on empty space - clear both filter and selection
+      filteredKolIdRef.current = null;
+      setSelectedKolId(null);
+      // Clear via shared store
+      clearTokenSelections();
+    },
+    [showBags, holdingsMatrix, clearTokenSelections, toggleSharedToken]
+  );
+
+  // Handler for leaderboard KOL clicks - reuses canvas KOL click logic
+  const handleLeaderboardKolClick = useCallback(
+    (kolId: string) => {
+      // Find all tokens this KOL holds using shared holdingsMatrix
+      const kolTokens = holdingsMatrix.get(kolId);
+      const kolBags: string[] = kolTokens
+        ? Array.from(kolTokens.entries())
+            .filter(([, amount]) => amount > 0)
+            .map(([mint]) => mint)
+        : [];
+
+      // Find the bubble to trigger visual feedback
+      const bubble = bubblesRef.current.get(kolId);
+
+      // Toggle - if already filtering this KOL, clear everything
+      if (filteredKolIdRef.current === kolId) {
+        filteredKolIdRef.current = null;
+        setSelectedKolId(null);
+        // Clear via shared store
+        clearTokenSelections();
+      } else {
+        // Clear any previous selection first
+        clearTokenSelections();
+
+        filteredKolIdRef.current = kolId;
+        setSelectedKolId(kolId);
+
+        // If no bags, trigger blue click pulse as feedback (same as canvas click)
+        if (kolBags.length === 0 && bubble) {
+          bubble.clickPulse = 1;
+        }
+
+        // Select all tokens this KOL holds via shared store
+        kolBags.forEach(mint => {
+          toggleSharedToken(mint);
+        });
+      }
+    },
+    [holdingsMatrix, clearTokenSelections, toggleSharedToken]
+  );
+
+  const handleTooltipMouseEnter = useCallback(() => {
+    if (hideTooltipTimeoutRef.current) {
+      clearTimeout(hideTooltipTimeoutRef.current);
+      hideTooltipTimeoutRef.current = null;
+    }
+    isHoveringTooltipRef.current = true;
+  }, []);
+
+  const handleTooltipMouseLeave = useCallback(() => {
+    isHoveringTooltipRef.current = false;
+    hoveredBubbleIdRef.current = null;
+    setHoveredBubble(null);
+  }, []);
+
+  // Calculate stats and leaderboard data
+  const { stats, leaderboardBubbles } = useMemo(() => {
+    const bubbles = Array.from(bubblesRef.current.values());
+    return {
+      stats: {
+        active: bubbles.length,
+        buys: bubbles.reduce((sum, b) => sum + b.buys, 0),
+        sells: bubbles.reduce((sum, b) => sum + b.sells, 0),
+        volume: bubbles.reduce((sum, b) => sum + b.volume, 0),
+      },
+      leaderboardBubbles: bubbles,
+    };
+  }, [statsVersion]); // Re-calculate when statsVersion changes
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Canvas Container */}
+      <div
+        ref={containerRef}
+        className="relative flex-1"
+      >
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 size-full"
+          style={{ cursor: isOverInteractive ? "pointer" : "default" }}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+          onClick={handleCanvasClick}
+        />
+
+        {/* Settings Panel */}
+        <SettingsPanel
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          showNames={showNames}
+          setShowNames={setShowNames}
+          showTooltips={showTooltips}
+          setShowTooltips={setShowTooltips}
+          showLeaderboard={showLeaderboard}
+          setShowLeaderboard={setShowLeaderboard}
+          showUserBubble={showUserBubble}
+          setShowUserBubble={setShowUserBubble}
+          showBags={showBags}
+          setShowBags={setShowBags}
+          maxBubbles={maxBubbles}
+          setMaxBubbles={setMaxBubbles}
+          yAxisMode={yAxisMode}
+          setYAxisMode={setYAxisMode}
+        />
+
+        {/* Leaderboard */}
+        <Leaderboard
+          bubbles={leaderboardBubbles}
+          isVisible={showLeaderboard}
+          onClose={() => setShowLeaderboard(false)}
+          onKolClick={handleLeaderboardKolClick}
+          selectedKolId={selectedKolId}
+          showUserBubble={showUserBubble}
+        />
+
+        {/* Tooltip - shown when enabled OR in focus mode for highlighted KOLs */}
+        {hoveredBubble && (
+          <BubbleTooltip
+            bubble={hoveredBubble}
+            x={mousePos.x}
+            y={mousePos.y}
+            containerWidth={containerSize.width}
+            containerHeight={containerSize.height}
+            onMouseEnter={handleTooltipMouseEnter}
+            onMouseLeave={handleTooltipMouseLeave}
+          />
+        )}
+
+        {/* Bag hover triggers for ChartPreviewTooltip */}
+        {bagPositions.map(bag => (
+          <ChartPreviewTooltip
+            key={bag.mint}
+            mint={bag.mint}
+            location="vantage-bag"
+            tokenSymbol={bag.symbol}
+            tokenName={bag.symbol}
+            side="right"
+            align="center"
+            width={280}
+            height={200}
+            timeframes={["1s", "1m", "5m"] as const}
+            defaultResolution="1m"
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: bag.x - bag.size / 2,
+                top: bag.y - bag.size / 2,
+                width: bag.size,
+                height: bag.size,
+                borderRadius: "50%",
+                cursor: "pointer",
+                zIndex: 10,
+              }}
+              onMouseEnter={() => {
+                hoveredBagMintRef.current = bag.mint;
+              }}
+              onMouseLeave={() => {
+                hoveredBagMintRef.current = null;
+              }}
+              onClick={() => {
+                setSelectedBagMints(prev => {
+                  const newSet = new Set(prev);
+                  if (newSet.has(bag.mint)) {
+                    newSet.delete(bag.mint);
+                  } else {
+                    newSet.add(bag.mint);
+                    // Clear KOL filter when selecting a bag
+                    filteredKolIdRef.current = null;
+                  }
+                  selectedBagMintsRef.current = newSet;
+                  return newSet;
+                });
+              }}
+            />
+          </ChartPreviewTooltip>
+        ))}
+
+        {/* Empty state */}
+        {bubblesRef.current.size === 0 && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30">
+            <Users className="mb-2 size-8" />
+            <p className="text-sm">Waiting for trades...</p>
+            <p className="text-xs">
+              Tracked wallets and KOLs will appear here when they trade
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Stats */}
+      <div className="border-border-primary bg-bg-secondary grid grid-cols-4 border-t">
+        <div className="flex flex-col items-center py-2">
+          <span className="text-text-primary text-sm font-semibold">
+            {stats.active}
+          </span>
+          <span className="text-text-secondary text-[10px] tracking-wide uppercase">
+            Active
+          </span>
+        </div>
+        <div className="flex flex-col items-center py-2">
+          <span className="text-text-success text-sm font-semibold">
+            {stats.buys}
+          </span>
+          <span className="text-text-secondary text-[10px] tracking-wide uppercase">
+            Buys
+          </span>
+        </div>
+        <div className="flex flex-col items-center py-2">
+          <span className="text-text-error text-sm font-semibold">
+            {stats.sells}
+          </span>
+          <span className="text-text-secondary text-[10px] tracking-wide uppercase">
+            Sells
+          </span>
+        </div>
+        <div className="flex flex-col items-center py-2">
+          <span className="text-text-primary text-sm font-semibold">
+            {formatSol(stats.volume)} SOL
+          </span>
+          <span className="text-text-secondary text-[10px] tracking-wide uppercase">
+            Volume
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+VantageWidget.displayName = "VantageWidget";

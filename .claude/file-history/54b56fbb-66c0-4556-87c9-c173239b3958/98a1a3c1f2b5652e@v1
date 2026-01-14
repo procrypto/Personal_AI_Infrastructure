@@ -1,0 +1,89 @@
+---
+phase: 11-clickhouse-client-migration
+plan: 01
+subsystem: database
+tags: [clickhouse, client, credentials, graceful-shutdown]
+
+requires:
+  - phase: 10-workflow-secrets
+    provides: Working deployment workflows
+provides:
+  - Official @clickhouse/client integration
+  - Standard credential pattern (URL/USER/PASSWORD)
+  - Graceful shutdown with connection cleanup
+  - Connection pooling via singleton
+affects: [deployment, local-dev]
+
+tech-stack:
+  added: ["@clickhouse/client@1.8.1"]
+  patterns: [singleton-client, graceful-shutdown, signal-handlers]
+
+key-files:
+  modified:
+    - src/clickhouse/client.ts
+    - src/config.ts
+    - src/server.ts
+    - package.json
+    - env.example
+
+key-decisions:
+  - "Use official @clickhouse/client over custom HTTP implementation"
+  - "Standard credentials (URL/USER/PASSWORD) instead of Cloud Queries API keys"
+  - "Singleton pattern for connection pooling"
+  - "Graceful shutdown on SIGINT/SIGTERM"
+
+patterns-established:
+  - "closeClickhouse() for clean connection teardown"
+  - "Signal handlers for graceful shutdown"
+
+issues-created: []
+
+duration: N/A (external PR)
+completed: 2026-01-14
+
+debugging:
+  sessions: 0
+  time-spent: 0min
+  patterns: []
+---
+
+# Phase 11 Plan 1: ClickHouse Client Migration Summary
+
+**Migrated from custom HTTP API to official @clickhouse/client with standard credentials and graceful shutdown**
+
+## Performance
+
+- **Duration:** N/A (work done via external PR #16)
+- **Completed:** 2026-01-14
+- **Author:** passingBySol
+
+## Accomplishments
+
+- Replaced custom ClickHouse Cloud Queries API with official `@clickhouse/client`
+- Changed credential pattern from `KEY_ID/SECRET/SERVICE_ID` to `URL/USER/PASSWORD`
+- Added graceful shutdown handling (SIGINT/SIGTERM signal handlers)
+- Implemented singleton pattern for connection pooling
+- Added `closeClickhouse()` for clean connection teardown
+
+## Files Modified
+
+- `src/clickhouse/client.ts` - Complete rewrite using @clickhouse/client
+- `src/config.ts` - New credential pattern, local defaults
+- `src/server.ts` - Added graceful shutdown handlers
+- `package.json` - Added @clickhouse/client dependency
+- `env.example` - Updated credential variables
+
+## Decisions Made
+
+- **Official client over custom HTTP:** More robust, supports compression, connection pooling
+- **Standard credentials:** Matches other services (pvp-bridge-service pattern)
+- **Local defaults:** `http://localhost:8123`, `default`, empty password for dev convenience
+- **Singleton client:** Single connection reused across requests
+
+## Source
+
+PR #16: feat: migrate to standard ClickHouse client with EU for beta and MULTIREGION for prod deployments
+
+---
+*Phase: 11-clickhouse-client-migration*
+*Completed: 2026-01-14*

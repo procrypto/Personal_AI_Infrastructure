@@ -1,0 +1,121 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/trading/magic-exits.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   192→  updateConfig(config: Partial<MagicExitConfig>): void {
+   193→    this.config = { ...this.config, ...config };
+   194→  }
+   195→
+   196→  /**
+   197→   * Check if a single trade should exit based on magic exit rules.
+   198→   *
+   199→   * Flow:
+   200→   *   1. Get rotation levels for this token (from cache or estimate)
+   201→   *   2. Check TP condition (approaching resistance, in profit)
+   202→   *   3. Check SL condition (below support)
+   203→   *   4. Check TSL condition (below trailing fractal stop)
+   204→   *   5. Return first triggered exit condition
+   205→   *
+   206→   * @param trade - Open paper trade to check
+   207→   * @param marketData - Current market data for the token
+   208→   * @param candles - Optional 1m OHLCV data for Williams TSL
+   209→   * @returns ExitCheck with shouldExit and reason
+   210→   */
+   211→  checkExit(trade: PaperTrade, marketData: TokenMarketData, candles?: OHLCV[]): ExitCheck {
+   212→    const currentPrice = marketData.price_sol;
+   213→
+   214→    // ========================================================================
+   215→    // GET ROTATION LEVELS
+   216→    // ========================================================================
+   217→    // First try to get cached levels from the rotations rule.
+   218→    // If not cached (token not analyzed by rotations rule), estimate from
+   219→    // market data. This ensures we always have some structure to work with.
+   220→    let levels = getRotationLevels(trade.mint);
+   221→    if (!levels) {
+   222→      levels = estimateRotationFromMarketData(marketData);
+   223→    }
+   224→
+   225→    if (!levels) {
+   226→      // Can't determine structure - no exit signal
+   227→      return { shouldExit: false, reason: null, exitPrice: currentPrice };
+   228→    }
+   229→
+   230→    // ========================================================================
+   231→    // CHECK MAGIC TAKE PROFIT (for long positions)
+   232→    // ========================================================================
+   233→    // Only check TP for buy trades (long positions).
+   234→    // TP triggers when price approaches resistance AND we're in profit.
+   235→    if (this.config.tpEnabled && trade.action === 'buy') {
+   236→      const tpCheck = this.checkTakeProfit(trade, currentPrice, levels);
+   237→      if (tpCheck.shouldExit) return tpCheck;
+   238→    }
+   239→
+   240→    // ========================================================================
+   241→    // CHECK MAGIC STOP LOSS (for long positions)
+   242→    // ========================================================================
+   243→    // Only check SL for buy trades (long positions).
+   244→    // SL triggers when price breaks below support (no profit requirement).
+   245→    if (this.config.slEnabled && trade.action === 'buy') {
+   246→      const slCheck = this.checkStopLoss(trade, currentPrice, levels);
+   247→      if (slCheck.shouldExit) return slCheck;
+   248→    }
+   249→
+   250→    // ========================================================================
+   251→    // CHECK WILLIAMS FRACTAL TRAILING STOP LOSS
+   252→    // ========================================================================
+   253→    // TSL trails to second most recent valid fractal low.
+   254→    // Requires 1m candle data.
+   255→    if (this.config.tslEnabled && trade.action === 'buy' && candles && candles.length > 0) {
+   256→      const tslCheck = this.checkTrailingStop(trade, currentPrice, candles);
+   257→      if (tslCheck.shouldExit) return tslCheck;
+   258→    }
+   259→
+   260→    // No exit conditions met
+   261→    return {
+   262→      shouldExit: false,
+   263→      reason: null,
+   264→      exitPrice: currentPrice,
+   265→      rotationLevels: levels,
+   266→    };
+   267→  }
+   268→
+   269→  /**
+   270→   * Check Williams Fractal Trailing Stop Loss condition.
+   271→   *
+   272→   * STRATEGY RATIONALE:
+   273→   * Williams fractals identify swing lows. We trail to the SECOND most recent
+   274→   * valid fractal low (not the most recent) to give trades room to breathe.
+   275→   *
+   276→   * A fractal low is "valid" if it hasn't been invalidated by a subsequent
+   277→   * lower fractal low (meaning support was broken).
+   278→   *
+   279→   * @param trade - Open trade to check
+   280→   * @param currentPrice - Current price
+   281→   * @param candles - 1m OHLCV candles for fractal detection
+   282→   * @returns ExitCheck for TSL
+   283→   */
+   284→  private checkTrailingStop(
+   285→    trade: PaperTrade,
+   286→    currentPrice: number,
+   287→    candles: OHLCV[]
+   288→  ): ExitCheck {
+   289→    const tslResult = williamsTsl.check(trade.mint, currentPrice, candles);
+   290→
+   291→    if (tslResult.triggered) {
+   292→      return {
+   293→        shouldExit: true,
+   294→        reason: 'tsl_fractal',
+   295→        exitPrice: currentPrice,
+   296→        tslResult,
+   297→        details: tslResult.details,
+   298→      };
+   299→    }
+   300→
+   301→    return {
+   302→      shouldExit: false,
+   303→      reason: null,
+   304→      exitPrice: currentPrice,
+   305→      tslResult,
+   306→    };
+   307→  }
+   308→
+   309→  /**
+   310→   * Check Magic Take Profit condition.
+   311→   *

@@ -1,0 +1,41 @@
+# Integration Test Cleanup Plan
+
+**When:** After full integration testing is complete and v2.0 is validated
+
+## Files to Revert
+
+### 1. apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+
+Remove:
+- `integrationLog` helper function (lines 12-19)
+- All `// INTEGRATION TEST LOG` comments and `integrationLog()` calls
+- Revert to original `console.log` for diagnostic logs (market_status, stats_update) or remove entirely
+
+### 2. apps/web-terminal/vite.config.ts
+
+Remove:
+- `integrationLogPlugin()` function definition (lines 131-164)
+- Plugin registration in plugins array (lines 252-254)
+
+### 3. .planning/integration-test.log
+
+Delete the log file.
+
+## Quick Cleanup Commands
+
+```bash
+# After cleanup, verify no integrationLog references remain
+grep -r "integrationLog" apps/web-terminal/src/
+grep -r "integration-log" apps/web-terminal/
+```
+
+## Validation
+
+- [ ] Dev server starts without errors
+- [ ] No console spam in browser
+- [ ] Widget still receives all events (check React DevTools)
+
+---
+
+_Created: 2026-01-09_
+_Status: Pending - waiting for full integration validation_

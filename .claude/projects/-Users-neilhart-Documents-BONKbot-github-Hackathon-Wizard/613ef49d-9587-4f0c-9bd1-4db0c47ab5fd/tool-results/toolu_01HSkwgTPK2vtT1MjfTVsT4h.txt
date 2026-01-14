@@ -1,0 +1,67 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+    80→      }
+    81→      break;
+    82→    }
+    83→
+    84→    case 'list': {
+    85→      const watchlist = configStore.getWatchlist();
+    86→      if (watchlist.length === 0) {
+    87→        console.log('Watchlist is empty');
+    88→      } else {
+    89→        console.log('\nWatchlist:');
+    90→        for (const token of watchlist) {
+    91→          console.log(`  ${token.symbol || 'Unknown'} - ${token.mint}`);
+    92→        }
+    93→      }
+    94→      break;
+    95→    }
+    96→
+    97→    case 'sources': {
+    98→      const subCmd = args[1]?.toLowerCase();
+    99→      const sourceConfig = configStore.getAutoSourceConfig();
+   100→
+   101→      if (!subCmd) {
+   102→        // Show status
+   103→        console.log('\nAuto-Sources:');
+   104→        console.log(`  Enabled: ${sourceConfig.enabled ? 'Yes' : 'No'}`);
+   105→        console.log(`  Trending: ${sourceConfig.trending ? 'On' : 'Off'} (limit: ${sourceConfig.trendingLimit})`);
+   106→        console.log(`  Whales: ${sourceConfig.whales ? 'On' : 'Off'} (limit: ${sourceConfig.whalesLimit})`);
+   107→        console.log(`  Refresh: every ${sourceConfig.refreshIntervalMs / 1000 / 60}m`);
+   108→        console.log('\nSource indicators: [W]=watchlist [T]=trending [$]=whales');
+   109→        break;
+   110→      }
+   111→
+   112→      if (subCmd === 'on') {
+   113→        configStore.setAutoSourceEnabled(true);
+   114→        await configStore.save();
+   115→        console.log('Auto-sources enabled');
+   116→        break;
+   117→      }
+   118→
+   119→      if (subCmd === 'off') {
+   120→        configStore.setAutoSourceEnabled(false);
+   121→        await configStore.save();
+   122→        console.log('Auto-sources disabled');
+   123→        break;
+   124→      }
+   125→
+   126→      // Handle "sources trending on|off" or "sources whales on|off"
+   127→      const sourceType = subCmd as 'trending' | 'whales';
+   128→      const toggle = args[2]?.toLowerCase();
+   129→
+   130→      if ((sourceType === 'trending' || sourceType === 'whales') && (toggle === 'on' || toggle === 'off')) {
+   131→        configStore.setSourceEnabled(sourceType, toggle === 'on');
+   132→        await configStore.save();
+   133→        console.log(`${sourceType} source ${toggle === 'on' ? 'enabled' : 'disabled'}`);
+   134→        break;
+   135→      }
+   136→
+   137→      console.error('Usage: sources [on|off] | sources <trending|whales> <on|off>');
+   138→      break;
+   139→    }
+   140→
+   141→    case 'templates': {
+   142→      console.log('');
+   143→      for (const id of listTemplates()) {
+   144→        const template = templates[id];
+   145→        console.log(`  ${id}:  ${getTemplateSummary(template)}`);

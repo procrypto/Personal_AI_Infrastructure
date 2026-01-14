@@ -1,0 +1,237 @@
+# Roadmap: TrenchBench API
+
+## Overview
+
+Transform local-api into a production-grade Cloud Run service with environment-aware configuration, containerization, and CI/CD pipelines following the ferris-the-sentinel deployment pattern.
+
+## Domain Expertise
+
+None
+
+## Milestones
+
+- ✅ [v1.0 Deployment Infrastructure](milestones/v1.0-ROADMAP.md) - Phases 1-7 (shipped 2026-01-13)
+- ✅ [v1.1 Hardening](milestones/v1.1-ROADMAP.md) - Phases 8-10 (shipped 2026-01-13)
+- ✅ [v1.2 EU & Multi-Region](milestones/v1.2-ROADMAP.md) - Phases 11-12 (shipped 2026-01-14)
+
+## Phases
+
+**Phase Numbering:**
+- Integer phases (1, 2, 3, 4): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+<details>
+<summary>✅ v1.0 Deployment Infrastructure (Phases 1-7) - SHIPPED 2026-01-13</summary>
+
+- [x] **Phase 1: Environment Configuration** - Multi-env config system (local/beta/prod)
+- [x] **Phase 2: Containerization** - Dockerfile and Docker setup for Cloud Run
+- [x] **Phase 3: CI/CD Pipeline** - GitHub Actions for beta and prod deployments
+- [x] **Phase 4: GCP Integration** - Environment simplification, deployment documentation
+- [x] **Phase 5: Simplify Extensions** - Remove optional extension flag, always-on endpoints
+- [x] **Phase 6: Community Endpoints** - Port PHP community tracker and Twitter proxy to TypeScript
+- [x] **Phase 7: Route Cleanup** - Remove /local-api/ prefix, standardize to kebab-case
+
+</details>
+
+<details>
+<summary>✅ v1.1 Hardening (Phases 8-10) - SHIPPED 2026-01-13</summary>
+
+- [x] **Phase 8: TypeScript Fixes** - Fix pre-existing TS errors blocking type checks
+- [x] **Phase 9: CI Hardening** - Add health checks, build caching, resource configuration
+- [x] **Phase 10: Workflow Secrets** - Add missing secrets, document placeholder replacement
+
+</details>
+
+<details>
+<summary>✅ v1.2 EU & Multi-Region (Phases 11-12) - SHIPPED 2026-01-14</summary>
+
+- [x] **Phase 11: ClickHouse Client Migration** - Official @clickhouse/client with standard credentials
+- [x] **Phase 12: Multi-Region Deployment** - EU beta, multi-region prod (asia, eu, usa)
+
+</details>
+
+## Phase Details
+
+### Phase 1: Environment Configuration
+**Goal**: Environment-aware configuration that switches ClickHouse endpoints and settings based on local/beta/prod mode
+**Depends on**: Nothing (first phase)
+**Research**: Unlikely (internal config patterns, existing env structure)
+**Plans**: TBD
+
+Plans:
+- [x] 01-01: Environment detection and config loader
+- [x] 01-02: ClickHouse endpoint switching per environment
+
+### Phase 2: Containerization
+**Goal**: Production-ready multi-stage Dockerfile optimized for Bun/TypeScript on Cloud Run
+**Depends on**: Phase 1
+**Research**: Likely (Bun Docker patterns)
+**Research topics**: Bun official Docker image, multi-stage build patterns for Bun/TS, .dockerignore best practices
+**Plans**: TBD
+
+Plans:
+- [x] 02-01: Multi-stage Dockerfile and .dockerignore
+- [x] 02-02: Local Docker build/run verification
+
+### Phase 3: CI/CD Pipeline
+**Goal**: GitHub Actions workflows for automated beta (main) and prod (v* tags) deployments
+**Depends on**: Phase 2
+**Research**: Likely (ferris-the-sentinel pattern)
+**Research topics**: Current ferris-the-sentinel workflows, GCP Artifact Registry authentication, Cloud Run deploy actions
+**Plans**: TBD
+
+Plans:
+- [x] 03-01: Beta deployment workflow (main branch)
+- [x] 03-02: Production deployment workflow (v* tags)
+
+### Phase 4: Environment Simplification + Deployment Docs
+**Goal**: Simplify from local/beta/prod to local/remote, create deployment checklist
+**Depends on**: Phase 3
+**Research**: No (internal refactoring + documentation)
+
+Key changes:
+- Collapse beta/prod into single "remote" mode
+- Both GCP projects (bonkbotbeta, data-backend-prod) deploy with APP_ENV=remote
+- Create DEPLOYMENT.md checklist for GCP setup
+
+Plans:
+- [x] 04-01: Simplify config to local/remote, update workflows, create DEPLOYMENT.md
+
+### Phase 5: Simplify Extensions
+**Goal**: Remove optional extension flag, make all endpoints always available, clean up extension gating logic
+**Depends on**: Phase 4 (or can run independently)
+**Research**: Unlikely (internal refactoring)
+**Plans**: TBD
+
+Key changes:
+- Remove `LOCAL_API_ENABLE_EXTENSIONS` environment variable
+- Remove `enableExtensions` config flag
+- Always register extension routes
+- Simplify registry response (remove `enabled` field)
+- Update documentation to reflect always-on behavior
+- Retain data source toggle for local/beta (frontend localStorage feature)
+
+Plans:
+- [x] 05-01: Remove extension gating and simplify registration
+
+### Phase 6: Community Endpoints
+**Goal**: Port PHP community tracker and Twitter proxy endpoints to TypeScript/Bun
+**Depends on**: Phase 1 (uses ClickHouse client)
+**Research**: Unlikely (porting existing PHP code)
+
+Key changes:
+- Add ClickHouse INSERT helper to client.ts
+- Create Twitter proxy endpoint (proxies to api.twitterapi.io)
+- Create community tracker GET endpoint (fetch from ClickHouse)
+- Create community tracker POST endpoint (save to ClickHouse)
+- Support two tables: community_tracker, community_member_history
+
+Plans:
+- [x] 06-01: Add ClickHouse INSERT helper and Twitter proxy endpoint
+- [x] 06-02: Community tracker GET/POST endpoints
+
+### Phase 7: Route Cleanup
+**Goal**: Remove /local-api/ prefix from all routes, standardize to kebab-case
+**Depends on**: Phase 6 (new endpoints already use clean routes)
+**Research**: Unlikely (mechanical refactoring)
+
+Key changes:
+- Remove `/local-api/` prefix from all 20 existing routes
+- Convert snake_case routes to kebab-case (e.g., `wallet_tracker` → `wallet-tracker`)
+- Keep `/ext/` prefix for extensions
+- Keep `/labs/` prefix for labs endpoints
+- Update all documentation
+
+Plans:
+- [x] 07-01: Migrate all endpoint and extension routes
+- [x] 07-02: Update documentation (ENDPOINTS.md, ai.md, CHANGELOG.md, INTEGRATIONS.md)
+
+### Phase 8: TypeScript Fixes
+**Goal**: Fix pre-existing TypeScript errors blocking `bun tsc --noEmit`
+**Depends on**: Phase 7 (v1.0 complete)
+**Research**: Unlikely (internal type fixes)
+**Plans**: TBD
+
+Key changes:
+- Fix clickhouseQuery timeout option in multi_wallet_families.ts (doesn't exist)
+- Fix type narrowing in search_token_details.ts (union type not narrowed)
+
+Plans:
+- [x] 08-01: Fix TypeScript errors in 2 files
+
+### Phase 9: CI Hardening
+**Goal**: Improve CI/CD reliability with health checks, caching, and resource configuration
+**Depends on**: Phase 8
+**Research**: Unlikely (GitHub Actions patterns)
+**Plans**: TBD
+
+Key changes:
+- Add post-deploy health check verification step
+- Add Docker Buildx with GitHub Actions cache
+- Add Cloud Run resource flags (memory, CPU, instances)
+- Add Dockerfile HEALTHCHECK instruction
+
+Plans:
+- [x] 09-01: Add health checks and build caching to workflows
+
+### Phase 10: Workflow Secrets
+**Goal**: Complete workflow configuration with missing secrets and clearer placeholder docs
+**Depends on**: Phase 9
+**Research**: Unlikely (internal documentation)
+**Plans**: TBD
+
+Key changes:
+- Add TWITTER_API_KEY to workflow secrets
+- Update DEPLOYMENT.md with clearer WIF placeholder replacement instructions
+- Add pre-deploy checklist validation
+
+Plans:
+- [x] 10-01: Add missing secrets and improve placeholder documentation
+
+### Phase 11: ClickHouse Client Migration
+**Goal**: Replace custom HTTP API with official @clickhouse/client
+**Depends on**: Phase 10
+**Research**: No (implementation via PR #16)
+
+Key changes:
+- Replace ClickHouse Cloud Queries API with @clickhouse/client
+- New credential pattern: CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD
+- Add graceful shutdown with connection cleanup
+- Singleton pattern for connection pooling
+
+Plans:
+- [x] 11-01: Migrate to official ClickHouse client (PR #16)
+
+### Phase 12: Multi-Region Deployment
+**Goal**: EU-based beta and multi-region production deployment
+**Depends on**: Phase 11
+**Research**: No (implementation via PR #16)
+
+Key changes:
+- Move beta to europe-west3, artifact registry to europe-west4
+- Multi-region prod: asia-southeast1, europe-west3, us-east4
+- Pre-configure WIF credentials (remove all TODOs)
+- Region-specific secret naming: clickhouse-{env}-{region}-ro-{uri|user|password}
+
+Plans:
+- [x] 12-01: Configure multi-region deployment (PR #16)
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 → 2 → ... → 12
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Environment Configuration | v1.0 | 2/2 | Complete | 2026-01-13 |
+| 2. Containerization | v1.0 | 2/2 | Complete | 2026-01-13 |
+| 3. CI/CD Pipeline | v1.0 | 2/2 | Complete | 2026-01-13 |
+| 4. Environment Simplification | v1.0 | 1/1 | Complete | 2026-01-13 |
+| 5. Simplify Extensions | v1.0 | 1/1 | Complete | 2026-01-13 |
+| 6. Community Endpoints | v1.0 | 2/2 | Complete | 2026-01-13 |
+| 7. Route Cleanup | v1.0 | 2/2 | Complete | 2026-01-13 |
+| 8. TypeScript Fixes | v1.1 | 1/1 | Complete | 2026-01-13 |
+| 9. CI Hardening | v1.1 | 1/1 | Complete | 2026-01-13 |
+| 10. Workflow Secrets | v1.1 | 1/1 | Complete | 2026-01-13 |
+| 11. ClickHouse Client Migration | v1.2 | 1/1 | Complete | 2026-01-14 |
+| 12. Multi-Region Deployment | v1.2 | 1/1 | Complete | 2026-01-14 |

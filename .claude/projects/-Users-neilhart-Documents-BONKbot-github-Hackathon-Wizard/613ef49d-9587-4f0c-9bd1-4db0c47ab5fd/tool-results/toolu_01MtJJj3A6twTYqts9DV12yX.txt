@@ -1,0 +1,73 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   419→
+   420→      const openCount = paperTracker.getOpenTrades().length;
+   421→      const mfStatus = config.marketFilter.enabled ? 'On' : 'Off';
+   422→
+   423→      // Start WebSocket server for frontend
+   424→      wsServer.start(8765);
+   425→
+   426→      // Helper to get current config for broadcasting
+   427→      const getCurrentConfig = (): ConfigData => ({
+   428→        autoSourcesEnabled: configStore.getAutoSourceConfig().enabled,
+   429→        trendingEnabled: configStore.getAutoSourceConfig().trending,
+   430→        whalesEnabled: configStore.getAutoSourceConfig().whales,
+   431→        marketFilterEnabled: configStore.getMarketFilterConfig().enabled,
+   432→        mode: configStore.getTriggerConfig().mode,
+   433→        positionSizeSol: configStore.getTriggerConfig().defaultPositionSizeSol,
+   434→        pollIntervalMs: configStore.get().pollIntervalMs,
+   435→      });
+   436→
+   437→      // Handle commands from frontend
+   438→      wsServer.onCommand(async (cmd: AutopilotCommand) => {
+   439→        switch (cmd.command) {
+   440→          case 'toggle_sources':
+   441→            configStore.setAutoSourceEnabled(cmd.enabled);
+   442→            await configStore.save();
+   443→            console.log(`[WS] Auto-sources ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   444→            break;
+   445→          case 'toggle_trending':
+   446→            configStore.setSourceEnabled('trending', cmd.enabled);
+   447→            await configStore.save();
+   448→            console.log(`[WS] Trending source ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   449→            break;
+   450→          case 'toggle_whales':
+   451→            configStore.setSourceEnabled('whales', cmd.enabled);
+   452→            await configStore.save();
+   453→            console.log(`[WS] Whales source ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   454→            break;
+   455→          case 'toggle_filter':
+   456→            configStore.setMarketFilterEnabled(cmd.enabled);
+   457→            await configStore.save();
+   458→            console.log(`[WS] Market filter ${cmd.enabled ? 'enabled' : 'disabled'}`);
+   459→            marketFilter.updateConfig(configStore.getMarketFilterConfig());
+   460→            break;
+   461→          case 'set_mode':
+   462→            configStore.setTriggerMode(cmd.mode);
+   463→            await configStore.save();
+   464→            console.log(`[WS] Mode set to ${cmd.mode}`);
+   465→            break;
+   466→          case 'set_position_size':
+   467→            configStore.setPositionSize(cmd.sizeSol);
+   468→            await configStore.save();
+   469→            console.log(`[WS] Position size set to ${cmd.sizeSol} SOL`);
+   470→            break;
+   471→          case 'refresh_sources':
+   472→            console.log('[WS] Refreshing auto-sources...');
+   473→            await autoSources.refresh();
+   474→            break;
+   475→          case 'get_config':
+   476→            // Just broadcast current config
+   477→            break;
+   478→        }
+   479→        // Always broadcast updated config after any command
+   480→        wsServer.broadcastConfig(getCurrentConfig());
+   481→      });
+   482→
+   483→      // Broadcast initial config
+   484→      wsServer.broadcastConfig(getCurrentConfig());
+   485→
+   486→      console.log('Starting analysis loop... (Ctrl+C to stop)');
+   487→      console.log(`  Watchlist: ${watchlist.length} | Trending: ${autoSourceCounts.trending} | Whales: ${autoSourceCounts.whales}`);
+   488→      console.log(`  Open trades: ${openCount} | Rules: ${ruleSets.length} sets | Mode: ${config.trigger.mode}`);
+   489→      console.log(`  Market Filter: ${mfStatus} (skip@${config.marketFilter.skipEntriesThreshold}% exit@${config.marketFilter.exitAllThreshold}%)`);
+   490→      console.log(`  Scan interval: ${config.pollIntervalMs}ms | Source refresh: ${config.autoSources.refreshIntervalMs / 1000}s`);

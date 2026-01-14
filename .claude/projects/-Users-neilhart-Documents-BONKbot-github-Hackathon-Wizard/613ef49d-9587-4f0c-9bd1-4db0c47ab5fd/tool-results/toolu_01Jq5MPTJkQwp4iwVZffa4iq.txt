@@ -1,0 +1,104 @@
+   350→          if (!tokens.has(trade.mint)) {
+   351→            // Determine source from auto-sources if available
+   352→            const autoSource = autoSources.getSourceForMint(trade.mint);
+   353→            tokens.set(trade.mint, {
+   354→              mint: trade.mint,
+   355→              symbol: trade.symbol,
+   356→              source: autoSource || 'watchlist',
+   357→            });
+   358→          }
+   359→        }
+   360→
+   361→        return Array.from(tokens.values());
+   362→      };
+   363→
+   364→      const allTokens = getAllTokens();
+   365→      const autoSourceCounts = autoSources.getCounts();
+   366→
+   367→      if (allTokens.length === 0) {
+   368→        console.error('Nothing to watch. Add tokens with "watch <mint>", enable auto-sources, or have open trades.');
+   369→        process.exit(1);
+   370→      }
+   371→
+   372→      const openCount = paperTracker.getOpenTrades().length;
+   373→      console.log('Starting analysis loop... (Ctrl+C to stop)');
+   374→      console.log(`  Watchlist: ${watchlist.length} | Trending: ${autoSourceCounts.trending} | Whales: ${autoSourceCounts.whales}`);
+   375→      console.log(`  Open trades: ${openCount} | Rules: ${ruleSets.length} sets | Mode: ${config.trigger.mode}`);
+   376→      console.log(`  Scan interval: ${config.pollIntervalMs}ms | Source refresh: ${config.autoSources.refreshIntervalMs / 1000}s\n`);
+   377→
+   378→      const engine = new RuleEngine({ api: localApi });
+   379→      for (const ruleSet of ruleSets) {
+   380→        engine.addRulesFromConfig(ruleSet.rules);
+   381→      }
+   382→
+   383→      let scanCount = 0;
+   384→      const runLoop = async () => {
+   385→        scanCount++;
+   386→        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+   387→
+   388→        // Refresh auto-sources if needed (every 15m by default)
+   389→        await autoSources.refreshIfNeeded();
+   390→
+   391→        // Get fresh token list
+   392→        const tokens = getAllTokens();
+   393→        const openTrades = paperTracker.getOpenTrades();
+   394→        const openMints = new Set(openTrades.map(t => t.mint));
+   395→
+   396→        const scanResults: string[] = [];
+   397→        const tradeResults: string[] = [];
+   398→
+   399→        // Process all tokens
+   400→        for (const token of tokens) {
+   401→          const isOpenTrade = openMints.has(token.mint);
+   402→
+   403→          try {
+   404→            const signals = await engine.analyzeToken(token.mint);
+   405→            const result = engine.aggregateSignals(signals);
+   406→            const sym = token.symbol || token.mint.slice(0, 6);
+   407→            const src = sourceLabel(token.source);
+   408→
+   409→            // If this is an open trade, show P&L
+   410→            if (isOpenTrade) {
+   411→              const trade = openTrades.find(t => t.mint === token.mint)!;
+   412→              const marketData = await localApi.getMarketData(token.mint);
+   413→              const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   414→              const sign = pnl.pnlPercent >= 0 ? '+' : '';
+   415→              const size = trade.positionSizeSol.toFixed(2);
+   416→              const color = pnl.pnlPercent >= 0 ? '\x1b[32m' : '\x1b[31m';
+   417→              const reset = '\x1b[0m';
+   418→              tradeResults.push(`[${src}]${sym} (${size}) ${color}${sign}${pnl.pnlPercent.toFixed(1)}%${reset}`);
+   419→
+   420→              // Check for exit signals
+   421→              if (result.action !== 'hold') {
+   422→                await trigger.trigger({
+   423→                  mint: token.mint,
+   424→                  symbol: trade.symbol,
+   425→                  action: result.action,
+   426→                  priceSol: marketData.price_sol,
+   427→                  priceUsd: marketData.price_usd,
+   428→                  ruleSetId: ruleSets[0].id,
+   429→                  signals: result.signals,
+   430→                  confidence: result.confidence,
+   431→                });
+   432→                await paperTracker.save();
+   433→              }
+   434→            } else {
+   435→              // Scan result (not an open trade)
+   436→              if (result.action === 'hold') {
+   437→                scanResults.push(`[${src}]${sym}:-`);
+   438→              } else {
+   439→                const marketData = await localApi.getMarketData(token.mint);
+   440→                const conf = (result.confidence * 100).toFixed(0);
+   441→                const color = result.action === 'buy' ? '\x1b[32m' : '\x1b[31m';
+   442→                const reset = '\x1b[0m';
+   443→                scanResults.push(`[${src}]${sym}:${color}${result.action.toUpperCase()}(${conf}%)${reset}`);
+   444→
+   445→                await trigger.trigger({
+   446→                  mint: token.mint,
+   447→                  symbol: marketData.symbol || token.symbol || 'UNKNOWN',
+   448→                  action: result.action,
+   449→                  priceSol: marketData.price_sol,
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

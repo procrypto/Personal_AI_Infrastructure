@@ -1,0 +1,218 @@
+     1→---
+     2→phase: 22-watchlist-style-screener-volume-trends
+     3→plan: 02
+     4→type: execute
+     5→---
+     6→
+     7→<objective>
+     8→Replace current TokenRow/TokenListColumn with TanStack React Table layout matching Watchlist widget styling.
+     9→
+    10→Purpose: Adopt production Watchlist widget's table layout for screener columns - compact, branded, professional.
+    11→Output: Three screener columns using table layout with Symbol, MCap, Price Change columns, plus token management controls.
+    12→</objective>
+    13→
+    14→<execution_context>
+    15→~/.claude/get-shit-done/workflows/execute-phase.md
+    16→~/.claude/get-shit-done/templates/summary.md
+    17→~/.claude/get-shit-done/references/checkpoints.md
+    18→</execution_context>
+    19→
+    20→<context>
+    21→@.planning/PROJECT.md
+    22→@.planning/ROADMAP.md
+    23→@.planning/phases/22-watchlist-style-screener-volume-trends/22-01-SUMMARY.md
+    24→
+    25→# Watchlist widget reference (pattern to follow)
+    26→
+    27→@apps/web-terminal/src/ui/dashboard/widgets/watchlist-widget-table-view.tsx
+    28→
+    29→# Shared cell components to reuse
+    30→
+    31→@apps/web-terminal/src/ui/discovery/lists/shared/cells/symbol-cell.tsx
+    32→@apps/web-terminal/src/ui/discovery/lists/shared/cells/mcap-cell.tsx
+    33→@apps/web-terminal/src/ui/discovery/lists/shared/cells/price-change-cell.tsx
+    34→
+    35→# Current screener implementation to replace
+    36→
+    37→@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+    38→
+    39→# Token management patterns
+    40→
+    41→@apps/web-terminal/src/components/watchlist-toggle/watchlist-toggle.tsx
+    42→@apps/web-terminal/src/pages/XRayPage/XRayTokensList/XRayListItem/XRayListItem.tsx (hideToken pattern)
+    43→
+    44→# Blacklist store for hide functionality
+    45→
+    46→# Uses: usePersistentGlobalStore -> state.blacklist.addToBlacklist/isBlacklisted
+    47→
+    48→# Prior decisions
+    49→
+    50→- Row height: TABLE_ROW_HEIGHT_SMALL + 8 (44px)
+    51→- Keep signal backgrounds (confluence-based from Phase 17)
+    52→- Font sizes must remain same as Watchlist widget
+    53→  </context>
+    54→
+    55→<tasks>
+    56→
+    57→<task type="auto">
+    58→  <name>Task 1: Create ScreenerTable component</name>
+    59→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/screener-table.tsx</files>
+    60→  <action>
+    61→    Create a new ScreenerTable component based on Watchlist widget table pattern:
+    62→
+    63→    1. Use @tanstack/react-table with createColumnHelper<ScreenerTokenData>()
+    64→    2. Configure columns:
+    65→       - **Token** (Symbol): 100px width, use SymbolCell pattern (image + symbol text)
+    66→       - **MCap**: 70px width, formatted USD (K/M suffixes)
+    67→       - **1h %**: 60px width, use PriceChangeCell pattern (green/red)
+    68→       - **Action**: 32px width - WatchlistToggle OR HideButton based on column type
+    69→
+    70→    3. Row styling:
+    71→       - Height: 44px (TABLE_ROW_HEIGHT_SMALL + 8)
+    72→       - Background: signal-based (keep confluence coloring from Phase 17)
+    73→       - Hover: `hover:bg-bg-quartiary`
+    74→       - Clickable: navigate to `/trading/${mint}`
+    75→       - Rounded corners on first/last cells
+    76→
+    77→    4. Props interface:
+    78→       ```typescript
+    79→       type ScreenerTableProps = {
+    80→         tokens: ScreenerTokenData[];
+    81→         columnType: 'watchlist' | 'trending' | 'whales';
+    82→         signalStrengthMap: Map<string, SignalStrength>;
+    83→         onHideToken?: (mint: string) => void;
+    84→       };
+    85→       ```
+    86→
+    87→    Follow watchlist-widget-table-view.tsx patterns exactly for table setup.
+    88→    Do NOT include Volume or Liquidity columns (removed per requirements).
+    89→
+    90→  </action>
+    91→  <verify>TypeScript compiles, component renders without errors</verify>
+    92→  <done>ScreenerTable component created with columns matching Watchlist style</done>
+    93→</task>
+    94→
+    95→<task type="auto">
+    96→  <name>Task 2: Create HideTokenButton component</name>
+    97→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget/hide-token-button.tsx</files>
+    98→  <action>
+    99→    Create a HideTokenButton component following X-Ray's pattern:
+   100→
+   101→    1. Use `usePersistentGlobalStore` blacklist functions:
+   102→       - `state.blacklist.addToBlacklist(mint)`
+   103→       - `state.blacklist.isBlacklisted(mint)`
+   104→
+   105→    2. UI: Small X or EyeOff icon button (similar to WatchlistToggle size)
+   106→       - Icon: Use `X` from lucide-react (or `EyeOff` if X looks too aggressive)
+   107→       - Size: `size-4` to match WatchlistToggle
+   108→       - Tooltip: "Hide token" / "Unhide token"
+   109→
+   110→    3. onClick handler:
+   111→       - Prevent event propagation (don't navigate)
+   112→       - Toggle blacklist state
+   113→       - Show toast confirmation
+   114→
+   115→    4. Props:
+   116→       ```typescript
+   117→       type HideTokenButtonProps = {
+   118→         mint: string;
+   119→         symbol: string;
+   120→       };
+   121→       ```
+   122→
+   123→    Note: Hidden tokens view is deferred to future phase.
+   124→
+   125→  </action>
+   126→  <verify>Component renders, click toggles blacklist state</verify>
+   127→  <done>HideTokenButton created following X-Ray blacklist pattern</done>
+   128→</task>
+   129→
+   130→<task type="auto">
+   131→  <name>Task 3: Replace TokenListColumn with ScreenerTable</name>
+   132→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+   133→  <action>
+   134→    Update the Screener section to use new ScreenerTable:
+   135→
+   136→    1. Replace the three TokenListColumn usages with ScreenerTable:
+   137→       ```tsx
+   138→       <ScreenerTable
+   139→         tokens={watchlistTokens}
+   140→         columnType="watchlist"
+   141→         signalStrengthMap={signalStrengthMap}
+   142→       />
+   143→       ```
+   144→
+   145→    2. For Watchlist column: action column shows WatchlistToggle
+   146→    3. For Trending/Whales columns: action column shows HideTokenButton
+   147→
+   148→    4. Filter out blacklisted tokens from trending/whales:
+   149→       ```typescript
+   150→       const visibleTrendingTokens = trendingTokens.filter(
+   151→         t => !isBlacklisted(t.mint)
+   152→       );
+   153→       ```
+   154→
+   155→    5. Keep existing column headers (Eye/Flame/Wallet icons with counts)
+   156→
+   157→    6. Remove old TokenRow and TokenListColumn components (or keep temporarily for reference)
+   158→
+   159→    Preserve the three-column grid layout:
+   160→    ```tsx
+   161→    <div className="grid min-h-0 flex-1 grid-cols-3 gap-2 overflow-hidden">
+   162→    ```
+   163→
+   164→  </action>
+   165→  <verify>`npm run dev` - screener displays with new table layout</verify>
+   166→  <done>Screener uses ScreenerTable for all three columns</done>
+   167→</task>
+   168→
+   169→<task type="checkpoint:human-verify" gate="blocking">
+   170→  <what-built>Watchlist-style table layout for screener columns with token management controls</what-built>
+   171→  <how-to-verify>
+   172→    1. Run: `npm run dev`
+   173→    2. Open Autopilot widget in dashboard
+   174→    3. Verify screener columns show table layout:
+   175→       - Token (image + symbol)
+   176→       - MCap (formatted)
+   177→       - 1h % change (colored)
+   178→       - Action button (star for Watchlist, X for Trending/Whales)
+   179→    4. Verify row height matches Watchlist widget (compact, ~44px)
+   180→    5. Verify signal backgrounds still work (green/red based on confluence)
+   181→    6. Click star in Watchlist column - should toggle watchlist
+   182→    7. Click X in Trending/Whales - should hide token from list
+   183→    8. Click token row - should navigate to trading page
+   184→    9. Check font sizes match Watchlist widget (brand consistency)
+   185→  </how-to-verify>
+   186→  <resume-signal>Type "approved" to continue, or describe issues to fix</resume-signal>
+   187→</task>
+   188→
+   189→</tasks>
+   190→
+   191→<verification>
+   192→Before declaring plan complete:
+   193→- [ ] `npm run typecheck` passes
+   194→- [ ] `npm run dev` shows screener with table layout
+   195→- [ ] All three columns display correctly
+   196→- [ ] Token management controls work (star, hide)
+   197→- [ ] Signal backgrounds preserved
+   198→- [ ] Row click navigation works
+   199→</verification>
+   200→
+   201→<success_criteria>
+   202→
+   203→- ScreenerTable component created matching Watchlist widget style
+   204→- HideTokenButton component created with blacklist integration
+   205→- All three screener columns use new table layout
+   206→- Watchlist has star toggle, Trending/Whales have hide button
+   207→- Visual appearance matches Watchlist widget (compact, branded)
+   208→- Human verified the visual result
+   209→  </success_criteria>
+   210→
+   211→<output>
+   212→After completion, create `.planning/phases/22-watchlist-style-screener-volume-trends/22-02-SUMMARY.md`
+   213→</output>
+   214→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

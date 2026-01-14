@@ -1,0 +1,105 @@
+---
+phase: 06-backend-feed-consumption
+plan: 01
+subsystem: data-feeds
+tags: [websocket, ohlcv, feed-freshness, polling-optimization]
+
+# Dependency graph
+requires:
+  - phase: 04-nats-data-feeds
+    provides: DataFeedMessage types and handleDataFeed switch
+provides:
+  - Feed freshness tracking (isFeedFresh, getFeedStats)
+  - OHLCV feed-first polling pattern
+affects: [07-validation-cleanup]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [feed-first-api-fallback]
+
+key-files:
+  created: []
+  modified:
+    - src/websocket-server.ts
+    - src/cli.ts
+
+key-decisions:
+  - "60s freshness threshold for OHLCV feeds (balances real-time data with tolerance for brief disconnects)"
+  - "Log data source for visibility (debugging feed vs API usage)"
+
+patterns-established:
+  - "Feed-first, API-fallback: Check WebSocket feed freshness before making API calls"
+
+issues-created: []
+
+# Metrics
+duration: 4min
+completed: 2026-01-09
+---
+
+# Phase 6 Plan 1: OHLCV Feed Integration Summary
+
+**Feed freshness tracking with isFeedFresh/getFeedStats methods, OHLCV feed-first polling pattern in runLoop**
+
+## Performance
+
+- **Duration:** 4 min
+- **Started:** 2026-01-09T12:25:00Z
+- **Completed:** 2026-01-09T12:29:00Z
+- **Tasks:** 2
+- **Files modified:** 2
+
+## Accomplishments
+
+- Added feed timestamp tracking for all feed types (market_data, ohlcv, cvd, trending, whale)
+- Implemented isFeedFresh() method with configurable age thresholds
+- Implemented getFeedStats() for monitoring feed activity
+- Modified OHLCV polling loop to use feed data when fresh (< 60s)
+- Added logging to show data source (feed vs API)
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Add feed freshness tracking to WebSocket server** - `0c178ae` (feat)
+2. **Task 2: Wire OHLCV feed into polling loop** - `f75b977` (feat)
+
+## Files Created/Modified
+
+- `src/websocket-server.ts` - Added feedLastUpdated Map, isFeedFresh(), getFeedStats() methods
+- `src/cli.ts` - Modified runLoop to check feed before API polling
+
+## Decisions Made
+
+- **60s freshness threshold for OHLCV:** Balances real-time data with tolerance for brief WebSocket disconnects. More aggressive thresholds could cause unnecessary API fallbacks.
+- **Log data source visibility:** Added `[Feed] Using OHLCV feed for X positions` logging to aid debugging and monitoring feed effectiveness.
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Quality Gate
+
+**Verdict:** PASS
+
+**Checks:**
+- [x] Implementation matches plan intent
+- [x] All claims substantiated by commits
+- [x] Evidence trail complete (per-task commits)
+- [x] No unverified confident assertions
+
+**Notes:** Clean execution with all 65 tests passing. Build successful.
+
+## Next Phase Readiness
+
+- Ready for 06-02-PLAN.md (watchlist feed handler and feed activity logging)
+- Feed-first pattern established and can be extended to other data types
+
+---
+*Phase: 06-backend-feed-consumption*
+*Completed: 2026-01-09*

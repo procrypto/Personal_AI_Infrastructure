@@ -1,0 +1,92 @@
+     1→/**
+     2→ * Autopilot Event Parser
+     3→ *
+     4→ * Pure functions and types for parsing autopilot WebSocket events.
+     5→ * This module is the single source of truth for event types and parsing logic.
+     6→ */
+     7→
+     8→import type {
+     9→  AutopilotSignal,
+    10→  AutopilotMarketStatus,
+    11→  AutopilotStats,
+    12→  AutopilotScanTick,
+    13→  AutopilotTokenList,
+    14→  AutopilotConfig,
+    15→  AutopilotStrategies,
+    16→  AutopilotLastAnalysis,
+    17→} from "@/store/memoryStore/slices/autopilot-store/types";
+    18→
+    19→/**
+    20→ * Backend position data format (entry-only, no current price)
+    21→ */
+    22→export interface BackendPositionData {
+    23→  mint: string;
+    24→  symbol: string;
+    25→  action: "buy" | "sell";
+    26→  entryPriceSol: number;
+    27→  positionSizeSol: number;
+    28→  entryTime: number;
+    29→}
+    30→
+    31→/**
+    32→ * Union type for all autopilot WebSocket events
+    33→ */
+    34→export type AutopilotEvent =
+    35→  | { type: "position_update"; positions: BackendPositionData[] }
+    36→  | { type: "signal"; signal: AutopilotSignal }
+    37→  | { type: "market_status"; status: AutopilotMarketStatus }
+    38→  | { type: "stats_update"; stats: AutopilotStats }
+    39→  | { type: "scan_tick"; tick: AutopilotScanTick }
+    40→  | { type: "token_list"; tokens: AutopilotTokenList }
+    41→  | { type: "config"; config: AutopilotConfig }
+    42→  | { type: "strategies"; strategies: AutopilotStrategies }
+    43→  | { type: "last_analysis"; analysis: AutopilotLastAnalysis };
+    44→
+    45→/**
+    46→ * Valid event type names for validation
+    47→ */
+    48→const VALID_EVENT_TYPES = [
+    49→  "position_update",
+    50→  "signal",
+    51→  "market_status",
+    52→  "stats_update",
+    53→  "scan_tick",
+    54→  "token_list",
+    55→  "config",
+    56→  "strategies",
+    57→  "last_analysis",
+    58→] as const;
+    59→
+    60→/**
+    61→ * Pure function to parse autopilot WebSocket events.
+    62→ * Returns null for pong messages, malformed data, or unknown event types.
+    63→ */
+    64→export function parseAutopilotEvent(data: unknown): AutopilotEvent | null {
+    65→  // Skip pong messages
+    66→  if (data && typeof data === "object" && "pong" in data) {
+    67→    return null;
+    68→  }
+    69→
+    70→  // Validate data is an object with a type field
+    71→  if (!data || typeof data !== "object" || !("type" in data)) {
+    72→    return null;
+    73→  }
+    74→
+    75→  const event = data as AutopilotEvent;
+    76→
+    77→  // Validate known event types
+    78→  if (
+    79→    !VALID_EVENT_TYPES.includes(
+    80→      event.type as (typeof VALID_EVENT_TYPES)[number]
+    81→    )
+    82→  ) {
+    83→    return null;
+    84→  }
+    85→
+    86→  return event;
+    87→}
+    88→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

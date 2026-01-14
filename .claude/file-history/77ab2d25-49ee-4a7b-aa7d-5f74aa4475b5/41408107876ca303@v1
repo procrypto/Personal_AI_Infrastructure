@@ -1,0 +1,776 @@
+import type { ChangeEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import JSZip from 'jszip';
+import './App.css';
+import mappingSeed from './user_mapping.json';
+import type {
+    GroupInfo,
+    TopicIndex,
+    TopicWorkerEvent,
+    UserMapping,
+    WorkerEvent,
+    SearchResultWithContext,
+} from './types';
+import {
+    enrichMappingFromOutputs,
+    normalizeMapping,
+    parseChatOutput,
+} from './extractor';
+import type { ChatOutput } from './types';
+import { THEME_CATEGORIES, getThemeTerms } from './semanticSets';
+
+// User info returned from worker scan
+interface UserInfo {
+    userId: string;
+    displayName: string;
+    messageCount?: number; // Optional - not available in fast scan.
+}
+
+const readFileAsText = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ''));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(file);
+    });
+
+const sanitizeName = (input: string): string => input.replace(/[^a-z0-9-_]+/gi, '_').slice(0, 64);
+
+const normalizeUserId = (value: string): string => (value.startsWith('user') ? value.slice(4) : value);
+
+const parseWhitelistInput = (input: string): Set<string> => {
+    const ids = new Set<string>();
+    const lines = input.split('\n');
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) {
+            continue;
+        }
+        const normalized = normalizeUserId(trimmed);
+        if (normalized.length > 0) {
+            ids.add(normalized);
+        }
+    }
+    return ids;
+};
+
+const downloadBlob = (blob: Blob, filename: string): void => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+};
+
+const downloadJson = (payload: unknown, filename: string): void => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, filename);
+};
+
+type AppMode = 'user' | 'group' | 'topic';
+
+// Persist mode preference in localStorage.
+const getStoredMode = (): AppMode => {
+    try {
+        const stored = localStorage.getItem('tg-extractor-mode');
+        if (stored === 'user' || stored === 'group' || stored === 'topic') return stored;
+    } catch { /* localStorage may be unavailable */ }
+    return 'group'; // Default to group mode.
+};
+
+const storeMode = (mode: AppMode): void => {
+    try {
+        localStorage.setItem('tg-extractor-mode', mode);
+    } catch { /* localStorage may be unavailable */ }
+};
+
+function App() {
+    const [mode, setMode] = useState<AppMode>(getStoredMode);
+    const [baseMapping] = useState<UserMapping>(() => normalizeMapping(mappingSeed as UserMapping));
+    const [mapping, setMapping] = useState<UserMapping>(() => normalizeMapping(mappingSeed as UserMapping));
+    const [availableUsers, setAvailableUsers] = useState<UserInfo[]>([]);
+    const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+    const [availableGroups, setAvailableGroups] = useState<GroupInfo[]>([]);
+    const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+    const [startDate, setStartDate] = useState<Date | null>(null);
+    const [endDate, setEndDate] = useState<Date | null>(null);
+    const [status, setStatus] = useState('Idle');
+    const [summary, setSummary] = useState('');
+    const [enrichmentSummary, setEnrichmentSummary] = useState('');
+    const [progress, setProgress] = useState<string>('');
+    const [fileRef, setFileRef] = useState<File | null>(null);
+    const [workerReady, setWorkerReady] = useState(false);
+    const [whitelistInput, setWhitelistInput] = useState<string>('');
+    const [whitelistExpanded, setWhitelistExpanded] = useState<boolean>(false);
+
+    // Topic Mode state
+    const [topicZipFile, setTopicZipFile] = useState<File | null>(null);
+    const [topicIndex, setTopicIndex] = useState<TopicIndex | null>(null);
+    const [topicStatus, setTopicStatus] = useState<string>('');
+    const [topicWorkerReady, setTopicWorkerReady] = useState(false);
+
+    const workerRef = useRef<Worker | null>(null);
+    const topicWorkerRef = useRef<Worker | null>(null);
+    const mappingRef = useRef<UserMapping>(mapping);
+    const lastRangeRef = useRef<{ startUnix?: number; endUnix?: number } | null>(null);
+    const whitelistInputRef = useRef<string>(whitelistInput);
+    const modeRef = useRef<AppMode>(mode);
+
+    useEffect(() => {
+        mappingRef.current = mapping;
+    }, [mapping]);
+
+    useEffect(() => {
+        whitelistInputRef.current = whitelistInput;
+    }, [whitelistInput]);
+
+    useEffect(() => {
+        modeRef.current = mode;
+    }, [mode]);
+
+    useEffect(() => {
+        const worker = new Worker(new URL('./streamWorker.ts', import.meta.url), { type: 'module' });
+        workerRef.current = worker;
+        
+        worker.onerror = (event: ErrorEvent) => {
+            setStatus(`Worker crashed: ${event.message}`);
+            setProgress('');
+        };
+        
+        worker.onmessage = (event: MessageEvent<WorkerEvent>) => {
+            const data = event.data;
+            
+            if (data && (data as { type?: string }).type === 'workerReady') {
+                setWorkerReady(true);
+                return;
+            }
+            
+            if ('phase' in data) {
+                // If totalBytes is 0, this is an error message.
+                if (data.totalBytes === 0 && data.message) {
+                    setStatus(data.message);
+                    setProgress('');
+                    return;
+                }
+                const pct = data.totalBytes > 0 ? (100 * data.loadedBytes) / data.totalBytes : 0;
+                setProgress(`${data.message ?? `${data.phase} ${pct.toFixed(1)}%`}`);
+                return;
+            }
+            
+            if (data.type === 'scanResult') {
+                const scanData = data as unknown as { users: UserInfo[]; totalMessages: number; filteredMessages: number; truncationContext?: string };
+                const normalizedUsers = scanData.users.map((user) => ({
+                    ...user,
+                    userId: normalizeUserId(user.userId),
+                }));
+                setAvailableUsers(normalizedUsers);
+                
+                // Apply whitelist: if active, only select users in both whitelist AND scan results.
+                const whitelistIds = parseWhitelistInput(whitelistInputRef.current);
+                const whitelistActive = whitelistIds.size > 0;
+                let selectedIds: string[];
+                let whitelistMatchCount = 0;
+                if (whitelistActive) {
+                    selectedIds = normalizedUsers
+                        .filter((u) => whitelistIds.has(u.userId))
+                        .map((u) => u.userId);
+                    whitelistMatchCount = selectedIds.length;
+                }
+                else {
+                    selectedIds = normalizedUsers.map((u) => u.userId);
+                }
+                setSelectedUserIds(selectedIds);
+                
+                let statusMsg = `Found ${scanData.users.length} users.`;
+                if (whitelistActive) {
+                    statusMsg += ` Whitelist matched ${whitelistMatchCount} of ${whitelistIds.size} IDs.`;
+                }
+                statusMsg += ' Message counts will appear during filtering.';
+                if (scanData.truncationContext) {
+                    statusMsg += ' ⚠️ File was truncated.';
+                    console.warn('Truncation details:\n', scanData.truncationContext);
+                }
+                setStatus(statusMsg);
+                if (scanData.truncationContext) {
+                    setSummary(scanData.truncationContext);
+                }
+                else {
+                    setProgress('');
+                }
+                return;
+            }
+            
+            if (data.type === 'scanGroupResult') {
+                const scanData = data as unknown as { groups: GroupInfo[]; totalMessages: number; filteredMessages: number; truncationContext?: string };
+                setAvailableGroups(scanData.groups);
+                setSelectedGroupIds(scanData.groups.map((g) => g.chatId));
+                
+                let statusMsg = `Found ${scanData.groups.length} groups with ${scanData.filteredMessages.toLocaleString()} messages (filtered from ${scanData.totalMessages.toLocaleString()} total).`;
+                if (scanData.truncationContext) {
+                    statusMsg += ' ⚠️ File was truncated.';
+                    console.warn('Truncation details:\n', scanData.truncationContext);
+                }
+                setStatus(statusMsg);
+                if (scanData.truncationContext) {
+                    setSummary(scanData.truncationContext);
+                }
+                else {
+                    setProgress('');
+                }
+                return;
+            }
+            
+            if (data.type === 'filterResult') {
+                setMapping(data.mapping);
+                setStatus(`Filtered ${data.outputs.length} chats (${data.totalMessages} messages).`);
+                setProgress('Creating ZIP file...');
+                
+                // Extract date range and selected users from worker response.
+                const filterData = data as unknown as { 
+                    outputs: ChatOutput[]; 
+                    dateRange?: { startUnix?: number; endUnix?: number };
+                    selectedUserIds?: string[];
+                };
+                
+                // Format date range for filename.
+                const formatDateForFilename = (unixSeconds: number): string => {
+                    const d = new Date(unixSeconds * 1000);
+                    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+                };
+                
+                const startStr = filterData.dateRange?.startUnix 
+                    ? formatDateForFilename(filterData.dateRange.startUnix) 
+                    : 'start';
+                const endStr = filterData.dateRange?.endUnix 
+                    ? formatDateForFilename(filterData.dateRange.endUnix) 
+                    : 'end';
+                const dateRangeStr = `${startStr}_to_${endStr}`;
+                
+                // Bundle all files into a single ZIP to avoid browser download throttling.
+                const zip = new JSZip();
+                let fileCount = 0;
+                data.outputs.forEach((chat: ChatOutput) => {
+                    const enrichedChat = {
+                        ...chat,
+                        dateRange: {
+                            start: filterData.dateRange?.startUnix ? new Date(filterData.dateRange.startUnix * 1000).toISOString() : null,
+                            end: filterData.dateRange?.endUnix ? new Date(filterData.dateRange.endUnix * 1000).toISOString() : null,
+                        },
+                        selectedUsers: filterData.selectedUserIds ?? [],
+                    };
+                    const safeName = sanitizeName(`${chat.chatName}_${chat.chatId}_${dateRangeStr}`);
+                    zip.file(`${safeName}.json`, JSON.stringify(enrichedChat, null, 2));
+                    fileCount++;
+                });
+                
+                // Generate and download the ZIP.
+                zip.generateAsync({ type: 'blob' })
+                    .then((zipBlob) => {
+                        const zipName = `telegram_export_${dateRangeStr}.zip`;
+                        downloadBlob(zipBlob, zipName);
+                        setProgress('');
+                        setSummary(`Downloaded ZIP with ${fileCount} chat files.`);
+                    })
+                    .catch((err) => {
+                        console.error('Failed to create ZIP:', err);
+                        setProgress('');
+                        setSummary(`ZIP creation failed: ${(err as Error).message}`);
+                    });
+            }
+        };
+        
+        return () => {
+            worker.terminate();
+            workerRef.current = null;
+        };
+    }, []);
+
+    // Topic Worker initialization
+    useEffect(() => {
+        const topicWorker = new Worker(new URL('./topicWorker.ts', import.meta.url), { type: 'module' });
+        topicWorkerRef.current = topicWorker;
+
+        topicWorker.onerror = (event: ErrorEvent) => {
+            setTopicStatus(`Worker crashed: ${event.message}`);
+        };
+
+        topicWorker.onmessage = (event: MessageEvent<TopicWorkerEvent>) => {
+            const data = event.data;
+
+            if (data.type === 'topicWorkerReady') {
+                setTopicWorkerReady(true);
+                return;
+            }
+
+            if (data.type === 'topicProgress') {
+                setTopicStatus(data.message ?? `${data.phase} ${data.current}/${data.total}`);
+                return;
+            }
+
+            if (data.type === 'topicIndexResult') {
+                setTopicIndex(data.index);
+                setTopicStatus(`Loaded ${data.index.chats.length} chats with ${data.index.totalMessages.toLocaleString()} messages`);
+            }
+        };
+
+        return () => {
+            topicWorker.terminate();
+            topicWorkerRef.current = null;
+        };
+    }, []);
+
+    // Build label for each user: prefer mapping name, fallback to worker display name.
+    // Build label for each user: prefer mapping name, fallback to worker display name.
+    // Message counts are not available in fast scan - they appear during filtering.
+    const getUserLabel = (user: UserInfo): string => `${user.displayName} (${user.userId})`;
+
+    // Build label for each group.
+    const getGroupLabel = (group: GroupInfo): string => {
+        const typeStr = group.chatType ? ` [${group.chatType}]` : '';
+        return `${group.chatName}${typeStr}`;
+    };
+
+    const handleStartScan = (): void => {
+        if (!fileRef) {
+            setStatus('Please select a file first.');
+            return;
+        }
+        if (!workerReady) {
+            setStatus('Worker not ready, please wait...');
+            return;
+        }
+        
+        // Convert dates to Unix timestamps for worker (Date objects don't survive postMessage).
+        const range = {
+            startUnix: startDate ? Math.floor(startDate.getTime() / 1000) : undefined,
+            endUnix: endDate ? Math.floor(endDate.getTime() / 1000) : undefined,
+        };
+        lastRangeRef.current = { ...range };
+        
+        setStatus(`Scanning ${fileRef.name}...`);
+        setSummary('');
+        setProgress('Starting scan...');
+        
+        if (mode === 'user') {
+            setAvailableUsers([]);
+            setSelectedUserIds([]);
+            workerRef.current?.postMessage({ type: 'scan', file: fileRef, range });
+        }
+        else {
+            setAvailableGroups([]);
+            setSelectedGroupIds([]);
+            workerRef.current?.postMessage({ type: 'scanGroups', file: fileRef, range });
+        }
+    };
+
+    const handleFileSelect = (event: ChangeEvent<HTMLInputElement>): void => {
+        const file = event.target.files?.[0];
+        if (file) {
+            setFileRef(file);
+            setStatus(`Selected: ${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+            setAvailableUsers([]);
+            setSelectedUserIds([]);
+            setAvailableGroups([]);
+            setSelectedGroupIds([]);
+        }
+    };
+
+    const handleUserSelect = (event: ChangeEvent<HTMLSelectElement>): void => {
+        const next = Array.from(event.target.selectedOptions).map((opt) => normalizeUserId(opt.value));
+        setSelectedUserIds(next);
+    };
+
+    const handleFilter = (): void => {
+        if (!fileRef) {
+            setStatus('Please load an export JSON first.');
+            return;
+        }
+        if (selectedUserIds.length === 0) {
+            setStatus('Select at least one user ID.');
+            return;
+        }
+        if (!lastRangeRef.current) {
+            setStatus('Please scan the export before filtering.');
+            return;
+        }
+
+        const range = lastRangeRef.current;
+        
+        setStatus('Filtering (streaming)...');
+        setProgress('Starting filter...');
+        const normalizedSelectedIds = selectedUserIds.map((id) => normalizeUserId(id));
+        workerRef.current?.postMessage({
+            type: 'filter',
+            file: fileRef,
+            selectedUserIds: normalizedSelectedIds,
+            range,
+            mapping,
+        });
+    };
+
+    const handleGroupSelect = (event: ChangeEvent<HTMLSelectElement>): void => {
+        const next = Array.from(event.target.selectedOptions).map((opt) => opt.value);
+        setSelectedGroupIds(next);
+    };
+
+    const handleGroupFilter = (): void => {
+        if (!fileRef) {
+            setStatus('Please load an export JSON first.');
+            return;
+        }
+        if (selectedGroupIds.length === 0) {
+            setStatus('Select at least one group.');
+            return;
+        }
+        if (!lastRangeRef.current) {
+            setStatus('Please scan the export before filtering.');
+            return;
+        }
+
+        const range = lastRangeRef.current;
+        
+        setStatus('Extracting groups...');
+        setProgress('Starting extraction...');
+        workerRef.current?.postMessage({
+            type: 'filterGroups',
+            file: fileRef,
+            selectedGroupIds,
+            range,
+        });
+    };
+
+    const handleMappingReset = (): void => {
+        setMapping(normalizeMapping(baseMapping));
+        setStatus('Mapping reset to defaults.');
+    };
+
+    const handleMappingDownload = (): void => {
+        downloadJson(mapping, 'user_mapping_updated.json');
+    };
+
+    const handleEnrichUpload = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+        const files = event.target.files;
+        if (!files || files.length === 0) {
+            return;
+        }
+        try {
+            const texts = await Promise.all(Array.from(files).map((file) => readFileAsText(file)));
+            const outputs: ChatOutput[] = [];
+            texts.forEach((text) => outputs.push(...parseChatOutput(text)));
+            const result = enrichMappingFromOutputs(outputs, mapping);
+            setMapping(result.mapping);
+            setEnrichmentSummary(
+                `Inspected ${result.inspectedMessages} messages; added ${result.addedAliases} new aliases.`,
+            );
+        } catch (error) {
+            setEnrichmentSummary(`Enrichment failed: ${(error as Error).message}`);
+        }
+    };
+
+    return (
+        <div className="app">
+            <header>
+                <h1>Telegram Chat Extractor</h1>
+                <p><b>Runs entirely in-browser. No files leave your machine.</b></p>
+                <p>Export a Telegram data download in JSON format to get started.</p>
+            </header>
+
+            <section>
+                <div className="mode-selector">
+                    <span className="mode-label">Export Mode</span>
+                    <label className="radio-option">
+                        <input
+                            type="radio"
+                            name="mode"
+                            value="group"
+                            checked={mode === 'group'}
+                            onChange={() => {
+                                setMode('group');
+                                storeMode('group');
+                                setAvailableUsers([]);
+                                setSelectedUserIds([]);
+                                setAvailableGroups([]);
+                                setSelectedGroupIds([]);
+                                setSummary('');
+                                setProgress('');
+                            }}
+                        />
+                        Group Mode <span className="mode-hint">(fast)</span>
+                    </label>
+                    <label className="radio-option">
+                        <input
+                            type="radio"
+                            name="mode"
+                            value="user"
+                            checked={mode === 'user'}
+                            onChange={() => {
+                                setMode('user');
+                                storeMode('user');
+                                setAvailableUsers([]);
+                                setSelectedUserIds([]);
+                                setAvailableGroups([]);
+                                setSelectedGroupIds([]);
+                                setSummary('');
+                                setProgress('');
+                            }}
+                        />
+                        User Mode
+                    </label>
+                    <label className="radio-option">
+                        <input
+                            type="radio"
+                            name="mode"
+                            value="topic"
+                            checked={mode === 'topic'}
+                            onChange={() => {
+                                setMode('topic');
+                                storeMode('topic');
+                                setAvailableUsers([]);
+                                setSelectedUserIds([]);
+                                setAvailableGroups([]);
+                                setSelectedGroupIds([]);
+                                setSummary('');
+                                setProgress('');
+                            }}
+                        />
+                        Topic Mode <span className="mode-hint">(analyze exports)</span>
+                    </label>
+                </div>
+
+                {mode === 'user' && (
+                <details open={whitelistExpanded} onToggle={(e) => setWhitelistExpanded((e.target as HTMLDetailsElement).open)}>
+                    <summary>
+                        User ID Whitelist (optional) 
+                        {parseWhitelistInput(whitelistInput).size > 0 && (
+                            <span className="whitelist-count"> — {parseWhitelistInput(whitelistInput).size} IDs loaded</span>
+                        )}
+                    </summary>
+                    <div className="whitelist-section">
+                        <p className="hint">Paste user IDs (one per line) to auto-select only these users after scanning.</p>
+                        <textarea
+                            value={whitelistInput}
+                            onChange={(e) => setWhitelistInput(e.target.value)}
+                            placeholder="123456789&#10;987654321&#10;user555555555"
+                            rows={6}
+                            className="whitelist-textarea"
+                        />
+                        <div className="whitelist-actions">
+                            <button 
+                                type="button" 
+                                onClick={() => setWhitelistInput('')}
+                                disabled={whitelistInput.length === 0}
+                            >
+                                Clear whitelist
+                            </button>
+                        </div>
+                    </div>
+                </details>
+                )}
+
+                {mode === 'topic' && (
+                <div className="topic-mode-section">
+                    <p className="hint">Load a ZIP file exported from Group/User mode to analyze chat content.</p>
+
+                    <div className="field">
+                        <label htmlFor="topic-zip-file">ZIP file from previous export</label>
+                        <input
+                            id="topic-zip-file"
+                            type="file"
+                            accept=".zip"
+                            onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                    setTopicZipFile(file);
+                                    setTopicStatus(`Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+                                    setTopicIndex(null);
+                                }
+                            }}
+                        />
+                    </div>
+
+                    <button
+                        onClick={() => {
+                            if (!topicZipFile) {
+                                setTopicStatus('Please select a ZIP file first.');
+                                return;
+                            }
+                            if (!topicWorkerReady) {
+                                setTopicStatus('Worker not ready, please wait...');
+                                return;
+                            }
+                            setTopicIndex(null);
+                            setTopicStatus('Loading ZIP...');
+                            topicWorkerRef.current?.postMessage({ type: 'loadZip', file: topicZipFile });
+                        }}
+                        disabled={!topicZipFile || !topicWorkerReady}
+                    >
+                        Load ZIP
+                    </button>
+
+                    <p className="status">{topicStatus}</p>
+
+                    {topicIndex && (
+                        <div className="topic-results">
+                            <p className="status">
+                                Loaded {topicIndex.chats.length} chats with {topicIndex.totalMessages.toLocaleString()} messages
+                            </p>
+                        </div>
+                    )}
+                </div>
+                )}
+
+                {mode !== 'topic' && (
+                <>
+                <div className="dates">
+                    <div className="field">
+                        <label>Start (UTC)</label>
+                        <DatePicker
+                            selected={startDate}
+                            onChange={(date: Date | null) => setStartDate(date)}
+                            showTimeSelect
+                            timeFormat="HH:mm"
+                            timeIntervals={15}
+                            dateFormat="yyyy-MM-dd HH:mm"
+                            placeholderText="Select start date/time"
+                            isClearable
+                        />
+                    </div>
+                    <div className="field">
+                        <label>End (UTC)</label>
+                        <DatePicker
+                            selected={endDate}
+                            onChange={(date: Date | null) => setEndDate(date)}
+                            showTimeSelect
+                            timeFormat="HH:mm"
+                            timeIntervals={15}
+                            dateFormat="yyyy-MM-dd HH:mm"
+                            placeholderText="Select end date/time"
+                            isClearable
+                            minDate={startDate ?? undefined}
+                        />
+                    </div>
+                </div>
+
+                <div className="field">
+                    <label htmlFor="export-file">Telegram export file</label>
+                    <input id="export-file" type="file" accept="application/json" onChange={handleFileSelect} />
+                </div>
+                
+                <button onClick={handleStartScan} disabled={!fileRef || !workerReady}>
+                    {mode === 'user' ? 'Scan for users in date range' : 'Scan for groups in date range'}
+                </button>
+                
+                <p className="status">{progress}</p>
+                
+                {mode === 'user' && availableUsers.length > 0 && (
+                    <>
+                        <div className="field">
+                            <label htmlFor="users">
+                                Users found ({availableUsers.length} users, sorted by message count)
+                            </label>
+                            <select
+                                id="users"
+                                multiple
+                                size={Math.min(15, Math.max(6, availableUsers.length))}
+                                value={selectedUserIds}
+                                onChange={handleUserSelect}
+                            >
+                                {availableUsers.map((user) => (
+                                    <option key={user.userId} value={user.userId}>
+                                        {getUserLabel(user)}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <button onClick={handleFilter}>Filter and download per chat</button>
+                    </>
+                )}
+
+                {mode === 'group' && availableGroups.length > 0 && (
+                    <>
+                        <div className="field">
+                            <label htmlFor="groups">
+                                Groups found ({availableGroups.length} groups, sorted alphabetically)
+                            </label>
+                            <select
+                                id="groups"
+                                multiple
+                                size={Math.min(15, Math.max(6, availableGroups.length))}
+                                value={selectedGroupIds}
+                                onChange={handleGroupSelect}
+                            >
+                                {availableGroups.map((group) => (
+                                    <option key={group.chatId} value={group.chatId}>
+                                        {getGroupLabel(group)}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="selection-summary">
+                                <span className="selection-chip">
+                                    {selectedGroupIds.length} of {availableGroups.length} selected
+                                </span>
+                                {selectedGroupIds.length > 0 && selectedGroupIds.length < availableGroups.length && (
+                                    <button type="button" className="link-button" onClick={() => setSelectedGroupIds(availableGroups.map(g => g.chatId))}>
+                                        Select all
+                                    </button>
+                                )}
+                                {selectedGroupIds.length > 0 && (
+                                    <button type="button" className="link-button" onClick={() => setSelectedGroupIds([])}>
+                                        Clear
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        <button onClick={handleGroupFilter} disabled={selectedGroupIds.length === 0}>
+                            Download {selectedGroupIds.length} selected group{selectedGroupIds.length !== 1 ? 's' : ''}
+                        </button>
+                    </>
+                )}
+                
+                <p className="status">{status}</p>
+                <p className="status">{summary}</p>
+                </>
+                )}
+            </section>
+
+            <section className="tools-section">
+                <h2>Tools</h2>
+                <p className="hint">Optional utilities for managing user mappings. Not required for basic export workflow.</p>
+
+                <details>
+                    <summary>Download / Reset Mapping</summary>
+                    <div className="tool-content">
+                        <p className="hint">Export the current user mapping or reset it to defaults.</p>
+                        <div className="actions">
+                            <button onClick={handleMappingDownload}>Download mapping JSON</button>
+                            <button onClick={handleMappingReset}>Reset mapping to defaults</button>
+                        </div>
+                    </div>
+                </details>
+
+                <details>
+                    <summary>Enrich Mapping from Prior Exports</summary>
+                    <div className="tool-content">
+                        <p className="hint">Upload previously exported chat JSON files to discover new user aliases.</p>
+                        <div className="field">
+                            <label htmlFor="enrich-files">Upload prior chat JSON files</label>
+                            <input
+                                id="enrich-files"
+                                type="file"
+                                accept="application/json"
+                                multiple
+                                onChange={handleEnrichUpload}
+                            />
+                        </div>
+                        <p className="status">{enrichmentSummary}</p>
+                    </div>
+                </details>
+            </section>
+        </div>
+    );
+}
+
+export default App;

@@ -1,0 +1,114 @@
+/**
+ * Analysis Rule Types
+ *
+ * Rules are configurable analysis logic that runs as deterministic code.
+ * When conditions are met, they emit signals that can trigger LOIS trades.
+ */
+
+import type { TokenMarketData, OHLCV, Trade } from '../api/types.js';
+
+// Signal emitted when a rule condition is met
+export interface Signal {
+  ruleId: string;
+  ruleName: string;
+  mint: string;
+  symbol: string;
+  type: 'buy' | 'sell' | 'alert';
+  strength: number; // 0-1, how confident the signal is
+  reason: string;
+  data: Record<string, any>; // Rule-specific data
+  timestamp: number;
+}
+
+// Context provided to rules for analysis
+export interface AnalysisContext {
+  token: TokenMarketData;
+  ohlcv: OHLCV[];
+  trades: Trade[];
+}
+
+// Base rule configuration
+export interface RuleConfig {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  type: 'buy' | 'sell' | 'both';
+}
+
+// Rule interface - all rules implement this
+export interface Rule<TConfig extends RuleConfig = RuleConfig> {
+  config: TConfig;
+  analyze(context: AnalysisContext): Signal | null;
+}
+
+// ============================================================================
+// Price Pattern Rules
+// ============================================================================
+
+export interface PriceChangeRuleConfig extends RuleConfig {
+  ruleType: 'price_change';
+  timeframe: '5m' | '1h' | '6h' | '24h';
+  threshold: number; // Percentage change (e.g., 10 = 10%)
+  direction: 'up' | 'down' | 'both';
+}
+
+export interface BreakoutRuleConfig extends RuleConfig {
+  ruleType: 'breakout';
+  lookbackCandles: number;
+  breakoutPercent: number; // How much above/below the range
+}
+
+export interface MACrossoverRuleConfig extends RuleConfig {
+  ruleType: 'ma_crossover';
+  fastPeriod: number;
+  slowPeriod: number;
+}
+
+// ============================================================================
+// Momentum / Volume Rules
+// ============================================================================
+
+export interface VolumeSpkeRuleConfig extends RuleConfig {
+  ruleType: 'volume_spike';
+  timeframe: '5m' | '1h' | '6h' | '24h';
+  multiplier: number; // Volume must be X times average
+}
+
+export interface BuySellRatioRuleConfig extends RuleConfig {
+  ruleType: 'buy_sell_ratio';
+  timeframe: '5m' | '1h' | '6h' | '24h';
+  minRatio: number; // Minimum buy/sell ratio to trigger
+}
+
+export interface TraderCountRuleConfig extends RuleConfig {
+  ruleType: 'trader_count';
+  timeframe: '5m' | '1h' | '6h' | '24h';
+  minTraders: number;
+  minBuyers?: number;
+}
+
+// ============================================================================
+// Combined Rule Config Type
+// ============================================================================
+
+export type AnyRuleConfig =
+  | PriceChangeRuleConfig
+  | BreakoutRuleConfig
+  | MACrossoverRuleConfig
+  | VolumeSpkeRuleConfig
+  | BuySellRatioRuleConfig
+  | TraderCountRuleConfig;
+
+// ============================================================================
+// Rule Set - Collection of rules to run together
+// ============================================================================
+
+export interface RuleSet {
+  id: string;
+  name: string;
+  description: string;
+  rules: AnyRuleConfig[];
+  // All rules must pass, or just any
+  mode: 'all' | 'any';
+}

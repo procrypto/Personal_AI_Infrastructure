@@ -1,0 +1,149 @@
+# Codebase Concerns
+
+**Analysis Date:** 2026-01-09
+
+## Tech Debt
+
+**Type Assertions (`as any`) Pattern:**
+- Issue: Multiple `as any` casts to work around type system
+- Files: `src/rules/templates.ts` (lines 270-301), `src/rules/engine.ts` (line 70), `src/rules/dispatcher.ts` (line 308), `src/test.ts` (lines 31-37)
+- Why: Generic rule config types don't narrow properly
+- Impact: Reduces type safety, potential runtime errors
+- Fix approach: Refactor rule config types to use discriminated unions properly
+
+**Large File Sizes:**
+- Issue: Several files exceed 500+ lines
+- Files:
+  - `src/cli.ts` (41KB) - CLI interface and analysis loop
+  - `src/rules/rotations.ts` (31KB) - Market structure analysis
+  - `src/trading/magic-buy.ts` (22KB) - Entry logic
+  - `src/trading/magic-exits.ts` (21KB) - Exit logic
+  - `src/trading/market-filter.ts` (16KB) - SOL dump protection
+  - `src/test-comprehensive.ts` (22KB) - Test suite
+- Why: Complex domain logic, organic growth
+- Impact: Harder to navigate and maintain
+- Fix approach: Extract sub-modules for rotations, split CLI into command handlers
+
+**Duplicated Error Handling:**
+- Issue: Similar try-catch patterns repeated in API client and CLI
+- Files: `src/api/client.ts` (fetch wrapper), `src/cli.ts` (analysis loop)
+- Why: No shared error handling utility
+- Impact: Inconsistent error messages, harder to add logging
+- Fix approach: Create shared error handling middleware
+
+## Known Bugs
+
+**No Critical Bugs Identified**
+
+The codebase appears functionally stable based on test coverage.
+
+## Security Considerations
+
+**Hardcoded API URLs:**
+- Risk: API base URLs embedded in source code
+- File: `src/api/client.ts` (lines defining localhost:8787 and beta-data.bonkbot.io)
+- Current mitigation: URLs are internal services, not sensitive
+- Recommendations: Move to config file or environment variables for flexibility
+
+**No Input Validation on WebSocket Commands:**
+- Risk: Malformed WebSocket messages could cause errors
+- File: `src/websocket-server.ts` (message handler)
+- Current mitigation: Try-catch wraps JSON.parse
+- Recommendations: Add schema validation for incoming commands
+
+## Performance Bottlenecks
+
+**Serial Token Analysis:**
+- Problem: Tokens analyzed one at a time in loop
+- File: `src/cli.ts` (analysis loop)
+- Measurement: Not measured, but scales linearly with token count
+- Cause: Sequential API calls and analysis
+- Improvement path: Batch API calls (partially implemented), parallel analysis
+
+**Rotation Calculation Complexity:**
+- Problem: Full OHLCV fetch and analysis for each token
+- File: `src/rules/rotations.ts`
+- Measurement: ~500ms per token for rotation calculation
+- Cause: Requires historical candles for structure detection
+- Improvement path: Cache rotation levels, only recalculate on significant price changes
+
+## Fragile Areas
+
+**Rule Type Dispatch:**
+- File: `src/rules/engine.ts`, `src/rules/dispatcher.ts`
+- Why fragile: Switch statement on ruleType string must match config types
+- Common failures: New rule type added without dispatcher case
+- Safe modification: Add TypeScript exhaustive check pattern
+- Test coverage: Covered in test-comprehensive.ts
+
+**Market Filter State Machine:**
+- File: `src/trading/market-filter.ts`
+- Why fragile: State transitions (NORMAL → CAUTION → DUMP) have specific thresholds
+- Common failures: Edge cases around threshold boundaries
+- Safe modification: Update DEFAULT_MARKET_FILTER_CONFIG thresholds carefully
+- Test coverage: Basic transitions tested
+
+## Scaling Limits
+
+**File-Based Config:**
+- Current capacity: Handles ~100 watchlist tokens, ~20 rule sets
+- Limit: File I/O becomes slow with thousands of entries
+- Symptoms at limit: Slow config save, increased disk I/O
+- Scaling path: Move to SQLite or in-memory store with periodic flush
+
+**WebSocket Broadcast:**
+- Current capacity: ~10 concurrent clients
+- Limit: No connection pooling or rate limiting
+- Symptoms at limit: Memory growth, slow broadcasts
+- Scaling path: Add connection limits, implement rate limiting
+
+## Dependencies at Risk
+
+**ws Package:**
+- Risk: Low - actively maintained, stable API
+- Impact: WebSocket server functionality
+- Migration plan: None needed currently
+
+**tsx Package:**
+- Risk: Development dependency only
+- Impact: Development workflow
+- Migration plan: Could switch to ts-node or native TypeScript loader
+
+## Missing Critical Features
+
+**Persistent Position State:**
+- Problem: Paper positions lost on restart (in-memory only until save)
+- Current workaround: Manual save via CLI or auto-save on trade
+- Blocks: Reliable backtesting, position recovery
+- Implementation complexity: Low (already partially implemented)
+
+**Real-Time Price Updates:**
+- Problem: Prices only update on poll interval (default 30s)
+- Current workaround: Reduce poll interval
+- Blocks: Accurate trailing stop execution
+- Implementation complexity: Medium (needs WebSocket price feed)
+
+## Test Coverage Gaps
+
+**WebSocket Integration:**
+- What's not tested: WebSocket server commands and broadcasts
+- Risk: Breaking changes to frontend protocol undetected
+- Priority: Medium
+- Difficulty to test: Need WebSocket client mock
+
+**Error Recovery:**
+- What's not tested: Behavior when API fails mid-analysis
+- Risk: Crashes or stuck state during network issues
+- Priority: Medium
+- Difficulty to test: Need to simulate network failures
+
+**Magic Buy/Exit Edge Cases:**
+- What's not tested: Boundary conditions for entry/exit triggers
+- Risk: Unexpected trades at edge prices
+- Priority: High
+- Difficulty to test: Need comprehensive fixture data
+
+---
+
+*Concerns audit: 2026-01-09*
+*Update as issues are fixed or new ones discovered*

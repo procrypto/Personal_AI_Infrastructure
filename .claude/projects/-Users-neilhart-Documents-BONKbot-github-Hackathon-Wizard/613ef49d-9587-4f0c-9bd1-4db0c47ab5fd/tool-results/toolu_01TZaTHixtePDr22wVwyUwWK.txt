@@ -1,0 +1,88 @@
+     1→/* eslint-disable lingui/no-unlocalized-strings */
+     2→import { i18n, Locale, Messages } from "@lingui/core";
+     3→import EnIcon from "@/assets/icons/locales/en.svg";
+     4→import RuIcon from "@/assets/icons/locales/ru.svg";
+     5→// import EsIcon from "@/assets/icons/locales/es.svg";
+     6→import ZhIcon from "@/assets/icons/locales/zh.svg";
+     7→// import KoIcon from "@/assets/icons/locales/ko.svg";
+     8→
+     9→export const locales = {
+    10→  en: "English",
+    11→  zh: "中文",
+    12→  // ko: "한국어", // disabled - fallback to English
+    13→  ru: "Русский",
+    14→  // es: "Español",
+    15→} as const;
+    16→
+    17→export const localeIcons = {
+    18→  en: EnIcon,
+    19→  zh: ZhIcon,
+    20→  // ko: KoIcon,
+    21→  ru: RuIcon,
+    22→  // es: EsIcon,
+    23→};
+    24→
+    25→// Locales that were previously available but are now disabled - fallback to defaultLocale
+    26→const disabledLocales = ["ko"];
+    27→
+    28→export const availableLocales = Object.keys(locales) as Locale[];
+    29→export const defaultLocale = "en";
+    30→
+    31→// Preload default messages so fallback does not rely on a dynamic import
+    32→import { messages as defaultMessages } from "@/locales/en.ts";
+    33→
+    34→// Use Vite's module graph to locate locale files at build time
+    35→// Eager=true so all locales are bundled and no runtime network requests are needed
+    36→const localeModules = import.meta.glob("@/locales/*.ts", {
+    37→  import: "messages",
+    38→  eager: true,
+    39→}) as Record<string, Messages>;
+    40→
+    41→const getLocaleMessages = (locale: Locale): Messages | null => {
+    42→  const normalized = `${locale}.ts`;
+    43→  const entry = Object.entries(localeModules).find(([path]) =>
+    44→    path.endsWith(`/${normalized}`)
+    45→  );
+    46→  return entry?.[1] ?? null;
+    47→};
+    48→
+    49→async function loadLocaleMessages(locale: Locale): Promise<Messages | null> {
+    50→  try {
+    51→    return getLocaleMessages(locale);
+    52→  } catch (err) {
+    53→    console.warn(`Failed to load locale "${locale}":`, err);
+    54→    return null;
+    55→  }
+    56→}
+    57→
+    58→export async function dynamicActivate(locale: Locale) {
+    59→  // Fallback disabled locales to default
+    60→  const effectiveLocale = disabledLocales.includes(locale)
+    61→    ? defaultLocale
+    62→    : locale;
+    63→
+    64→  const messages = await loadLocaleMessages(effectiveLocale);
+    65→
+    66→  if (!messages) {
+    67→    console.warn(
+    68→      `No messages found for locale: ${effectiveLocale}, falling back to ${defaultLocale}`
+    69→    );
+    70→    i18n.load(defaultLocale, defaultMessages);
+    71→    i18n.activate(defaultLocale);
+    72→    return;
+    73→  }
+    74→
+    75→  try {
+    76→    i18n.load(effectiveLocale, messages);
+    77→    i18n.activate(effectiveLocale);
+    78→  } catch (err) {
+    79→    console.error(`Error activating locale "${effectiveLocale}":`, err);
+    80→    i18n.load(defaultLocale, defaultMessages);
+    81→    i18n.activate(defaultLocale);
+    82→  }
+    83→}
+    84→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

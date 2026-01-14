@@ -1,0 +1,72 @@
+# Milestone v1.2: EU & Multi-Region
+
+**Status:** ✅ SHIPPED 2026-01-14
+**Phases:** 11-12
+**Total Plans:** 2
+
+## Overview
+
+Migrate to official ClickHouse client with standard credentials and reconfigure deployment infrastructure for EU-based beta and multi-region production.
+
+## Phases
+
+### Phase 11: ClickHouse Client Migration
+
+**Goal**: Replace custom HTTP API with official @clickhouse/client
+**Depends on**: Phase 10
+**Plans**: 1 plan
+
+Plans:
+- [x] 11-01: Migrate to official ClickHouse client (PR #16)
+
+**Details:**
+- Replaced ClickHouse Cloud Queries API with @clickhouse/client
+- New credential pattern: CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD
+- Added graceful shutdown with SIGINT/SIGTERM handlers
+- Singleton pattern for connection pooling
+- Added closeClickhouse() for clean teardown
+
+### Phase 12: Multi-Region Deployment
+
+**Goal**: EU-based beta and multi-region production deployment
+**Depends on**: Phase 11
+**Plans**: 1 plan
+
+Plans:
+- [x] 12-01: Configure multi-region deployment (PR #16)
+
+**Details:**
+- Beta: europe-west3 (was us-central1)
+- Artifact Registry: europe-west4
+- Prod regions: asia-southeast1, europe-west3, us-east4
+- Service names: trenchbench-api (beta), trenchbench-api-{asia,eu,usa} (prod)
+- Pre-configured WIF credentials (no more TODOs)
+- Region-specific secrets: clickhouse-{env}-{region}-ro-{uri|user|password}
+
+---
+
+## Milestone Summary
+
+**Source:** PR #16 by passingBySol
+
+**Key Decisions:**
+- Use official @clickhouse/client over custom HTTP implementation
+- Standard credentials (URL/USER/PASSWORD) matching pvp-bridge-service pattern
+- EU-based infrastructure (europe-west3/4)
+- Build once in europe-west4, deploy to all regions
+- Region suffixes: asia, eu, usa
+
+**Issues Resolved:**
+- Custom HTTP client replaced with official supported library
+- TODO placeholders in workflows replaced with real credentials
+- Single-region deployment expanded to multi-region
+
+**Issues Deferred:**
+None
+
+**Technical Debt Incurred:**
+- Buildx caching removed (was added in v1.1, replaced with plain docker build)
+
+---
+
+_For current project status, see .planning/ROADMAP.md_

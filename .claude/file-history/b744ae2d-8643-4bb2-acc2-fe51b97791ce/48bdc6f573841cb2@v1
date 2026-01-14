@@ -1,0 +1,122 @@
+---
+phase: 01-data-reception
+plan: 01
+type: execute
+---
+
+<objective>
+Add WebSocket message handlers to receive market data from the main app.
+
+Purpose: Invert data flow - instead of polling APIs, receive firehosed data via existing WebSocket connections.
+Output: WebSocket server can receive and store incoming market data feeds for rule engine consumption.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@src/websocket-server.ts
+@src/api/types.ts
+
+**Key decisions:**
+- Reuse existing WebSocket connections (same ones supplying frontend)
+- Main app will firehose market data to this backend
+
+**Existing patterns:**
+- AutopilotEvent/AutopilotCommand types for message typing
+- Singleton wsServer instance
+- JSON message parsing with try-catch
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Define DataFeedMessage types for incoming market data</name>
+  <files>src/websocket-server.ts</files>
+  <action>
+Add new message types for incoming data feeds alongside existing AutopilotCommand:
+
+1. Create DataFeedMessage union type with three variants:
+   - `{ type: 'market_data_feed'; data: TokenMarketData }` - full token snapshot
+   - `{ type: 'ohlcv_update'; mint: string; ohlcv: OHLCV[] }` - candle updates
+   - `{ type: 'trade_feed'; trade: Trade }` - individual trade events
+
+2. Import TokenMarketData, OHLCV, Trade from './api/types.js'
+
+3. Create IncomingMessage type that unions AutopilotCommand | DataFeedMessage
+
+Keep existing AutopilotCommand/AutopilotEvent types unchanged - this is additive.
+  </action>
+  <verify>TypeScript compiles without errors: `npx tsc --noEmit`</verify>
+  <done>DataFeedMessage types defined, IncomingMessage union created, imports added</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add handlers for data feed messages with in-memory storage</name>
+  <files>src/websocket-server.ts</files>
+  <action>
+1. Add private storage to AutopilotWebSocketServer class:
+   - `private marketData: Map<string, TokenMarketData> = new Map()` - keyed by mint
+   - `private ohlcvData: Map<string, OHLCV[]> = new Map()` - keyed by mint
+   - `private recentTrades: Trade[] = []` - circular buffer, max 1000
+
+2. Update ws.on('message') handler to:
+   - Parse as IncomingMessage (not just AutopilotCommand)
+   - Check for `type` field to distinguish data feeds from commands
+   - Route data feeds to new private handler method
+   - Keep existing command handling unchanged
+
+3. Add private handleDataFeed(message: DataFeedMessage) method:
+   - market_data_feed: upsert into marketData Map
+   - ohlcv_update: replace OHLCV array for mint
+   - trade_feed: push to recentTrades, trim to max 1000
+
+4. Add public getter methods for rule engine access:
+   - getMarketData(mint: string): TokenMarketData | undefined
+   - getAllMarketData(): Map<string, TokenMarketData>
+   - getOHLCV(mint: string): OHLCV[] | undefined
+   - getRecentTrades(mint?: string): Trade[]
+
+5. Add optional dataFeedHandler callback (like commandHandler) for notifying when new data arrives:
+   - `private dataFeedHandler: ((message: DataFeedMessage) => void) | null = null`
+   - `onDataFeed(handler: (message: DataFeedMessage) => void): void`
+  </action>
+  <verify>
+TypeScript compiles: `npx tsc --noEmit`
+Manual verification: wsServer.getMarketData, wsServer.getAllMarketData, wsServer.getOHLCV, wsServer.getRecentTrades methods exist
+  </verify>
+  <done>
+- Data feed messages parsed and routed correctly
+- Market data stored in Maps keyed by mint
+- Recent trades stored in circular buffer
+- Getter methods available for rule engine
+- Optional dataFeedHandler callback registered
+  </done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` passes without errors
+- [ ] DataFeedMessage types exported from websocket-server.ts
+- [ ] wsServer has getMarketData, getAllMarketData, getOHLCV, getRecentTrades methods
+- [ ] wsServer has onDataFeed callback registration
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- WebSocket server can receive and store market data feeds
+- Data accessible via getter methods for rule engine consumption
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-data-reception/01-01-SUMMARY.md`
+</output>

@@ -1,0 +1,202 @@
+/**
+ * Autopilot Store
+ *
+ * Zustand store slice for token-analysis-autopilot data.
+ * Handles positions, signals, strategies, config, and status.
+ *
+ * NOTE: Positions only contain entry data. Current prices and P&L
+ * are calculated in the frontend using NATS market_data subscriptions.
+ */
+
+import type { SubStore } from "@/store/types";
+import type { GlobalStore } from "../../types";
+import type {
+  AutopilotStore,
+  AutopilotPositionEntry,
+  AutopilotMarketStatus,
+  AutopilotStats,
+  AutopilotScanTick,
+  AutopilotTokenList,
+  AutopilotConfig,
+  AutopilotStrategies,
+  AutopilotSignal,
+} from "./types";
+
+const MAX_SIGNALS = 50;
+
+const defaultMarketStatus: AutopilotMarketStatus = {
+  state: "NORMAL",
+  solPriceChangePercent: 0,
+  blockEntries: false,
+  exitAll: false,
+};
+
+const defaultStats: AutopilotStats = {
+  totalTrades: 0,
+  openTrades: 0,
+  closedTrades: 0,
+  wins: 0,
+  losses: 0,
+  winRate: 0,
+  totalPnlSol: 0,
+  totalPnlUsd: 0,
+  avgPnlPercent: 0,
+};
+
+const defaultConfig: AutopilotConfig = {
+  autoSourcesEnabled: true,
+  trendingEnabled: true,
+  whalesEnabled: true,
+  marketFilterEnabled: true,
+  mode: "paper",
+  positionSizeSol: 0.1,
+  pollIntervalMs: 30000,
+};
+
+const defaultTokenList: AutopilotTokenList = {
+  watchlist: [],
+  trending: [],
+  whales: [],
+};
+
+const defaultStrategies: AutopilotStrategies = {
+  available: [],
+  active: [],
+};
+
+export const getAutopilotStore: SubStore<AutopilotStore, GlobalStore> = set => ({
+  // Connection status
+  isConnected: false,
+  setIsConnected: connected =>
+    set(
+      state => {
+        state.autopilot.isConnected = connected;
+      },
+      false,
+      { type: "autopilot/setIsConnected", data: { connected } }
+    ),
+
+  // Position entries
+  positions: new Map<string, AutopilotPositionEntry>(),
+  setPositions: positions =>
+    set(
+      state => {
+        const posMap = new Map<string, AutopilotPositionEntry>();
+        positions.forEach(p => posMap.set(p.mint, p));
+        state.autopilot.positions = posMap;
+      },
+      false,
+      { type: "autopilot/setPositions", data: { count: positions.length } }
+    ),
+
+  // Signals history
+  signals: [],
+  addSignal: (signal: AutopilotSignal) =>
+    set(
+      state => {
+        state.autopilot.signals = [
+          signal,
+          ...state.autopilot.signals,
+        ].slice(0, MAX_SIGNALS);
+      },
+      false,
+      { type: "autopilot/addSignal", data: { signalType: signal.signalType } }
+    ),
+
+  // Market status
+  marketStatus: defaultMarketStatus,
+  setMarketStatus: status =>
+    set(
+      state => {
+        state.autopilot.marketStatus = status;
+      },
+      false,
+      { type: "autopilot/setMarketStatus", data: { state: status.state } }
+    ),
+
+  // Trading stats
+  stats: defaultStats,
+  setStats: stats =>
+    set(
+      state => {
+        state.autopilot.stats = stats;
+      },
+      false,
+      { type: "autopilot/setStats", data: { openTrades: stats.openTrades } }
+    ),
+
+  // Scan metadata
+  scanTick: null,
+  setScanTick: tick =>
+    set(
+      state => {
+        state.autopilot.scanTick = tick;
+      },
+      false,
+      { type: "autopilot/setScanTick", data: { scanNumber: tick.scanNumber } }
+    ),
+
+  // Token lists
+  tokenList: defaultTokenList,
+  setTokenList: list =>
+    set(
+      state => {
+        state.autopilot.tokenList = list;
+      },
+      false,
+      {
+        type: "autopilot/setTokenList",
+        data: {
+          watchlist: list.watchlist.length,
+          trending: list.trending.length,
+          whales: list.whales.length,
+        },
+      }
+    ),
+
+  // Config
+  config: defaultConfig,
+  setConfig: config =>
+    set(
+      state => {
+        state.autopilot.config = config;
+      },
+      false,
+      { type: "autopilot/setConfig", data: { mode: config.mode } }
+    ),
+
+  // Strategies
+  strategies: defaultStrategies,
+  setStrategies: strategies =>
+    set(
+      state => {
+        state.autopilot.strategies = strategies;
+      },
+      false,
+      {
+        type: "autopilot/setStrategies",
+        data: {
+          available: strategies.available.length,
+          active: strategies.active.length,
+        },
+      }
+    ),
+
+  // Reset all
+  reset: () =>
+    set(
+      state => {
+        state.autopilot.isConnected = false;
+        state.autopilot.positions = new Map();
+        state.autopilot.signals = [];
+        state.autopilot.marketStatus = defaultMarketStatus;
+        state.autopilot.stats = defaultStats;
+        state.autopilot.scanTick = null;
+        state.autopilot.tokenList = defaultTokenList;
+        state.autopilot.config = defaultConfig;
+        state.autopilot.strategies = defaultStrategies;
+      },
+      false,
+      { type: "autopilot/reset", data: {} }
+    ),
+});

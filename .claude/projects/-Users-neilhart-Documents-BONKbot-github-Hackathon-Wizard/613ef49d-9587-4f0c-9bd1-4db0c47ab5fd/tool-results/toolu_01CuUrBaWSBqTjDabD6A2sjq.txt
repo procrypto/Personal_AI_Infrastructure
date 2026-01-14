@@ -1,0 +1,559 @@
+     1→# Rotations Trading Playbooks
+     2→
+     3→Proven trading tactics, setups, and strategies that exploit the Rotations v1.5.2 indicator.
+     4→
+     5→**Companion to:** `Rotations.md` (indicator documentation)  
+     6→**Source Indicator:** `Rotations1.5.2.pine.js`
+     7→
+     8→---
+     9→
+    10→## Core Concepts
+    11→
+    12→### How Market Structure Maps to the Indicator
+    13→
+    14→| Market Concept | Rotations Indicator Signal |
+    15→|----------------|---------------------------|
+    16→| **Break of Structure (BOS)** | Rotation flip (gray → green or gray → red) |
+    17→| **Change of Character (CHoCH)** | Rotation invalidation (green/red → gray) |
+    18→| **Swing Failure Pattern (SFP)** | Orange-highlighted levels (wick through, close inside) |
+    19→| **Higher High / Lower Low** | Green/red bars confirming continued rotation |
+    20→| **Structure Break** | Close beyond rotation level + previous bar's high/low |
+    21→
+    22→### Visual Reference
+    23→
+    24→```
+    25→UPWARD ROTATION (Green Bars)
+    26→━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    27→    rotationHigh ─────────── Resistance to break for continuation
+    28→         │
+    29→         │  ← Price action
+    30→         │
+    31→    rotationLow ──────────── Support / Stop loss zone
+    32→
+    33→
+    34→DOWNWARD ROTATION (Red Bars)
+    35→━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    36→    rotationHigh ─────────── Resistance / Stop loss zone
+    37→         │
+    38→         │  ← Price action
+    39→         │
+    40→    rotationLow ──────────── Support to break for continuation
+    41→
+    42→
+    43→INVALIDATION (Gray Bars)
+    44→━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    45→    rotationHigh ─────────── Range top (sell zone)
+    46→         │
+    47→         │  ← Ranging / No direction
+    48→         │
+    49→    rotationLow ──────────── Range bottom (buy zone)
+    50→```
+    51→
+    52→---
+    53→
+    54→## Playbook 1: Trend Continuation (Pullback Entry)
+    55→
+    56→### The Concept
+    57→Trade pullbacks within an established rotation direction. This is the highest probability setup because you're trading WITH the confirmed trend.
+    58→
+    59→### Entry Rules
+    60→
+    61→**For Longs:**
+    62→1. Bars are GREEN (upward rotation confirmed)
+    63→2. Price pulls back toward `rotationLow`
+    64→3. Price shows rejection from the level (bullish candle pattern)
+    65→4. Enter long on the rejection candle close
+    66→
+    67→**For Shorts:**
+    68→1. Bars are RED (downward rotation confirmed)
+    69→2. Price pulls back toward `rotationHigh`
+    70→3. Price shows rejection from the level (bearish candle pattern)
+    71→4. Enter short on the rejection candle close
+    72→
+    73→### Stop Loss
+    74→- **Longs:** Below `rotationLow` minus 0.5 ATR buffer
+    75→- **Shorts:** Above `rotationHigh` plus 0.5 ATR buffer
+    76→
+    77→### Take Profit
+    78→- Previous swing high/low
+    79→- 2:1 or 3:1 risk-reward ratio
+    80→- Trail using rotation levels as they update
+    81→
+    82→### Example Flow
+    83→
+    84→```
+    85→1. Rotation confirmed GREEN (bullish)
+    86→2. Price rallies, then pulls back
+    87→3. Price approaches rotationLow (green circles)
+    88→4. Hammer/bullish engulfing forms at level
+    89→5. Enter long → Stop below rotationLow → Target previous high
+    90→```
+    91→
+    92→### Confluence Filters
+    93→- Higher timeframe also in same rotation direction
+    94→- Volume increasing on the bounce
+    95→- RSI oversold on the pullback (for longs)
+    96→- Price at round number or prior S/R
+    97→
+    98→---
+    99→
+   100→## Playbook 2: Break of Structure Entry
+   101→
+   102→### The Concept
+   103→Enter immediately when rotation flips direction. You're catching the exact moment market structure changes.
+   104→
+   105→### Entry Rules
+   106→
+   107→**For Longs:**
+   108→1. Bars flip from GRAY or RED to GREEN
+   109→2. This confirms: `close > rotationHigh AND close > high[1]`
+   110→3. Enter on the confirmed bar close OR first pullback
+   111→4. Stop below the new `rotationLow`
+   112→
+   113→**For Shorts:**
+   114→1. Bars flip from GRAY or GREEN to RED
+   115→2. This confirms: `close < rotationLow AND close < low[1]`
+   116→3. Enter on the confirmed bar close OR first pullback
+   117→4. Stop above the new `rotationHigh`
+   118→
+   119→### Stop Loss
+   120→- Below/above the newly established rotation levels
+   121→- These are the levels from the breakout candle
+   122→
+   123→### Take Profit
+   124→- Previous significant swing
+   125→- Measured move (height of previous rotation range)
+   126→- 2:1 minimum risk-reward
+   127→
+   128→### Aggressive vs Conservative Entry
+   129→
+   130→| Approach | Entry Point | Risk | Reward Potential |
+   131→|----------|-------------|------|------------------|
+   132→| Aggressive | Immediately on color flip | Higher | Larger move captured |
+   133→| Conservative | On first pullback after flip | Lower | Smaller but higher probability |
+   134→
+   135→### Why This Works
+   136→You're entering exactly when structure shifts. Most traders are still positioned for the old direction—you're ahead of the crowd.
+   137→
+   138→---
+   139→
+   140→## Playbook 3: Swing Failure Pattern (SFP)
+   141→
+   142→### The Concept
+   143→Fade false breakouts when price wicks beyond a rotation level but closes back inside. The indicator highlights these in ORANGE.
+   144→
+   145→### Entry Rules
+   146→
+   147→**Long SFP:**
+   148→1. Price wicks BELOW `rotationLow`
+   149→2. Price closes ABOVE `rotationLow` (same candle)
+   150→3. Level turns ORANGE (false breakout detected)
+   151→4. Enter long on candle close
+   152→5. Stop below the wick low
+   153→
+   154→**Short SFP:**
+   155→1. Price wicks ABOVE `rotationHigh`
+   156→2. Price closes BELOW `rotationHigh` (same candle)
+   157→3. Level turns ORANGE (false breakout detected)
+   158→4. Enter short on candle close
+   159→5. Stop above the wick high
+   160→
+   161→### Stop Loss
+   162→- Just beyond the false breakout wick
+   163→- This is the tightest stop of all playbooks
+   164→
+   165→### Take Profit
+   166→- Opposite rotation level
+   167→- Previous swing in the reversal direction
+   168→- Minimum 2:1 risk-reward (often get 3:1+)
+   169→
+   170→### Why This Works
+   171→
+   172→**Liquidity Grab Dynamics:**
+   173→```
+   174→1. Obvious level visible (rotation high/low)
+   175→2. Retail traders place stops just beyond
+   176→3. Smart money pushes price through to trigger stops
+   177→4. Stops triggered = liquidity for large orders
+   178→5. Price reverses back into range
+   179→6. Indicator shows ORANGE = trap confirmed
+   180→```
+   181→
+   182→### Best SFP Setups
+   183→- Orange highlight at prior significant S/R
+   184→- High volume on the false breakout candle
+   185→- Long wick relative to body
+   186→- Occurs after extended move (exhaustion)
+   187→
+   188→---
+   189→
+   190→## Playbook 4: Invalidation Trade (Counter-Trend)
+   191→
+   192→### The Concept
+   193→Trade when rotation is invalidated (gray bars) as an early reversal signal. Higher risk but catches turns early.
+   194→
+   195→### Entry Rules
+   196→
+   197→1. Price was in confirmed rotation (green or red)
+   198→2. Price crosses opposite level WITHOUT meeting full rotation criteria
+   199→3. Bars turn GRAY (invalidation)
+   200→4. Wait for confirmation candle in new direction
+   201→5. Enter on confirmation
+   202→
+   203→### What Invalidation Means
+   204→
+   205→```
+   206→Was in UPWARD rotation (green):
+   207→  → Price drops below rotationLow
+   208→  → But doesn't close below AND below low[1]
+   209→  → Bars turn GRAY
+   210→  → Structure is broken but new trend not confirmed
+   211→```
+   212→
+   213→### Stop Loss
+   214→- Beyond the recent swing that caused invalidation
+   215→- Wider stop required (structure unclear)
+   216→
+   217→### Take Profit
+   218→- Modest targets (structure uncertain)
+   219→- Scale out in thirds
+   220→- Move to breakeven quickly
+   221→
+   222→### Risk Management
+   223→- **Reduce position size** for this playbook (50% of normal)
+   224→- Requires additional confluence:
+   225→  - MTF showing opposite direction
+   226→  - Volume divergence
+   227→  - Key reversal level (daily/weekly S/R)
+   228→  - RSI divergence
+   229→
+   230→### When to Skip
+   231→- If invalidation is just noise in a strong trend
+   232→- No confluence factors present
+   233→- Low volume environment
+   234→
+   235→---
+   236→
+   237→## Playbook 5: Multi-Timeframe Confluence
+   238→
+   239→### The Concept
+   240→Only trade when chart timeframe AND higher timeframe rotations align. Dramatically reduces false signals.
+   241→
+   242→### Setup Requirements
+   243→
+   244→Enable MTF in indicator settings:
+   245→- Enable Multi-Timeframe Levels: `true`
+   246→- Timeframe: Higher than chart (e.g., 4H for 15min chart, Daily for 1H chart)
+   247→
+   248→### Entry Rules
+   249→
+   250→**High Probability Longs:**
+   251→1. Chart timeframe bars are GREEN
+   252→2. MTF rotation is also bullish (price above MTF rotationLow)
+   253→3. Blue MTF levels sloping up or flat (not breaking down)
+   254→4. Enter using Playbook 1, 2, or 3 criteria
+   255→
+   256→**High Probability Shorts:**
+   257→1. Chart timeframe bars are RED
+   258→2. MTF rotation is also bearish (price below MTF rotationHigh)
+   259→3. Aqua MTF levels sloping down or flat (not breaking up)
+   260→4. Enter using Playbook 1, 2, or 3 criteria
+   261→
+   262→### Alignment Matrix
+   263→
+   264→| Chart TF | MTF Direction | Action |
+   265→|----------|---------------|--------|
+   266→| GREEN | Bullish | ✅ LONG - High probability |
+   267→| RED | Bearish | ✅ SHORT - High probability |
+   268→| GREEN | Bearish | ⚠️ CAUTION - Counter-trend, reduce size |
+   269→| RED | Bullish | ⚠️ CAUTION - Counter-trend, reduce size |
+   270→| GRAY | Any | ⏸️ WAIT - No clear structure |
+   271→
+   272→### Stop Loss
+   273→- Use MTF rotation levels for stops (wider but more significant)
+   274→- OR use chart TF levels with reduced size
+   275→
+   276→### Why This Works
+   277→- Trades aligned with "the big picture"
+   278→- Avoids getting chopped up in noise
+   279→- Higher timeframe structure rarely fails without warning
+   280→
+   281→---
+   282→
+   283→## Playbook 6: Breakout and Retest
+   284→
+   285→### The Concept
+   286→Wait for rotation to confirm, then enter on the retest of the broken level. Reduces false breakout risk.
+   287→
+   288→### Entry Rules
+   289→
+   290→**For Longs:**
+   291→1. Rotation flips GREEN (breakout above rotationHigh confirmed)
+   292→2. WAIT for price to pull back to old `rotationHigh`
+   293→3. Old resistance now acts as support
+   294→4. Enter when retest holds (bullish candle)
+   295→
+   296→**For Shorts:**
+   297→1. Rotation flips RED (breakdown below rotationLow confirmed)
+   298→2. WAIT for price to pull back to old `rotationLow`
+   299→3. Old support now acts as resistance
+   300→4. Enter when retest holds (bearish candle)
+   301→
+   302→### Stop Loss
+   303→- Just beyond the retest level
+   304→- If it fails, the breakout was likely false
+   305→
+   306→### Take Profit
+   307→- Project the range height from breakout point
+   308→- Previous significant swing
+   309→- Trail with new rotation levels
+   310→
+   311→### Entry Timing
+   312→
+   313→```
+   314→BREAKOUT SEQUENCE:
+   315→━━━━━━━━━━━━━━━━━━
+   316→
+   317→1. [Gray bars] ────── Ranging
+   318→2. [Breakout candle] ─ Green flip, breaks above rotationHigh
+   319→3. [Rally] ─────────── Price moves up (DON'T CHASE)
+   320→4. [Pullback] ──────── Price returns to old rotationHigh
+   321→5. [Retest hold] ───── Bullish candle at old resistance
+   322→6. [ENTRY] ─────────── Enter long here ← OPTIMAL ENTRY
+   323→```
+   324→
+   325→### Why This Works
+   326→- Confirms the breakout was genuine (level flips from resistance to support)
+   327→- Better entry price than chasing
+   328→- Clear invalidation level (if retest fails)
+   329→- Often get to see volume characteristics on retest
+   330→
+   331→---
+   332→
+   333→## Playbook 7: Range Trading (Gray Bar Strategy)
+   334→
+   335→### The Concept
+   336→When bars are gray (invalidation), trade the range between rotation levels.
+   337→
+   338→### Entry Rules
+   339→
+   340→**Prerequisites:**
+   341→1. Bars must be GRAY (no confirmed direction)
+   342→2. Clear `rotationHigh` and `rotationLow` levels visible
+   343→3. Range is wide enough to trade (at least 2 ATR)
+   344→
+   345→**Long at Range Bottom:**
+   346→1. Price approaches `rotationLow`
+   347→2. Bullish candle pattern forms
+   348→3. Enter long with stop below the low
+   349→4. Target: `rotationHigh` or middle of range
+   350→
+   351→**Short at Range Top:**
+   352→1. Price approaches `rotationHigh`
+   353→2. Bearish candle pattern forms
+   354→3. Enter short with stop above the high
+   355→4. Target: `rotationLow` or middle of range
+   356→
+   357→### Critical Rule
+   358→**EXIT ALL POSITIONS IMMEDIATELY when bars turn GREEN or RED.**
+   359→
+   360→If rotation confirms while you're in a range trade against the direction, you will get run over.
+   361→
+   362→### Stop Loss
+   363→- Just beyond the range edge
+   364→- Tight stops required (small range = small stops)
+   365→
+   366→### Position Sizing
+   367→- Reduce size in ranges (choppier, less directional)
+   368→- Multiple small wins > one big loss
+   369→
+   370→### When to Avoid
+   371→- Bars flickering between colors (unstable)
+   372→- News events approaching
+   373→- Very tight range (less than 1 ATR)
+   374→- Been in range for extended period (breakout coming)
+   375→
+   376→---
+   377→
+   378→## Risk Management Framework
+   379→
+   380→### Position Sizing by Playbook
+   381→
+   382→| Playbook | Risk Level | Position Size |
+   383→|----------|------------|---------------|
+   384→| 1. Trend Continuation | Low | 100% normal |
+   385→| 2. BOS Entry | Medium | 75-100% normal |
+   386→| 3. SFP (Orange) | Medium | 75% normal |
+   387→| 4. Invalidation | High | 50% normal |
+   388→| 5. MTF Confluence | Low | 100-125% normal |
+   389→| 6. Breakout Retest | Low-Medium | 100% normal |
+   390→| 7. Range Trading | Medium | 50-75% normal |
+   391→
+   392→### Stop Placement Summary
+   393→
+   394→| Playbook | Stop Location |
+   395→|----------|---------------|
+   396→| 1. Trend Continuation | Beyond rotation level + 0.5 ATR |
+   397→| 2. BOS Entry | Beyond new rotation levels |
+   398→| 3. SFP | Beyond the false breakout wick |
+   399→| 4. Invalidation | Beyond recent swing |
+   400→| 5. MTF Confluence | Beyond MTF rotation level |
+   401→| 6. Breakout Retest | Beyond retest candle |
+   402→| 7. Range Trading | Beyond range edge + small buffer |
+   403→
+   404→### Maximum Risk Per Trade
+   405→- 1-2% of account per trade
+   406→- Maximum 3 correlated positions open
+   407→- Reduce size if on losing streak
+   408→
+   409→---
+   410→
+   411→## Trade Confluence Checklist
+   412→
+   413→Before entering any trade, score these factors:
+   414→
+   415→### Primary Factors (Required)
+   416→- [ ] **Rotation Direction Clear:** Green/Red bars (not gray, unless Playbook 7)
+   417→- [ ] **Playbook Criteria Met:** Entry rules satisfied
+   418→
+   419→### Secondary Factors (Desirable)
+   420→- [ ] **MTF Alignment:** Higher timeframe agrees
+   421→- [ ] **Volume Confirmation:** Above average volume on signal
+   422→- [ ] **Key Level:** At significant prior S/R, round number
+   423→- [ ] **Candle Pattern:** Clear reversal or continuation pattern
+   424→- [ ] **RSI/Momentum:** Not diverging against trade direction
+   425→- [ ] **Time of Day:** Active session, not low liquidity period
+   426→
+   427→### Scoring System
+   428→
+   429→| Score | Action |
+   430→|-------|--------|
+   431→| Primary + 0-1 Secondary | Skip or minimum size |
+   432→| Primary + 2-3 Secondary | Normal size |
+   433→| Primary + 4+ Secondary | Consider increased size |
+   434→
+   435→---
+   436→
+   437→## Common Mistakes to Avoid
+   438→
+   439→### 1. Chasing Rotation Flips
+   440→**Wrong:** Entering 5 bars after green flip when price already moved
+   441→**Right:** Enter on the flip bar or wait for retest (Playbook 6)
+   442→
+   443→### 2. Fighting MTF Direction
+   444→**Wrong:** Going long on 15min green when 4H is red
+   445→**Right:** Align with higher timeframe or reduce size significantly
+   446→
+   447→### 3. Ignoring Orange Warnings
+   448→**Wrong:** Staying long after orange highlight on rotationHigh
+   449→**Right:** Recognize potential SFP, tighten stop or take profits
+   450→
+   451→### 4. Trading Gray Bars Directionally
+   452→**Wrong:** Taking trend trades when bars are gray
+   453→**Right:** Either range trade (Playbook 7) or wait for direction
+   454→
+   455→### 5. No Stop Loss
+   456→**Wrong:** "The rotation will hold"
+   457→**Right:** If price closes beyond rotation level with confirmation, you're wrong—exit
+   458→
+   459→### 6. Overtrading Choppy Markets
+   460→**Wrong:** Taking every rotation flip in ranging market
+   461→**Right:** If bars flip colors frequently (>3 times in 20 bars), stand aside
+   462→
+   463→---
+   464→
+   465→## Session-Based Considerations
+   466→
+   467→### Best Times to Trade Rotations
+   468→
+   469→| Session | Quality | Notes |
+   470→|---------|---------|-------|
+   471→| London Open (3-5 AM EST) | High | Fresh liquidity, clean moves |
+   472→| NY Open (9:30-11 AM EST) | High | Highest volume, best breakouts |
+   473→| London/NY Overlap (8-11 AM EST) | Highest | Maximum liquidity |
+   474→| NY Afternoon (2-4 PM EST) | Medium | Can be choppy or trending |
+   475→| Asian Session | Low | Tighter ranges, more false signals |
+   476→
+   477→### News Events
+   478→- Avoid trading 15 minutes before/after major news
+   479→- Rotation levels become unreliable during high volatility
+   480→- Re-establish after volatility subsides
+   481→
+   482→---
+   483→
+   484→## Quick Reference Card
+   485→
+   486→```
+   487→┌─────────────────────────────────────────────────────────────────┐
+   488→│                    ROTATIONS QUICK REFERENCE                     │
+   489→├─────────────────────────────────────────────────────────────────┤
+   490→│                                                                  │
+   491→│  GREEN BARS = Bullish structure confirmed                        │
+   492→│    → Look for LONG setups                                        │
+   493→│    → Use rotationLow as support/stop zone                        │
+   494→│                                                                  │
+   495→│  RED BARS = Bearish structure confirmed                          │
+   496→│    → Look for SHORT setups                                       │
+   497→│    → Use rotationHigh as resistance/stop zone                    │
+   498→│                                                                  │
+   499→│  GRAY BARS = Structure invalidated                               │
+   500→│    → Range trade OR wait for direction                           │
+   501→│    → Be ready for breakout either way                            │
+   502→│                                                                  │
+   503→│  ORANGE HIGHLIGHT = False breakout detected                      │
+   504→│    → Potential SFP / liquidity grab                              │
+   505→│    → Consider fading the move                                    │
+   506→│                                                                  │
+   507→│  BLUE/AQUA (MTF) = Higher timeframe structure                    │
+   508→│    → Align trades with MTF direction                             │
+   509→│    → Use MTF levels for wider stops/targets                      │
+   510→│                                                                  │
+   511→├─────────────────────────────────────────────────────────────────┤
+   512→│  ENTRY PRIORITY:                                                 │
+   513→│  1. MTF Confluence (Playbook 5) - Highest probability            │
+   514→│  2. Trend Continuation (Playbook 1) - Safest                     │
+   515→│  3. Breakout Retest (Playbook 6) - Best risk/reward              │
+   516→│  4. BOS Entry (Playbook 2) - Catches moves early                 │
+   517→│  5. SFP Trade (Playbook 3) - Counter-trend but tight stops       │
+   518→│  6. Range Trade (Playbook 7) - Only when gray                    │
+   519→│  7. Invalidation (Playbook 4) - Highest risk, use sparingly      │
+   520→└─────────────────────────────────────────────────────────────────┘
+   521→```
+   522→
+   523→---
+   524→
+   525→## Backtesting Recommendations
+   526→
+   527→Before trading these playbooks live:
+   528→
+   529→1. **Minimum 50 trades** per playbook in backtesting
+   530→2. **Track metrics:**
+   531→   - Win rate
+   532→   - Average win vs average loss
+   533→   - Maximum consecutive losses
+   534→   - Profit factor
+   535→3. **Test across conditions:**
+   536→   - Trending markets
+   537→   - Ranging markets
+   538→   - High volatility
+   539→   - Low volatility
+   540→4. **Paper trade** for 2 weeks minimum before live
+   541→
+   542→---
+   543→
+   544→## Version History
+   545→
+   546→- **v1.0** - Initial playbook documentation
+   547→
+   548→---
+   549→
+   550→## Related Documentation
+   551→
+   552→- `Rotations.md` - Full indicator documentation and improvement roadmap
+   553→- `Rotations1.5.2.pine.js` - Source indicator code
+   554→
+   555→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

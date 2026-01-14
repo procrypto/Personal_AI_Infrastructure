@@ -1,0 +1,130 @@
+/**
+ * useAutopilotDiscoveryTokens
+ *
+ * Gets whale moves and trending tokens from Discovery sources and combines
+ * with watchlist from user's watchlist API.
+ *
+ * Data sources:
+ * - Whale moves: Discovery API hook (1s refresh) - limited market data
+ * - Trending: WebSocket discovery_trending_list store - full market data
+ * - Watchlist: WebSocket watchlist store + user's watchlist API - full market data
+ *
+ * Returns unified ScreenerTokenData for all three columns with full market_data
+ * where available (trending, watchlist) and partial data for whales.
+ */
+
+import { useMemo } from "react";
+import { useWhaleMoves } from "@/api/discovery/useWhaleMoves";
+import { useGetWatchlist } from "@/api/watchlist/useGetWatchlist";
+import { useWatchlistSubscription } from "@/hooks/useSubscriptions/useWatchlistSubscription";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type { ScreenerTokenData, ScreenerTokenList } from "./types";
+
+export const useAutopilotDiscoveryTokens = (): ScreenerTokenList => {
+  // Subscribe to watchlist WebSocket - ensures data is available even if Overwatch widget isn't rendered
+  useWatchlistSubscription();
+
+  // Fast Discovery API data (1s refresh for whales)
+  const { data: whaleMoves } = useWhaleMoves();
+
+  // Full trending table from WebSocket store (same as Discovery/Overwatch)
+  const trendingMap = useGlobalStore(
+    useShallow(
+      state => state.websocketMessages.discovery_trending_list.itemsMap
+    )
+  );
+
+  // Watchlist from user's watchlist API (tokens they've starred)
+  const { data: watchlistData } = useGetWatchlist();
+
+  // Watchlist WebSocket data (has full market_data from same source as Overwatch)
+  const watchlistItemsMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.watchlist.itemsMap)
+  );
+
+  // Transform whale moves to ScreenerTokenData
+  // Whales API has limited data - no trading_stats for price changes
+  const whales = useMemo((): ScreenerTokenData[] => {
+    return whaleMoves.map(whale => ({
+      mint: whale.mint,
+      symbol: whale.token_symbol,
+      source: "whales" as const,
+      name: whale.token_name,
+      image: whale.image,
+      market_data: {
+        market_cap_usd: whale.current_market_cap_usd,
+        // Whales API doesn't have price_sol/price_usd or trading_stats
+        // Volume data is whale-specific (whale volume, not total volume)
+      },
+    }));
+  }, [whaleMoves]);
+
+  // Transform trending from store Map to ScreenerTokenData array
+  // Trending has full market_data including trading_stats for price changes
+  const trending = useMemo((): ScreenerTokenData[] => {
+    return Array.from(trendingMap.values()).map(token => ({
+      mint: token.mint,
+      symbol: token.market_data.symbol,
+      source: "trending" as const,
+      name: token.market_data.name,
+      image: token.market_data.image,
+      market_data: {
+        price_sol: token.market_data.price_sol,
+        price_usd: token.market_data.price_usd,
+        market_cap_usd: token.market_data.market_cap_usd,
+        symbol: token.market_data.symbol,
+        name: token.market_data.name,
+        image: token.market_data.image,
+        volume_24h_usd: token.market_data.volume_24h_usd,
+        liquidity_usd: token.market_data.liquidity_usd,
+        trading_stats_5m: token.market_data.trading_stats_5m,
+        trading_stats_1h: token.market_data.trading_stats_1h,
+        trading_stats_6h: token.market_data.trading_stats_6h,
+        trading_stats_24h: token.market_data.trading_stats_24h,
+      },
+    }));
+  }, [trendingMap]);
+
+  // Transform user watchlist to ScreenerTokenData array
+  // Watchlist WebSocket store has full market_data (same source as Overwatch - instant)
+  const watchlist = useMemo((): ScreenerTokenData[] => {
+    if (!watchlistData?.watchlistTokens) return [];
+    return watchlistData.watchlistTokens
+      .flatMap(group => group.watchlistTokens)
+      .map(token => {
+        // Get full data from watchlist WebSocket store
+        const wsData = watchlistItemsMap.get(token.tokenMint);
+        const marketData = wsData?.market_data;
+
+        return {
+          mint: token.tokenMint,
+          symbol: marketData?.symbol ?? "",
+          source: "watchlist" as const,
+          name: marketData?.name,
+          image: marketData?.image,
+          market_data: marketData
+            ? {
+                price_sol: marketData.price_sol,
+                price_usd: marketData.price_usd,
+                market_cap_usd: marketData.market_cap_usd,
+                symbol: marketData.symbol,
+                name: marketData.name,
+                image: marketData.image,
+                volume_24h_usd: marketData.volume_24h_usd,
+                liquidity_usd: marketData.liquidity_usd,
+                trading_stats_5m: marketData.trading_stats_5m,
+                trading_stats_1h: marketData.trading_stats_1h,
+                trading_stats_6h: marketData.trading_stats_6h,
+                trading_stats_24h: marketData.trading_stats_24h,
+              }
+            : undefined,
+        };
+      });
+  }, [watchlistData, watchlistItemsMap]);
+
+  return {
+    watchlist,
+    trending,
+    whales,
+  };
+};

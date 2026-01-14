@@ -1,0 +1,112 @@
+---
+phase: 02-dual-path-engine
+plan: 02
+type: execute
+---
+
+<objective>
+Add raw OHLCV path to SignalProcessor for complex analysis rules.
+
+Purpose: Enable complex rules (rotations, fractals) that require candlestick data to run when OHLCV updates arrive.
+Output: SignalProcessor handles both market data and OHLCV updates, routing to appropriate rules.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+
+# Prior plan in this phase:
+@.planning/phases/02-dual-path-engine/02-01-PLAN.md
+
+# Key source files:
+@src/signal/processor.ts
+@src/rules/engine.ts
+@src/rules/rotations.ts
+@src/websocket-server.ts
+
+**Tech stack available:** TypeScript, vitest, ws
+**Established patterns:**
+- RotationsRule has calculateRotations(ohlcv) for accurate analysis
+- RotationsRule has estimateRotationFromMarketData() fallback
+- OHLCV stored in Map by mint in websocket-server.ts
+
+**Constraining decisions:**
+- Phase 1: OHLCV stored via `ohlcvData.set(mint, ohlcv)`
+- 02-01: requiresOHLCV flag distinguishes rule types
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add OHLCV processing method</name>
+  <files>src/signal/processor.ts</files>
+  <action>
+Add `processOHLCV(mint: string, ohlcv: OHLCV[], marketData?: TokenMarketData): Signal[]` method:
+
+1. Validate OHLCV array (at least 2 candles required for rotations)
+2. Get rules that require OHLCV (config.requiresOHLCV === true)
+3. Build AnalysisContext with:
+   - token: marketData if provided, otherwise minimal stub with mint and price from latest OHLCV
+   - ohlcv: the OHLCV array
+   - trades: empty array (not needed for OHLCV-based rules)
+4. Run filtered rules against context
+5. Return signals array
+
+Handle edge case: if no marketData and OHLCV is empty, return empty signals.
+  </action>
+  <verify>TypeScript compiles: `npx tsc --noEmit`</verify>
+  <done>processOHLCV method exists and handles OHLCV-requiring rules</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add market data reference for context enrichment</name>
+  <files>src/signal/processor.ts</files>
+  <action>
+Allow SignalProcessor to access stored market data for context enrichment:
+
+1. Add optional `marketDataProvider?: () => Map<string, TokenMarketData>` to constructor
+2. In processOHLCV, if marketData not passed but provider exists:
+   - Look up market data by mint from provider
+   - Use it to build richer AnalysisContext
+3. This allows OHLCV processing to include full token context when available
+
+Update constructor signature:
+```typescript
+constructor(
+  engine: RuleEngine,
+  options?: {
+    marketDataProvider?: () => Map<string, TokenMarketData>;
+  }
+)
+```
+  </action>
+  <verify>TypeScript compiles: `npx tsc --noEmit` and `npm test` passes</verify>
+  <done>SignalProcessor can enrich OHLCV context with market data from provider</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` succeeds
+- [ ] `npm test` passes
+- [ ] processOHLCV method handles OHLCV-requiring rules
+- [ ] Market data provider enriches OHLCV context when available
+</verification>
+
+<success_criteria>
+- processOHLCV method processes complex rules with OHLCV data
+- Market data provider allows context enrichment
+- All existing tests pass
+- TypeScript compiles without errors
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-dual-path-engine/02-02-SUMMARY.md`
+</output>

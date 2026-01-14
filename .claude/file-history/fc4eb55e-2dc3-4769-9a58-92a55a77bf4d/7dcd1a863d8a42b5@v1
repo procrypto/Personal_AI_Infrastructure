@@ -1,0 +1,128 @@
+---
+phase: 02-linear-integration
+plan: 02
+type: execute
+---
+
+<objective>
+Implement tester profile sync from Linear users and complete the linear module.
+
+Purpose: Sync Linear workspace users to tester profiles for assignment scoring. This populates the tester store with Linear user data so the assignment engine (Phase 4) has testers to work with.
+Output: Working user sync function and complete linear module with barrel exports.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/02-linear-integration/02-RESEARCH.md
+
+# Prior plan in this phase
+@.planning/phases/02-linear-integration/02-01-SUMMARY.md
+
+# Relevant source files
+@src/coordination/types.ts
+@src/coordination/store/tester-store.ts
+@src/coordination/linear/client.ts
+
+**Tech stack available:** @linear/sdk, @vercel/kv, event bus
+**Established patterns:** Singleton pattern, barrel exports, upsertTester function
+**Constraining decisions:**
+- [01-02]: upsertTester preserves existing stats when syncing
+- [01-03]: Barrel exports at module level
+
+**From research - user sync pattern:**
+- Use linearClient.users() to fetch all workspace users
+- Filter for active users only
+- Map Linear user fields to TesterProfile interface
+- slackUserId left empty (requires manual mapping or Phase 3 Slack lookup)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create user sync function from Linear API</name>
+  <files>src/coordination/linear/user-sync.ts</files>
+  <action>
+1. Create src/coordination/linear/user-sync.ts with:
+   - Import getLinearClient from ./client.js
+   - Import upsertTester from ../store/tester-store.js
+   - Export async function syncLinearUsers(): Promise<SyncResult>
+   - SyncResult type: { synced: number; skipped: number; errors: string[] }
+
+2. Implementation:
+   - Fetch users via getLinearClient().users()
+   - Loop through users.nodes
+   - Skip inactive users (user.active === false)
+   - For each active user, call upsertTester with:
+     - id: user.id
+     - linearUserId: user.id
+     - slackUserId: "" (empty - manual mapping needed, noted in open questions)
+     - displayName: user.name
+     - email: user.email
+     - expertise: [] (manual configuration)
+     - availability: "available"
+   - Catch errors per-user, don't fail entire sync
+   - Return SyncResult with counts
+
+Note from research: upsertTester preserves existing stats (currentLoad, totalCompleted, avgCompletionTimeMs) when syncing, so re-running sync is safe.
+  </action>
+  <verify>bun run build compiles without errors</verify>
+  <done>syncLinearUsers() fetches Linear users and upserts to tester store</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create barrel exports for linear module</name>
+  <files>src/coordination/linear/index.ts, src/coordination/index.ts</files>
+  <action>
+1. Create src/coordination/linear/index.ts that exports:
+   - From ./client.js: getLinearClient, resetLinearClient
+   - From ./webhook-handler.js: verifyLinearWebhook, handleLinearWebhook
+   - From ./user-sync.js: syncLinearUsers, SyncResult type
+   - From ./types.js: All Linear webhook types
+
+2. Update src/coordination/index.ts to add:
+   - Export * from './linear/index.js'
+
+Follow barrel export pattern from 01-03 (coordination/index.ts is main entry point).
+  </action>
+  <verify>bun run build compiles, imports from 'coordination' resolve linear exports</verify>
+  <done>Linear module fully exported via coordination barrel, Phase 2 complete</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run build` succeeds without errors
+- [ ] syncLinearUsers() handles pagination if needed
+- [ ] Error handling per-user (one failure doesn't abort sync)
+- [ ] Barrel exports include all linear module functions
+- [ ] coordination/index.ts re-exports linear module
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Phase 2 complete - Linear integration ready for Phase 3 (Slack listener)
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/02-linear-integration/02-02-SUMMARY.md` using summary template with frontmatter including:
+- subsystem: linear
+- tags: [linear-sdk, user-sync, barrel-exports]
+- requires: 02-01 (LinearClient)
+- provides: User sync function, complete linear module
+- affects: [03, 04]
+
+Also update .planning/STATE.md to reflect Phase 2 complete.
+
+Also update .planning/ROADMAP.md progress table to show Phase 2 complete.
+</output>

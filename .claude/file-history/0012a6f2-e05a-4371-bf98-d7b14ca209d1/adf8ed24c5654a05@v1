@@ -1,0 +1,109 @@
+# Token Analysis Autopilot - Frontend Integration
+
+## What This Is
+
+Frontend integration for the token-analysis-autopilot paper trading system. Brings the CLI's rule-based analysis and paper trading capabilities into the web-terminal dashboard widget, using existing WebSocket patterns and NATS data sources.
+
+## Core Value
+
+**Full feature parity with the CLI through the dashboard widget.** Users should be able to configure strategies, monitor positions, view signals, and track P&L without touching the command line.
+
+## Current State (v1.1)
+
+**Shipped:** 2026-01-08
+
+**v1.0 Autopilot Frontend Integration:**
+- LOIS compatibility documentation on all WebSocket message types
+- Frontend types aligned with backend protocol
+- LOIS integration point markers in WebSocket handlers
+- Data format differences documented for PUM3 team
+- Vite plugin auto-starts autopilot backend with dev server
+- Consolidated LOIS_INTEGRATION.md guide (214 lines)
+
+**v1.1 Autopilot Unit Tests:**
+- 18 unit tests covering P&L, store, and message parsing
+- Pure function extraction pattern established
+- All tests run in <5ms execution time
+
+**Tech Stack:**
+- TypeScript, React, Zustand, Vite
+- WebSocket client extending BaseWebsocket
+- NATS for market data subscriptions
+
+## Requirements
+
+### Validated
+
+- Rule engine with configurable strategies (CLI) — existing
+- Paper trading with P&L tracking (CLI) — existing
+- Rotations S/R, Magic TP/SL, Market Filter (CLI) — existing
+- Auto-sources: trending, whale moves (CLI) — existing
+- WebSocket server foundation in autopilot repo — existing
+- Dashboard widget UI scaffold — v1.0
+- Zustand store slice for autopilot data — v1.0
+- WebSocket client extending BaseWebsocket — v1.0
+- Complete WebSocket message protocol (backend→frontend) — v1.0
+- LOIS compatibility documentation for all types — v1.0
+- Vite plugin for auto-start autopilot backend — v1.0
+- LOIS_INTEGRATION.md guide for PUM3 team — v1.0
+- P&L calculation unit tests — v1.1
+- Store slice unit tests — v1.1
+- Message parsing unit tests — v1.1
+
+### Active
+
+- [ ] Connect widget to backend and display live data (requires manual testing)
+- [ ] Implement all control commands (strategies, sources, filter toggles)
+- [ ] Calculate real-time P&L using NATS market_data subscriptions
+
+### Out of Scope
+
+- LOIS/live trading integration — separate milestone after paper trading proven
+- Custom rule creation in UI — use pre-built templates only, no rule builder this sprint
+- Deploying autopilot backend to production — local development only
+- Changes to LOIS codebase in pum3 repo — that team's responsibility
+
+## Context
+
+**Related Repositories:**
+
+- `github/token-analysis-autopilot/` — CLI engine, WebSocket server, rule definitions
+- `github/web-terminal-frontend/feat-token-analysis-autopilot/` — this worktree
+- `github/local-api/` — ClickHouse dev server, Vite proxy pattern reference
+- `github/pum3/` — LOIS reference (not modifying)
+- `github/web-terminal/` — data backend reference (`ai.md`)
+
+**Data Flow:**
+
+```
+autopilot backend (WebSocket server)
+    ↓ positions, signals, stats, config, strategies
+frontend widget (useAutopilotSubscription)
+    ↓ stores in Zustand
+AutopilotWidget renders
+    ↓ position mints
+NATS market_data subscriptions → live prices → P&L calculation
+```
+
+## Constraints
+
+- **Existing Patterns**: Must follow web-terminal's established WebSocket/store patterns
+- **Vite Proxy**: Backend communication via Vite dev server proxy (like local-api)
+- **NATS for Prices**: Use existing NATS market_data subscriptions for real-time prices
+- **No New Dependencies**: Use what's in package.json already
+
+## Key Decisions
+
+| Decision                           | Rationale                                                           | Outcome   |
+| ---------------------------------- | ------------------------------------------------------------------- | --------- |
+| Paper trading only (no LOIS)       | Prove the system works before live trading                          | Good |
+| Templates only (no custom rules)   | Reduce scope, CLI still available for power users                   | Good |
+| Feature parity before auto-startup | More valuable to have working features than convenient startup      | Good |
+| NATS for P&L not backend           | Leverage existing subscription infrastructure, backend stays simple | Good |
+| WatchedToken type alias pattern    | Backward compatibility with existing widget imports                 | Good |
+| lois-adapter.ts pattern recommended | Clean format conversions at WebSocket boundary                     | Pending |
+| Pure function extraction for tests | Enables testing without mocking React hooks                         | Good |
+
+---
+
+_Last updated: 2026-01-08 after v1.1 milestone_

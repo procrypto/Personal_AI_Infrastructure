@@ -1,0 +1,220 @@
+     1→---
+     2→phase: 17-screener-signal-indicators
+     3→plan: 01
+     4→type: execute
+     5→---
+     6→
+     7→<objective>
+     8→Replace Activity section with inline signal indicators on screener token rows.
+     9→
+    10→Purpose: Consolidate signal visibility - instead of a separate Activity section, signals are shown directly on the tokens that triggered them via green/red glow.
+    11→Output: Activity section removed; token rows in Screener display green/red glow intensity based on signal type and recency.
+    12→</objective>
+    13→
+    14→<execution_context>
+    15→~/.claude/get-shit-done/workflows/execute-phase.md
+    16→~/.claude/get-shit-done/templates/summary.md
+    17→</execution_context>
+    18→
+    19→<context>
+    20→@.planning/PROJECT.md
+    21→@.planning/ROADMAP.md
+    22→@.planning/STATE.md
+    23→@.planning/phases/16-user-watchlist-integration/16-01-SUMMARY.md
+    24→@apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+    25→@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts
+    26→@apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts
+    27→
+    28→**Tech stack available:** React, Zustand, Tailwind CSS, lucide-react icons
+    29→**Established patterns:** TokenRow component, useAutopilotTokensWithPrices hook, signals array in store
+    30→
+    31→**Design Approach:**
+    32→The Activity section currently shows LastAnalysisRow and Recent Signals list. This information will be moved inline:
+    33→
+    34→1. Remove the Activity CollapsibleSection entirely
+    35→2. Create a hook to lookup per-token signal strength from the signals array
+    36→3. TokenRow displays green glow for buy signals, red glow for exit signals
+    37→4. Intensity scales with recency (recent signals glow brighter, fade over ~60s)
+    38→   </context>
+    39→
+    40→<tasks>
+    41→
+    42→<task type="auto">
+    43→  <name>Task 1: Create useTokenSignalStrength hook for per-token signal lookup</name>
+    44→  <files>apps/web-terminal/src/hooks/useAutopilot/useTokenSignalStrength.ts, apps/web-terminal/src/hooks/useAutopilot/index.ts</files>
+    45→  <action>
+    46→Create a new hook that builds a Map<mint, SignalStrength> from the signals array.
+    47→
+    48→SignalStrength interface:
+    49→
+    50→- type: 'buy' | 'sell' | 'none' — determined by most recent signal type for this mint
+    51→- intensity: 0-1 — higher for more recent signals, decays over time (e.g., 1.0 at 0s, 0.5 at 30s, 0.1 at 60s+)
+    52→- timestamp: number — when the signal occurred
+    53→
+    54→Logic:
+    55→
+    56→1. Group signals by mint, take most recent signal per mint
+    57→2. Calculate intensity based on (now - timestamp), use exponential decay
+    58→3. Classify signal type: magic_buy → 'buy', magic_exit/dump_exit → 'sell', rule_signal → based on action field
+    59→
+    60→Export from index.ts alongside other hooks.
+    61→
+    62→**Why exponential decay:** Recent signals should be very visible, then fade. This gives user immediate feedback that something happened.
+    63→</action>
+    64→<verify>
+    65→TypeScript compiles without errors. Hook exports correctly from index.ts.
+    66→</verify>
+    67→<done>
+    68→useTokenSignalStrength hook exists, returns Map<mint, SignalStrength> with type, intensity, timestamp fields.
+    69→</done>
+    70→</task>
+    71→
+    72→<task type="auto">
+    73→  <name>Task 2: Remove Activity section from widget</name>
+    74→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+    75→  <action>
+    76→Remove the Activity CollapsibleSection and its contents from AutopilotWidget:
+    77→
+    78→1. Remove the entire Activity CollapsibleSection block (lines ~985-1011 area):
+    79→   - CollapsibleSection title="Activity"
+    80→   - LastAnalysisRow component usage
+    81→   - Recent Signals div with SignalItem components
+    82→
+    83→2. Keep the following components as they may be useful elsewhere or for cleanup later:
+    84→   - SignalItem component definition (can remove if unused)
+    85→   - LastAnalysisRow component definition (can remove if unused)
+    86→
+    87→3. Remove any unused imports after the section is removed (Zap if only used for signals)
+    88→
+    89→4. The widget layout should now flow: Header → Open Positions → Performance → Screener
+    90→
+    91→**Why remove Activity:** Signal information is now conveyed via token row glow indicators, making the Activity section redundant.
+    92→</action>
+    93→<verify>
+    94→Build passes without type errors. Widget renders without the Activity section.
+    95→</verify>
+    96→<done>
+    97→Activity section removed. Widget shows: Header → Open Positions → Performance → Screener.
+    98→</done>
+    99→</task>
+   100→
+   101→<task type="auto">
+   102→  <name>Task 3: Add signal glow styling to TokenRow component</name>
+   103→  <files>apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx</files>
+   104→  <action>
+   105→Modify TokenRow component to accept optional signal strength and render visual glow.
+   106→
+   107→1. Add signalStrength prop to TokenRow: { type: 'buy' | 'sell' | 'none', intensity: number } | undefined
+   108→2. Add conditional CSS classes:
+   109→   - Buy signal: green glow using ring/shadow with opacity scaled by intensity
+   110→   - Sell signal: red glow using ring/shadow with opacity scaled by intensity
+   111→   - No signal: no glow (current behavior)
+   112→3. Use inline style for dynamic opacity: style={{ boxShadow: `0 0 8px rgba(R,G,B, ${intensity})` }}
+   113→   - Green (buy): rgb(34, 197, 94) - Tailwind green-500
+   114→   - Red (sell): rgb(239, 68, 68) - Tailwind red-500
+   115→4. The glow should be noticeable but not overwhelming
+   116→
+   117→Update TokenListColumn:
+   118→
+   119→1. Import and call useTokenSignalStrength hook
+   120→2. Pass signal strength to each TokenRow based on mint lookup
+   121→
+   122→**Why inline style for opacity:** Tailwind doesn't support dynamic opacity values. Inline style allows intensity-based glow.
+   123→</action>
+   124→<verify>
+   125→Build passes: `pnpm run build` in apps/web-terminal succeeds without type errors.
+   126→</verify>
+   127→<done>
+   128→TokenRow renders green/red glow based on signal strength. TokenListColumn passes signal data from hook.
+   129→</done>
+   130→</task>
+   131→
+   132→<task type="checkpoint:human-verify" gate="blocking">
+   133→  <what-built>Activity section removed; token rows display signal glow indicators</what-built>
+   134→  <how-to-verify>
+   135→    1. Run dev server: `pnpm run dev` from apps/web-terminal
+   136→    2. Open dashboard with Autopilot widget visible
+   137→    3. Confirm Activity section is gone - widget shows Header → Positions → Performance → Screener
+   138→    4. Wait for autopilot backend to analyze tokens and generate signals
+   139→    5. Observe tokens in Screener section:
+   140→       - Tokens with recent buy signals should have green glow
+   141→       - Tokens with recent exit signals should have red glow
+   142→       - Glow should fade over ~60 seconds as signal ages
+   143→    6. Confirm glow is visible but not overwhelming
+   144→    7. Confirm existing functionality unchanged (prices, change %, OPEN badge)
+   145→  </how-to-verify>
+   146→  <resume-signal>Type "approved" to continue, or describe issues to fix</resume-signal>
+   147→</task>
+   148→
+   149→</tasks>
+   150→
+   151→<verification>
+   152→Before declaring phase complete:
+   153→- [ ] `pnpm run build` succeeds in apps/web-terminal
+   154→- [ ] `pnpm run typecheck` passes
+   155→- [ ] Activity section is removed from widget
+   156→- [ ] Signal glow visually appears on tokens with recent signals
+   157→- [ ] Glow fades over time as signals age
+   158→- [ ] No visual regressions to existing token row styling
+   159→</verification>
+   160→
+   161→<success_criteria>
+   162→
+   163→- All tasks completed
+   164→- All verification checks pass
+   165→- Activity section removed from widget
+   166→- Token rows display green glow for buy signals
+   167→- Token rows display red glow for exit/sell signals
+   168→- Glow intensity fades over ~60 seconds
+   169→- Widget remains performant (no visible lag from signal lookup)
+   170→  </success_criteria>
+   171→
+   172→<output>
+   173→After completion, create `.planning/phases/17-screener-signal-indicators/17-01-SUMMARY.md`:
+   174→
+   175→# Phase 17 Plan 01: Screener Signal Indicators Summary
+   176→
+   177→**[Substantive one-liner]**
+   178→
+   179→## Performance
+   180→
+   181→- **Duration:** X min
+   182→- **Tasks:** 4 (3 auto + 1 checkpoint)
+   183→- **Files modified:** 3
+   184→
+   185→## Accomplishments
+   186→
+   187→- [Key outcome 1]
+   188→- [Key outcome 2]
+   189→
+   190→## Task Commits
+   191→
+   192→1. **Task 1:** [commit hash] (feat)
+   193→2. **Task 2:** [commit hash] (refactor)
+   194→3. **Task 3:** [commit hash] (feat)
+   195→
+   196→## Files Created/Modified
+   197→
+   198→- `file.ts` - Description
+   199→
+   200→## Decisions Made
+   201→
+   202→[Any decisions, or "None"]
+   203→
+   204→## Deviations from Plan
+   205→
+   206→[Any deviations, or "None"]
+   207→
+   208→## Issues Encountered
+   209→
+   210→[Problems and resolutions, or "None"]
+   211→
+   212→## Next Phase Readiness
+   213→
+   214→[Milestone v1.4 complete / next milestone info]
+   215→</output>
+   216→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

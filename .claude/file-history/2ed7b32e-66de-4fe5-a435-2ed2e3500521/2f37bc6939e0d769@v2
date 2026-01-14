@@ -1,0 +1,135 @@
+# TrenchBench API - System Context
+
+**Last Updated**: 2026-01-13
+**Source**: `~/Documents/BONKbot/github/local-api`
+**Repository**: `BonkBotTeam/trenchbench-api`
+
+## Overview
+
+TrenchBench API is a production-ready ClickHouse-backed HTTP service powering Community Tracker and TrenchBench custom queries. Provides REST endpoints for token analytics, trading data, wallet tracking, and discovery features.
+
+**Deployment modes:**
+- Local: `bun dev` for development
+- Beta: Auto-deploys on `main` push to `bonkbotbeta` Cloud Run
+- Production: Deploys on `v*` tag to `data-backend-prod` Cloud Run
+
+**Critical Constraint**: Fetches PRODUCTION data. All responses are sensitive.
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Runtime | Bun |
+| Framework | Elysia v1.0.0 |
+| Database | ClickHouse Cloud (Queries API) |
+| Language | TypeScript 5.3+ |
+| Container | Docker (oven/bun:1-slim) |
+| CI/CD | GitHub Actions + WIF |
+| Secrets | GCP Secret Manager |
+
+## Primary Purpose
+
+Provide ClickHouse-backed REST API for:
+- Token analytics (trending, whale moves, market data)
+- Trading data (trades, OHLCV, wallet tracking)
+- Holder statistics (top holders, multi-wallet families)
+- Discovery features (search, funding sources)
+
+## Key Interfaces
+
+### REST Endpoints (25+)
+
+**Generic Endpoints (Production Mirrors):**
+- `GET /trades/:mint` - Trade history for token
+- `GET /search/:mint` - Token lookup by mint
+- `GET /search?q=...` - Text search
+- `GET /ohlcv/pool/:pool/:range` - Pool candlestick data
+- `GET /ohlcv/token/:mint/:range` - Token candlestick data
+- `GET /holders-stats/:mint` - Top 100 holders
+- `GET /holder-stats/:mint/:address` - Single holder stats
+- `GET /traders-stats/:mint` - Top profitable traders
+- `GET /discovery/trending` - Trending tokens
+- `GET /discovery/whale-moves` - Whale activity (24h)
+- `GET /wallet-tracker/trades` - Tracked wallet trades
+- `GET /wallet-tracker/summary-all` - Wallet summaries
+- `GET /wallet-tracker/summary-all-v2` - Wallet summaries (trimmed token_image)
+- `GET /wallet-funding/:address` - Funding sources
+- `GET /multi-wallet-families/:mint` - Family detection
+- `GET /market-data/:mint` - Token market data
+- `GET /market-data-batch?mints=...` - Batch market data
+- `GET /twitter-proxy` - Twitter community proxy
+- `GET /community-tracker` - Fetch community tracker data
+- `POST /community-tracker` - Save community tracker data
+
+**Custom Endpoints:**
+- `POST /custom/wallet-trades-snapshot` - Bounded wallet trades with pagination
+- `POST /custom/holders-stats-batch` - Batch holder lookup
+
+**Extensions:**
+- `GET /ext/registry` - Extension metadata
+- `GET /ext/search/:mint` - Extended token lookup
+
+## Data Access
+
+Uses ClickHouse Cloud Queries API with Basic Auth:
+```
+POST https://queries.clickhouse.cloud/service/{service_id}/run?format=JSONEachRow
+Authorization: Basic base64(key_id:key_secret)
+```
+
+**Key Tables:**
+- `materializer_trades`, `materializer_trades_recent_1d`
+- `materializer_token_market_data_latest`
+- `materializer_holder_mint_latest`
+- `discovery_trending_token_stats_ts`
+
+## Cross-System Relationships
+
+### Upstream
+- **ClickHouse Cloud**: Production trading data source
+- **GCP Secret Manager**: Credentials for beta/prod
+- **GitHub Actions**: CI/CD execution
+
+### Downstream
+- **web-terminal-frontend**: Consumes via Vite proxy (local dev)
+- **Community Tracker**: Token analytics, trending
+- **TrenchBench**: Custom query endpoints
+
+## Deployment Architecture
+
+```
+GitHub (BonkBotTeam/trenchbench-api)
+    |
+    +-- push main --> bonkbotbeta (Cloud Run)
+    |
+    +-- push v* ---> data-backend-prod (Cloud Run)
+                          |
+                          v
+                   Secret Manager -> Cloud Run -> ClickHouse
+```
+
+**Infrastructure:**
+- **Auth**: Workload Identity Federation (no SA keys)
+- **Images**: Artifact Registry (us-central1)
+- **Secrets**: CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, CLICKHOUSE_SERVICE_ID
+
+## Development
+
+```bash
+bun install
+cp env.example .env  # Use TBKM credentials section
+bun dev              # localhost:8080
+```
+
+## Notable Patterns
+
+- Clean routes without prefixes (e.g., `/trades/:mint`, `/discovery/trending`)
+- Custom endpoints use POST method and `/custom/*` prefix
+- Generic endpoints mirror production API shapes exactly
+- SQL queries use parameterized limits with `clamp()` for safety
+- Responses follow `{ ok: boolean, ... }` pattern
+- Environment detection via `APP_ENV` (local/beta/prod)
+- Extensions add `ext` payloads to responses
+
+---
+*Verified: 2026-01-13*

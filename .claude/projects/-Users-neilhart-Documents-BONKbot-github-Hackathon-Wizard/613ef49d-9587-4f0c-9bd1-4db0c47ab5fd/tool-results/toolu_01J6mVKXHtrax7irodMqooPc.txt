@@ -1,0 +1,39 @@
+   815→
+   816→        // Broadcast market status
+   817→        wsServer.broadcastMarketStatus({
+   818→          state: marketFilterResult.state as 'NORMAL' | 'CAUTION' | 'DUMP',
+   819→          solPriceChangePercent: marketFilterResult.priceChangePercent,
+   820→          blockEntries: marketFilterResult.blockEntries,
+   821→          exitAll: marketFilterResult.exitAll,
+   822→        });
+   823→
+   824→        // Broadcast positions with live P&L
+   825→        const positionData: PositionData[] = [];
+   826→        for (const trade of openTrades) {
+   827→          const marketData = marketDataCache.get(trade.mint);
+   828→          if (marketData) {
+   829→            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   830→            positionData.push({
+   831→              mint: trade.mint,
+   832→              symbol: trade.symbol,
+   833→              action: trade.action,
+   834→              entryPriceSol: trade.entryPriceSol,
+   835→              currentPriceSol: marketData.price_sol,
+   836→              positionSizeSol: trade.positionSizeSol,
+   837→              pnlPercent: pnl.pnlPercent,
+   838→              pnlSol: pnl.pnlSol,
+   839→              entryTime: trade.timestamp,
+   840→            });
+   841→          }
+   842→        }
+   843→        wsServer.broadcastPositions(positionData);
+   844→
+   845→        // Broadcast signals for magic exits
+   846→        for (const closed of magicExitResults) {
+   847→          wsServer.broadcastSignal({
+   848→            timestamp: Date.now(),
+   849→            mint: closed.mint,
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

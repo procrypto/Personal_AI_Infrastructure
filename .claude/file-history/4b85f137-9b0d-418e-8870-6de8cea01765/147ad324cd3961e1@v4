@@ -1,0 +1,224 @@
+/**
+ * useAutopilotDataForwarder
+ *
+ * Forwards real-time market data from WebSocket stores to CLI backend.
+ * Sources: watchlist store, trending store, OHLCV store
+ *
+ * Sends:
+ * - market_data_feed: Per-token price updates (1s throttle)
+ * - cvd_update: Per-token CVD updates (1s throttle)
+ * - trending_feed: Full trending list (5s throttle)
+ * - ohlcv_update: Per-token OHLCV candles (1s throttle)
+ */
+
+import { useEffect, useRef } from "react";
+import { useGlobalStore } from "@/store/memoryStore/useGlobalStore";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import {
+  toTrendingFeed,
+  toOhlcvFeed,
+} from "@/websocket/autopilot/feedAdapters";
+import type {
+  WatchlistTokenData,
+  DiscoveryTrendingListTokenData,
+  OHLCVMessage,
+} from "@/store/memoryStore/slices/websocket-messages-store/types";
+
+// Parse string to number, returning undefined if invalid
+const parseNum = (val: string | number | undefined): number | undefined => {
+  if (val === undefined || val === null || val === "") return undefined;
+  const num = typeof val === "string" ? parseFloat(val) : val;
+  return isNaN(num) ? undefined : num;
+};
+
+// Convert watchlist/trending market_data to backend feed format
+function toMarketDataFeed(
+  mint: string,
+  marketData: WatchlistTokenData["market_data"]
+) {
+  const priceSol = parseNum(marketData.price_sol);
+  const priceUsd = parseNum(marketData.price_usd);
+
+  // Skip tokens without valid prices (may be new tokens not yet priced)
+  if (priceSol === undefined || priceUsd === undefined) return null;
+
+  return {
+    type: "market_data_feed" as const,
+    data: {
+      mint,
+      symbol: marketData.symbol,
+      name: marketData.name,
+      price_sol: priceSol,
+      price_usd: priceUsd,
+      market_cap_usd: parseNum(marketData.market_cap_usd),
+      volume_24h_usd: parseNum(marketData.volume_24h_usd),
+      liquidity_usd: parseNum(marketData.liquidity_usd),
+      trading_stats_1h: marketData.trading_stats_1h,
+    },
+  };
+}
+
+// Convert trading stats to CVD feed format
+function toCvdFeed(
+  mint: string,
+  marketData: WatchlistTokenData["market_data"]
+) {
+  const stats = marketData.trading_stats_1h;
+  if (!stats) return null;
+
+  const buyVolume = parseFloat(stats.buy_volume_sol || "0");
+  const sellVolume = parseFloat(stats.sell_volume_sol || "0");
+  const netDelta = buyVolume - sellVolume;
+
+  return {
+    type: "cvd_update" as const,
+    data: {
+      mint,
+      buyVolume,
+      sellVolume,
+      netDelta,
+      cvd: netDelta,
+      cvdChange: netDelta,
+      timestamp: Date.now(),
+      periodMs: 3600000, // 1h
+    },
+  };
+}
+
+export function useAutopilotDataForwarder() {
+  // Track last sent data to avoid duplicate sends
+  const lastSentRef = useRef<Map<string, number>>(new Map());
+  const lastTrendingFeedRef = useRef<number>(0);
+  const lastOhlcvRef = useRef<Map<string, number>>(new Map());
+  const THROTTLE_MS = 1000; // Don't send same mint more than once per second
+  const TRENDING_THROTTLE_MS = 5000; // Trending list doesn't need sub-second updates
+
+  // Subscribe to watchlist store changes
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      state => state.websocketMessages.watchlist.itemsMap,
+      (itemsMap: Map<string, WatchlistTokenData>) => {
+        // Skip if not connected yet
+        if (!autopilotWebsocket.isConnected) return;
+
+        const now = Date.now();
+
+        for (const [mint, item] of itemsMap) {
+          // Throttle per-mint
+          const lastSent = lastSentRef.current.get(mint) || 0;
+          if (now - lastSent < THROTTLE_MS) continue;
+
+          if (!item.market_data?.price_sol) continue;
+
+          // Forward market data (skip if prices invalid)
+          const marketFeed = toMarketDataFeed(mint, item.market_data);
+          if (marketFeed) {
+            autopilotWebsocket.sendFeed(marketFeed);
+          }
+
+          // Forward CVD
+          const cvdFeed = toCvdFeed(mint, item.market_data);
+          if (cvdFeed) {
+            autopilotWebsocket.sendFeed(cvdFeed);
+          }
+
+          lastSentRef.current.set(mint, now);
+        }
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  // Subscribe to trending store changes (per-token market data + CVD)
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      state => state.websocketMessages.discovery_trending_list.itemsMap,
+      (itemsMap: Map<string, DiscoveryTrendingListTokenData>) => {
+        // Skip if not connected yet
+        if (!autopilotWebsocket.isConnected) return;
+
+        const now = Date.now();
+
+        for (const [mint, item] of itemsMap) {
+          // Throttle per-mint
+          const lastSent = lastSentRef.current.get(mint) || 0;
+          if (now - lastSent < THROTTLE_MS) continue;
+
+          if (!item.market_data?.price_sol) continue;
+
+          // Forward market data (skip if prices invalid)
+          const marketFeed = toMarketDataFeed(mint, item.market_data);
+          if (marketFeed) {
+            autopilotWebsocket.sendFeed(marketFeed);
+          }
+
+          // Forward CVD
+          const cvdFeed = toCvdFeed(mint, item.market_data);
+          if (cvdFeed) {
+            autopilotWebsocket.sendFeed(cvdFeed);
+          }
+
+          lastSentRef.current.set(mint, now);
+        }
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  // Subscribe to trending store for full trending_feed (list of all trending tokens)
+  // This is separate from per-token updates - backend uses this for source tracking
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      state => state.websocketMessages.discovery_trending_list.itemsMap,
+      (itemsMap: Map<string, DiscoveryTrendingListTokenData>) => {
+        if (!autopilotWebsocket.isConnected) return;
+
+        const now = Date.now();
+        if (now - lastTrendingFeedRef.current < TRENDING_THROTTLE_MS) return;
+
+        const tokens = Array.from(itemsMap.values());
+        if (tokens.length === 0) return;
+
+        const feed = toTrendingFeed(tokens, "1h");
+        autopilotWebsocket.sendFeed(feed);
+        lastTrendingFeedRef.current = now;
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  // Subscribe to OHLCV store for candle updates
+  useEffect(() => {
+    const unsubscribe = useGlobalStore.subscribe(
+      state => state.websocketMessages.ohlcv.data,
+      (ohlcvData: { [key: string]: Map<string, OHLCVMessage> }) => {
+        if (!autopilotWebsocket.isConnected) return;
+
+        const now = Date.now();
+
+        // Iterate through all mints with OHLCV data
+        for (const [mint, candleMap] of Object.entries(ohlcvData)) {
+          if (!candleMap || candleMap.size === 0) continue;
+
+          // Throttle per-mint
+          const lastSent = lastOhlcvRef.current.get(mint) || 0;
+          if (now - lastSent < THROTTLE_MS) continue;
+
+          // Get the most recent candle (last in map)
+          const candles = Array.from(candleMap.values());
+          const latestCandle = candles[candles.length - 1];
+          if (!latestCandle) continue;
+
+          const feed = toOhlcvFeed(mint, latestCandle);
+          autopilotWebsocket.sendFeed(feed);
+          lastOhlcvRef.current.set(mint, now);
+        }
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+}

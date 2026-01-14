@@ -1,0 +1,127 @@
+---
+phase: 01-foundation
+plan: 02
+subsystem: database
+tags: [vercel-kv, redis, storage, typescript]
+
+requires:
+  - phase: 01-foundation/01
+    provides: QATicket, TesterProfile, LinearMessage type definitions
+provides:
+  - Vercel KV client wrapper with typed key constants
+  - Ticket store with CRUD and index management
+  - Tester store with upsert pattern and workload tracking
+  - Linear message store for Slack-to-ticket mapping
+affects: [01-03, 02, 03, 04, 05, 06, 07, 08]
+
+tech-stack:
+  added: [@vercel/kv@3.0.0]
+  patterns:
+    - Hash storage for entities (hset/hgetall)
+    - Set indexes for efficient lookups
+    - Double-cast pattern for typed hset (as unknown as Record)
+    - Upsert pattern for external sync
+
+key-files:
+  created:
+    - src/coordination/store/kv-client.ts
+    - src/coordination/store/ticket-store.ts
+    - src/coordination/store/tester-store.ts
+    - src/coordination/store/linear-message-store.ts
+    - src/coordination/store/index.ts
+  modified:
+    - package.json
+    - package-lock.json
+
+key-decisions:
+  - "Double-cast pattern for hset: ticket as unknown as Record<string, unknown>"
+  - "Extract Linear ID from URL for ticket ID when available"
+  - "Preserve existing stats on upsertTester for sync safety"
+
+patterns-established:
+  - "Store entity key pattern: {entity}:{id}"
+  - "Index key pattern: indexes:{entity}-by-{field}:{value}"
+  - "ESM import pattern: import from './module.js'"
+
+issues-created: []
+
+duration: 3 min
+completed: 2026-01-08
+---
+
+# Phase 1 Plan 02: Vercel KV Store Summary
+
+**Complete Vercel KV persistence layer with typed stores for tickets, testers, and Linear message mappings**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-08T13:06:43Z
+- **Completed:** 2026-01-08T13:09:52Z
+- **Tasks:** 3
+- **Files modified:** 7
+
+## Accomplishments
+
+- Installed @vercel/kv package for serverless Redis storage
+- Created typed KV client wrapper with key prefix constants
+- Implemented ticket store with full CRUD, status indexes, and tester assignment indexes
+- Implemented tester store with upsert pattern for Linear sync and workload tracking
+- Implemented linear message store for Slack message → ticket ID mapping
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Install @vercel/kv and create KV client wrapper** - `d6d8a7c` (feat)
+2. **Task 2: Create ticket store functions** - `1ce1f98` (feat)
+3. **Task 3: Create tester and linear message stores** - `6791d47` (feat)
+
+**Plan metadata:** (this commit)
+
+## Files Created/Modified
+
+- `package.json` - Added @vercel/kv@3.0.0 dependency
+- `src/coordination/store/kv-client.ts` - KV client wrapper and key constants (57 lines)
+- `src/coordination/store/ticket-store.ts` - Ticket CRUD and index management (141 lines)
+- `src/coordination/store/tester-store.ts` - Tester upsert and workload tracking (103 lines)
+- `src/coordination/store/linear-message-store.ts` - Linear message mapping (47 lines)
+- `src/coordination/store/index.ts` - Barrel re-export (15 lines)
+
+## Decisions Made
+
+- **Double-cast for hset:** Used `as unknown as Record<string, unknown>` pattern because TypeScript's direct cast fails for interfaces without index signatures. This is the standard workaround for @vercel/kv's hset API.
+- **Linear ID extraction:** When creating tickets, extract Linear issue ID from URL if available (`url.split('/').pop()`), otherwise generate UUID. Keeps IDs consistent with Linear.
+- **Upsert stats preservation:** upsertTester preserves existing stats (currentLoad, totalCompleted, avgCompletionTimeMs) unless explicitly overwritten, ensuring sync from Linear doesn't reset historical data.
+
+## Deviations from Plan
+
+### Auto-fixed Issues
+
+**1. [Rule 3 - Blocking] Fixed TypeScript cast error for hset**
+
+- **Found during:** Task 2 (ticket-store.ts implementation)
+- **Issue:** TypeScript strict mode rejects `entity as Record<string, unknown>` cast for interfaces
+- **Fix:** Used double-cast pattern: `entity as unknown as Record<string, unknown>`
+- **Files modified:** ticket-store.ts, tester-store.ts, linear-message-store.ts
+- **Verification:** TypeScript compiles without errors
+- **Committed in:** 1ce1f98, 6791d47 (Task commits)
+
+---
+
+**Total deviations:** 1 auto-fixed (1 blocking), 0 deferred
+**Impact on plan:** Type cast fix required for compilation. Pattern documented for future stores.
+
+## Issues Encountered
+
+None - upstream @upstash/redis TypeScript errors are in node_modules and don't affect our code (resolved with --skipLibCheck).
+
+## Next Phase Readiness
+
+- Store layer complete and ready for Plan 01-03 (Event bus)
+- All store functions exported via index.ts barrel
+- Key prefix constants available for any additional stores
+
+---
+*Phase: 01-foundation*
+*Completed: 2026-01-08*

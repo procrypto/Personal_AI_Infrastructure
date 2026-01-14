@@ -1,0 +1,59 @@
+/**
+ * Vercel KV Client Wrapper
+ *
+ * Provides typed KV client access and key prefix constants for the QA Coordination system.
+ * Uses @vercel/kv for serverless Redis storage.
+ */
+
+import { kv, createClient } from '@vercel/kv';
+import type { VercelKV } from '@vercel/kv';
+
+// Re-export the default kv client for simple usage
+export { kv };
+
+/**
+ * Create a custom KV client for testing or custom configuration.
+ * If no config provided, returns the default kv client.
+ */
+export function createKVClient(config?: {
+  url?: string;
+  token?: string;
+}): VercelKV {
+  if (config?.url && config?.token) {
+    return createClient({
+      url: config.url,
+      token: config.token,
+    });
+  }
+  return kv;
+}
+
+/**
+ * Key prefixes for different entity types.
+ * Following Redis key naming convention: entity:id
+ */
+export const KV_KEYS = {
+  /** Ticket entity key */
+  ticket: (id: string) => `tickets:${id}`,
+  /** Tester profile entity key */
+  tester: (id: string) => `testers:${id}`,
+  /** Linear message mapping key (keyed by Slack timestamp) */
+  linearMessage: (slackTs: string) => `linear-messages:${slackTs}`,
+  /** QA session entity key */
+  session: (id: string) => `sessions:${id}`,
+  // Index keys for efficient lookups
+  /** Set of ticket IDs by status */
+  ticketsByStatus: (status: string) => `indexes:tickets-by-status:${status}`,
+  /** Set of ticket IDs by assigned tester */
+  ticketsByTester: (testerId: string) => `indexes:tickets-by-tester:${testerId}`,
+  /** Set of all pending ticket IDs */
+  pendingTickets: () => 'indexes:pending-tickets',
+} as const;
+
+/**
+ * Generate a unique ID using crypto.randomUUID (Node 18+).
+ * Used for entities that don't have an external ID source.
+ */
+export function generateId(): string {
+  return crypto.randomUUID();
+}

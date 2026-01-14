@@ -1,0 +1,447 @@
+/**
+ * WebSocket Server for Frontend Integration
+ *
+ * Broadcasts live autopilot events to connected clients.
+ *
+ * LOIS INTEGRATION PATH
+ * =====================
+ * This WebSocket server provides the protocol for frontend integration with the
+ * token-analysis-autopilot. Data types here are designed for future LOIS live
+ * trading compatibility.
+ *
+ * Current Status: Paper trading only (no real order execution)
+ *
+ * For live trading integration:
+ * - SignalData.signalType maps to LOIS TriggerEvent types
+ * - PositionData would need execution IDs, fill prices, and order status
+ * - ConfigData.mode='live' path would route to LOIS order execution
+ *
+ * See LOIS compatibility markers on each interface for specific mapping notes.
+ */
+
+import { WebSocketServer, WebSocket } from 'ws';
+import type { PaperTrade } from './trading/types.js';
+import type { TokenMarketData, OHLCV, Trade } from './api/types.js';
+
+// Event types the frontend can receive
+export type AutopilotEvent =
+  | { type: 'position_update'; positions: PositionData[] }
+  | { type: 'signal'; signal: SignalData }
+  | { type: 'market_status'; status: MarketStatusData }
+  | { type: 'stats_update'; stats: StatsData }
+  | { type: 'scan_tick'; tick: ScanTickData }
+  | { type: 'token_list'; tokens: TokenListData }
+  | { type: 'config'; config: ConfigData }
+  | { type: 'strategies'; strategies: StrategiesData }
+  | { type: 'last_analysis'; analysis: LastAnalysisData };
+
+// Command types the frontend can send
+export type AutopilotCommand =
+  | { command: 'toggle_sources'; enabled: boolean }
+  | { command: 'toggle_trending'; enabled: boolean }
+  | { command: 'toggle_whales'; enabled: boolean }
+  | { command: 'toggle_filter'; enabled: boolean }
+  | { command: 'set_mode'; mode: 'paper' | 'live' }
+  | { command: 'set_position_size'; sizeSol: number }
+  | { command: 'refresh_sources' }
+  | { command: 'get_config' }
+  | { command: 'get_strategies' }
+  | { command: 'toggle_strategy'; strategyId: string; enabled: boolean }
+  | { command: 'close_position'; mint: string }
+  | { command: 'close_all_positions' };
+
+// CVD (Cumulative Volume Delta) data for volume analysis
+export interface CVDData {
+  mint: string;
+  timestamp: number;
+  cvd: number;           // Current cumulative volume delta
+  cvdChange: number;     // Change over period
+  buyVolume: number;     // Buy volume in period
+  sellVolume: number;    // Sell volume in period
+  netDelta: number;      // buyVolume - sellVolume for period
+  periodMs: number;      // Period length (e.g., 60000 for 1m)
+}
+
+// Data feed message types for incoming market data from main app
+export type DataFeedMessage =
+  | { type: 'market_data_feed'; data: TokenMarketData }
+  | { type: 'ohlcv_update'; mint: string; ohlcv: OHLCV[] }
+  | { type: 'trade_feed'; trade: Trade }
+  | { type: 'cvd_update'; data: CVDData };
+
+// Union of all incoming message types
+export type IncomingMessage = AutopilotCommand | DataFeedMessage;
+
+// Handler type for data feed messages
+export type DataFeedHandler = (message: DataFeedMessage) => void;
+
+// LOIS COMPATIBLE: partial
+// - mode field controls paper vs live execution path
+// - For live trading: would add walletAddress, rpcEndpoint, and slippage config
+// - positionSizeSol used for both paper and live
+export interface ConfigData {
+  autoSourcesEnabled: boolean;
+  trendingEnabled: boolean;
+  whalesEnabled: boolean;
+  marketFilterEnabled: boolean;
+  mode: 'paper' | 'live';
+  positionSizeSol: number;
+  pollIntervalMs: number;
+}
+
+// LOIS COMPATIBLE: yes
+// - Strategy templates are execution-agnostic (same for paper and live)
+// - id maps directly to LOIS strategy identifiers
+export interface StrategyInfo {
+  id: string;
+  name: string;
+  description: string;
+  mode: 'all' | 'any';
+  ruleCount: number;
+  summary: string; // Compact rule summary
+}
+
+// LOIS COMPATIBLE: yes
+// - Strategy state is execution-agnostic
+// - active[] array used for both paper and live mode filtering
+export interface StrategiesData {
+  available: StrategyInfo[];  // All available templates
+  active: string[];           // IDs of currently active strategies
+}
+
+export type CommandHandler = (command: AutopilotCommand) => Promise<void> | void;
+
+// LOIS COMPATIBLE: partial
+// - Paper trading only: no execution IDs, fill prices, or order status
+// - For live trading: add txSignature, executionPrice, fillStatus, orderId
+// - entryPriceSol is simulated in paper mode, would be actual fill in live
+// - Frontend calculates P&L from NATS market data (same for paper and live)
+export interface PositionData {
+  mint: string;
+  symbol: string;
+  action: 'buy' | 'sell';
+  entryPriceSol: number;
+  positionSizeSol: number;
+  entryTime: number;
+}
+
+// LOIS COMPATIBLE: partial
+// - signalType maps to LOIS TriggerEvent:
+//   * magic_buy -> TriggerEvent.ENTRY_SIGNAL
+//   * magic_exit, dump_exit -> TriggerEvent.EXIT_SIGNAL
+//   * rule_signal -> TriggerEvent.STRATEGY_MATCH
+// - For live trading: add confidence score, urgency level, slippage tolerance
+export interface SignalData {
+  timestamp: number;
+  mint: string;
+  symbol: string;
+  signalType: 'magic_buy' | 'magic_exit' | 'dump_exit' | 'rule_signal';
+  action: 'buy' | 'sell' | 'close';
+  reason: string;
+  pnlPercent?: number;
+  entryType?: string;
+}
+
+// LOIS COMPATIBLE: yes
+// - Market risk assessment used for both paper and live trading gates
+// - blockEntries and exitAll flags control LOIS execution in live mode
+export interface MarketStatusData {
+  state: 'NORMAL' | 'CAUTION' | 'DUMP';
+  solPriceChangePercent: number;
+  blockEntries: boolean;
+  exitAll: boolean;
+}
+
+// LOIS COMPATIBLE: yes
+// - Aggregate stats format identical for paper and live trading
+// - PnL values are realized (closed trades) - same calculation method
+export interface StatsData {
+  totalTrades: number;
+  openTrades: number;
+  closedTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnlSol: number;
+  totalPnlUsd: number;
+  avgPnlPercent: number;
+}
+
+// LOIS COMPATIBLE: yes
+// - Scan metadata format identical for paper and live trading
+// - Provides heartbeat/liveness indication for UI
+export interface ScanTickData {
+  timestamp: number;
+  scanNumber: number;
+  tokenCount: number;
+  openPositions: number;
+}
+
+// Last analyzed token result - for UI debugging/visibility
+export interface LastAnalysisData {
+  mint: string;
+  symbol: string;
+  timestamp: number;
+  priceChange5m: number | null;
+  priceChange1h: number | null;
+  volumeRatio: number | null;
+  buyersCount: number | null;
+  sellersCount: number | null;
+  buySellRatio: number | null;
+  rulesChecked: number;
+  rulesMatched: number;
+  outcome: 'no_signal' | 'buy_signal' | 'sell_signal' | 'skipped';
+  reason: string;
+}
+
+// LOIS COMPATIBLE: yes
+// - Token discovery/watchlist format identical for paper and live
+// - hasPosition flag indicates active position (paper or live)
+export interface WatchedToken {
+  mint: string;
+  symbol: string;
+  source: 'watchlist' | 'trending' | 'whales';
+  priceSol?: number;
+  priceUsd?: number;
+  change1h?: number;
+  change24h?: number;
+  volume24h?: number;
+  mcap?: number;
+  hasPosition?: boolean;
+}
+
+// LOIS COMPATIBLE: yes
+// - Token list aggregation identical for paper and live
+// - Sources can be toggled independently in both modes
+export interface TokenListData {
+  watchlist: WatchedToken[];
+  trending: WatchedToken[];
+  whales: WatchedToken[];
+}
+
+export type ConnectHandler = () => void;
+
+class AutopilotWebSocketServer {
+  private wss: WebSocketServer | null = null;
+  private clients: Set<WebSocket> = new Set();
+  private port: number = 8765;
+  private commandHandler: CommandHandler | null = null;
+  private connectHandler: ConnectHandler | null = null;
+  private dataFeedHandler: DataFeedHandler | null = null;
+
+  // In-memory storage for incoming market data feeds
+  private marketData: Map<string, TokenMarketData> = new Map();
+  private ohlcvData: Map<string, OHLCV[]> = new Map();
+  private cvdData: Map<string, CVDData> = new Map();
+  private recentTrades: Trade[] = [];
+  private readonly MAX_RECENT_TRADES = 1000;
+
+  start(port: number = 8765): void {
+    if (this.wss) {
+      console.log('[WS] Server already running');
+      return;
+    }
+
+    this.port = port;
+    this.wss = new WebSocketServer({ port });
+
+    this.wss.on('connection', (ws) => {
+      this.clients.add(ws);
+      console.log(`[WS] Client connected (${this.clients.size} total)`);
+
+      // Notify handler to send initial state to new client
+      if (this.connectHandler) {
+        this.connectHandler();
+      }
+
+      // Handle incoming messages (commands from frontend or data feeds from main app)
+      ws.on('message', async (data) => {
+        try {
+          const message = JSON.parse(data.toString()) as IncomingMessage;
+
+          // Check if it's a command (has 'command' field)
+          if ('command' in message && this.commandHandler) {
+            console.log(`[WS] Command received: ${message.command}`);
+            await this.commandHandler(message);
+          }
+          // Check if it's a data feed (has 'type' field matching data feed types)
+          else if ('type' in message && this.isDataFeedMessage(message)) {
+            this.handleDataFeed(message as DataFeedMessage);
+          }
+        } catch (err) {
+          console.error('[WS] Failed to parse message:', err);
+        }
+      });
+
+      ws.on('close', () => {
+        this.clients.delete(ws);
+        console.log(`[WS] Client disconnected (${this.clients.size} total)`);
+      });
+
+      ws.on('error', (err) => {
+        console.error('[WS] Client error:', err.message);
+        this.clients.delete(ws);
+      });
+    });
+
+    this.wss.on('error', (err) => {
+      console.error('[WS] Server error:', err.message);
+    });
+
+    console.log(`[WS] Server started on port ${port}`);
+  }
+
+  // Register a handler for incoming commands
+  onCommand(handler: CommandHandler): void {
+    this.commandHandler = handler;
+  }
+
+  // Register a handler for new client connections (to send initial state)
+  onConnect(handler: ConnectHandler): void {
+    this.connectHandler = handler;
+  }
+
+  // Register a handler for incoming data feed messages
+  onDataFeed(handler: DataFeedHandler): void {
+    this.dataFeedHandler = handler;
+  }
+
+  // Type guard to check if message is a data feed type
+  private isDataFeedMessage(message: IncomingMessage): message is DataFeedMessage {
+    if (!('type' in message)) return false;
+    const type = (message as { type?: string }).type;
+    return type === 'market_data_feed' || type === 'ohlcv_update' || type === 'trade_feed' || type === 'cvd_update';
+  }
+
+  // Handle incoming data feed messages
+  private handleDataFeed(message: DataFeedMessage): void {
+    switch (message.type) {
+      case 'market_data_feed':
+        // Upsert market data by mint
+        this.marketData.set(message.data.mint, message.data);
+        break;
+
+      case 'ohlcv_update':
+        // Replace OHLCV array for mint
+        this.ohlcvData.set(message.mint, message.ohlcv);
+        break;
+
+      case 'trade_feed':
+        // Add to recent trades, maintain max size (circular buffer)
+        this.recentTrades.push(message.trade);
+        if (this.recentTrades.length > this.MAX_RECENT_TRADES) {
+          this.recentTrades.shift();
+        }
+        break;
+
+      case 'cvd_update':
+        // Upsert CVD data by mint
+        this.cvdData.set(message.data.mint, message.data);
+        break;
+    }
+
+    // Notify handler if registered
+    if (this.dataFeedHandler) {
+      this.dataFeedHandler(message);
+    }
+  }
+
+  // Getter methods for rule engine access
+  getMarketData(mint: string): TokenMarketData | undefined {
+    return this.marketData.get(mint);
+  }
+
+  getAllMarketData(): Map<string, TokenMarketData> {
+    return this.marketData;
+  }
+
+  getOHLCV(mint: string): OHLCV[] | undefined {
+    return this.ohlcvData.get(mint);
+  }
+
+  getCVD(mint: string): CVDData | undefined {
+    return this.cvdData.get(mint);
+  }
+
+  getAllCVD(): Map<string, CVDData> {
+    return this.cvdData;
+  }
+
+  getRecentTrades(mint?: string): Trade[] {
+    if (mint) {
+      return this.recentTrades.filter(t => t.mint === mint);
+    }
+    return this.recentTrades;
+  }
+
+  stop(): void {
+    if (!this.wss) return;
+
+    for (const client of this.clients) {
+      client.close();
+    }
+    this.clients.clear();
+    this.wss.close();
+    this.wss = null;
+    console.log('[WS] Server stopped');
+  }
+
+  broadcast(event: AutopilotEvent): void {
+    if (this.clients.size === 0) return;
+
+    const message = JSON.stringify(event);
+    for (const client of this.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    }
+  }
+
+  // Convenience methods for specific event types
+  broadcastPositions(positions: PositionData[]): void {
+    this.broadcast({ type: 'position_update', positions });
+  }
+
+  broadcastSignal(signal: SignalData): void {
+    this.broadcast({ type: 'signal', signal });
+  }
+
+  broadcastMarketStatus(status: MarketStatusData): void {
+    this.broadcast({ type: 'market_status', status });
+  }
+
+  broadcastStats(stats: StatsData): void {
+    this.broadcast({ type: 'stats_update', stats });
+  }
+
+  broadcastScanTick(tick: ScanTickData): void {
+    this.broadcast({ type: 'scan_tick', tick });
+  }
+
+  broadcastTokenList(tokens: TokenListData): void {
+    this.broadcast({ type: 'token_list', tokens });
+  }
+
+  broadcastLastAnalysis(analysis: LastAnalysisData): void {
+    this.broadcast({ type: 'last_analysis', analysis });
+  }
+
+  broadcastConfig(config: ConfigData): void {
+    this.broadcast({ type: 'config', config });
+  }
+
+  broadcastStrategies(strategies: StrategiesData): void {
+    this.broadcast({ type: 'strategies', strategies });
+  }
+
+  getClientCount(): number {
+    return this.clients.size;
+  }
+
+  isRunning(): boolean {
+    return this.wss !== null;
+  }
+}
+
+// Singleton instance
+export const wsServer = new AutopilotWebSocketServer();

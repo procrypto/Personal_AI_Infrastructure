@@ -1,0 +1,48 @@
+/* eslint-disable lingui/no-unlocalized-strings */
+import { cn } from "@/lib/utils";
+import type { VzScore } from "@/hooks/useAutopilot/useVolumeVz";
+
+type VzCellProps = {
+  vz: VzScore | undefined;
+};
+
+/**
+ * Compact cell showing Vz (Volume Delta) indicator.
+ *
+ * Displays:
+ * - Arrow based on direction (▲▲, ▲, –, ▼, ▼▼)
+ * - Color based on buy/sell pressure (green/red/gray)
+ * - RVOL multiplier when volume is hot (1.5x+)
+ */
+export function VzCell({ vz }: VzCellProps) {
+  if (!vz) {
+    return <span className="text-text-tertiary">-</span>;
+  }
+
+  // Arrow based on direction
+  const arrow = {
+    strong_buy: "▲▲",
+    buy: "▲",
+    neutral: "–",
+    sell: "▼",
+    strong_sell: "▼▼",
+  }[vz.direction];
+
+  // Color based on direction
+  const color = {
+    strong_buy: "text-text-success",
+    buy: "text-text-success",
+    neutral: "text-text-tertiary",
+    sell: "text-text-error",
+    strong_sell: "text-text-error",
+  }[vz.direction];
+
+  return (
+    <div className={cn("flex items-center gap-0.5 text-xs font-medium", color)}>
+      <span>{arrow}</span>
+      {vz.isHot && (
+        <span className="text-[9px] opacity-70">{vz.rvol.toFixed(1)}x</span>
+      )}
+    </div>
+  );
+}

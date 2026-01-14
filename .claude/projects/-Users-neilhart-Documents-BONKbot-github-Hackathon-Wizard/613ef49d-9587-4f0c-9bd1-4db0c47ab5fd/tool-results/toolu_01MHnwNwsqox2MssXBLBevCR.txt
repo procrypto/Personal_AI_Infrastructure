@@ -1,0 +1,162 @@
+     1→import { MarketDataMessage } from "@/store/memoryStore/slices/websocket-messages-store/types";
+     2→import { GlobalStore } from "@/store/memoryStore/types";
+     3→import { Pubkey } from "@/types/basicTypes.model";
+     4→import { TopicName, WebsocketJsonDataMessage } from "@/websocket/topic/types";
+     5→import {
+     6→  TopicConstructorArgs,
+     7→  WebsocketTopic,
+     8→} from "@/websocket/topic/websocketTopic";
+     9→import { StoreApi } from "zustand";
+    10→
+    11→/**
+    12→ * Type definition for market data topic names following the pattern:
+    13→ * market_data.{mint_address}
+    14→ *  Example: "market_data.7eMJmn1bYWSQEwxAX7CyngBzGNGu1cT582asKxxRpump"
+    15→ */
+    16→export type MarketDataTopicName = `market_data.${Pubkey}`;
+    17→
+    18→/**
+    19→ * Module declaration to register the market_data topic in the global topic
+    20→ * registry. This enables type safety when working with market data topics
+    21→ * throughout the application.
+    22→ */
+    23→declare module "@/websocket/topic/types" {
+    24→  interface TopicRegistry {
+    25→    market_data: {
+    26→      name: MarketDataTopicName;
+    27→      args: {
+    28→        nats_replay: boolean;
+    29→      };
+    30→    };
+    31→  }
+    32→}
+    33→
+    34→/**
+    35→ * WebSocket topic for real-time market data updates for specific tokens.
+    36→ *
+    37→ * This class manages:
+    38→ * - Real-time market data updates for a specific token mint
+    39→ * - Document visibility optimization (defers updates when tab is hidden)
+    40→ */
+    41→export class MarketDataTopic extends WebsocketTopic<MarketDataMessage> {
+    42→  private store: StoreApi<GlobalStore>;
+    43→
+    44→  private mint: string;
+    45→
+    46→  /**
+    47→   * Holds the most recent market data when document is hidden. Only the latest
+    48→   * message is kept to avoid memory buildup during long periods of inactivity.
+    49→   */
+    50→  private deferredMarketData: MarketDataMessage | null = null;
+    51→
+    52→  /**
+    53→   * Interval ID for checking document visibility state. Runs every 2.5 seconds
+    54→   * when document is hidden to detect when it becomes visible again.
+    55→   */
+    56→  private visibilityInterval: ReturnType<typeof setInterval> | null = null;
+    57→
+    58→  /**
+    59→   * Type guard to check if a topic name follows the market data pattern.
+    60→   */
+    61→  static isMarketDataTopic(topic: TopicName): topic is MarketDataTopicName {
+    62→    return topic.startsWith("market_data.");
+    63→  }
+    64→
+    65→  constructor(
+    66→    args: TopicConstructorArgs<{
+    67→      store: StoreApi<GlobalStore>;
+    68→    }>
+    69→  ) {
+    70→    super(args);
+    71→    this.store = args.store;
+    72→
+    73→    if (!MarketDataTopic.isMarketDataTopic(this.topic)) {
+    74→      throw new Error(
+    75→        `Cannot create MarketDataTopic with invalid topic: ${this.topic}`
+    76→      );
+    77→    }
+    78→
+    79→    this.mint = this.parseTopic(this.topic);
+    80→  }
+    81→
+    82→  /**
+    83→   * Handles incoming market data messages from the WebSocket.
+    84→   *
+    85→   * Implements document visibility optimization:
+    86→   * - If document is hidden: defers the update and starts visibility checking
+    87→   * - If document is visible: immediately updates the store
+    88→   *
+    89→   * This prevents unnecessary store updates and re-renders when the user
+    90→   * isn't actively viewing the application.
+    91→   */
+    92→  handleMessageData(data: WebsocketJsonDataMessage<MarketDataMessage>) {
+    93→    // Performance optimization: defer updates when tab is not visible unless
+    94→    // the user is on this mint's page
+    95→    if (this.shouldDeferMarketDataUpdate()) {
+    96→      this.deferredMarketData = data.message;
+    97→      if (!this.visibilityInterval) {
+    98→        this.startDocumentVisibilityInterval();
+    99→      }
+   100→      return;
+   101→    }
+   102→
+   103→    // Document is visible - apply the update immediately
+   104→    this.store
+   105→      .getState()
+   106→      .websocketMessages.market_data.addItem(this.mint, data.message);
+   107→  }
+   108→
+   109→  private shouldDeferMarketDataUpdate() {
+   110→    const isHiddenDocument =
+   111→      this.store.getState().documentVisibility.isHiddenDocument;
+   112→
+   113→    const isOnMintPage = window.location.pathname.includes(this.mint);
+   114→
+   115→    return isHiddenDocument && !isOnMintPage;
+   116→  }
+   117→
+   118→  /**
+   119→   * Starts an interval that checks document visibility every 2.5 seconds.
+   120→   * When the document becomes visible again, applies any deferred market data
+   121→   * and cleans up the interval.
+   122→   */
+   123→  private startDocumentVisibilityInterval() {
+   124→    this.visibilityInterval = setInterval(() => {
+   125→      // If the document is still hidden, do nothing
+   126→      if (this.store.getState().documentVisibility.isHiddenDocument) {
+   127→        return;
+   128→      }
+   129→      // Otherwise if the document is visible, apply the deferred market data
+   130→      this.applyDeferredMarketData();
+   131→    }, 2500);
+   132→  }
+   133→
+   134→  private applyDeferredMarketData() {
+   135→    if (!this.deferredMarketData) {
+   136→      return;
+   137→    }
+   138→
+   139→    this.store
+   140→      .getState()
+   141→      .websocketMessages.market_data.addItem(
+   142→        this.mint,
+   143→        this.deferredMarketData
+   144→      );
+   145→    this.deferredMarketData = null;
+   146→
+   147→    if (this.visibilityInterval) {
+   148→      clearInterval(this.visibilityInterval);
+   149→      this.visibilityInterval = null;
+   150→    }
+   151→  }
+   152→
+   153→  private parseTopic(topic: MarketDataTopicName): string {
+   154→    const mint = topic.split(".")[1];
+   155→    return mint;
+   156→  }
+   157→}
+   158→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

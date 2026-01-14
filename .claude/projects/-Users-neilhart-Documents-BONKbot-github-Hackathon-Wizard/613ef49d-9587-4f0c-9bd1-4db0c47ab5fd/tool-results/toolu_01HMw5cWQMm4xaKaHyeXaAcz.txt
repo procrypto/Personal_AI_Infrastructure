@@ -1,0 +1,162 @@
+     1→/**
+     2→ * WebSocket Server for Frontend Integration
+     3→ *
+     4→ * Broadcasts live autopilot events to connected clients.
+     5→ */
+     6→
+     7→import { WebSocketServer, WebSocket } from 'ws';
+     8→import type { PaperTrade } from './trading/types.js';
+     9→
+    10→// Event types the frontend can receive
+    11→export type AutopilotEvent =
+    12→  | { type: 'position_update'; positions: PositionData[] }
+    13→  | { type: 'signal'; signal: SignalData }
+    14→  | { type: 'market_status'; status: MarketStatusData }
+    15→  | { type: 'stats_update'; stats: StatsData }
+    16→  | { type: 'scan_tick'; tick: ScanTickData };
+    17→
+    18→export interface PositionData {
+    19→  mint: string;
+    20→  symbol: string;
+    21→  action: 'buy' | 'sell';
+    22→  entryPriceSol: number;
+    23→  currentPriceSol: number;
+    24→  positionSizeSol: number;
+    25→  pnlPercent: number;
+    26→  pnlSol: number;
+    27→  entryTime: number;
+    28→}
+    29→
+    30→export interface SignalData {
+    31→  timestamp: number;
+    32→  mint: string;
+    33→  symbol: string;
+    34→  signalType: 'magic_buy' | 'magic_exit' | 'dump_exit' | 'rule_signal';
+    35→  action: 'buy' | 'sell' | 'close';
+    36→  reason: string;
+    37→  pnlPercent?: number;
+    38→  entryType?: string;
+    39→}
+    40→
+    41→export interface MarketStatusData {
+    42→  state: 'NORMAL' | 'CAUTION' | 'DUMP';
+    43→  solPriceChangePercent: number;
+    44→  blockEntries: boolean;
+    45→  exitAll: boolean;
+    46→}
+    47→
+    48→export interface StatsData {
+    49→  totalTrades: number;
+    50→  openTrades: number;
+    51→  closedTrades: number;
+    52→  wins: number;
+    53→  losses: number;
+    54→  winRate: number;
+    55→  totalPnlSol: number;
+    56→  totalPnlUsd: number;
+    57→  avgPnlPercent: number;
+    58→}
+    59→
+    60→export interface ScanTickData {
+    61→  timestamp: number;
+    62→  scanNumber: number;
+    63→  tokenCount: number;
+    64→  openPositions: number;
+    65→}
+    66→
+    67→class AutopilotWebSocketServer {
+    68→  private wss: WebSocketServer | null = null;
+    69→  private clients: Set<WebSocket> = new Set();
+    70→  private port: number = 8765;
+    71→
+    72→  start(port: number = 8765): void {
+    73→    if (this.wss) {
+    74→      console.log('[WS] Server already running');
+    75→      return;
+    76→    }
+    77→
+    78→    this.port = port;
+    79→    this.wss = new WebSocketServer({ port });
+    80→
+    81→    this.wss.on('connection', (ws) => {
+    82→      this.clients.add(ws);
+    83→      console.log(`[WS] Client connected (${this.clients.size} total)`);
+    84→
+    85→      ws.on('close', () => {
+    86→        this.clients.delete(ws);
+    87→        console.log(`[WS] Client disconnected (${this.clients.size} total)`);
+    88→      });
+    89→
+    90→      ws.on('error', (err) => {
+    91→        console.error('[WS] Client error:', err.message);
+    92→        this.clients.delete(ws);
+    93→      });
+    94→    });
+    95→
+    96→    this.wss.on('error', (err) => {
+    97→      console.error('[WS] Server error:', err.message);
+    98→    });
+    99→
+   100→    console.log(`[WS] Server started on port ${port}`);
+   101→  }
+   102→
+   103→  stop(): void {
+   104→    if (!this.wss) return;
+   105→
+   106→    for (const client of this.clients) {
+   107→      client.close();
+   108→    }
+   109→    this.clients.clear();
+   110→    this.wss.close();
+   111→    this.wss = null;
+   112→    console.log('[WS] Server stopped');
+   113→  }
+   114→
+   115→  broadcast(event: AutopilotEvent): void {
+   116→    if (this.clients.size === 0) return;
+   117→
+   118→    const message = JSON.stringify(event);
+   119→    for (const client of this.clients) {
+   120→      if (client.readyState === WebSocket.OPEN) {
+   121→        client.send(message);
+   122→      }
+   123→    }
+   124→  }
+   125→
+   126→  // Convenience methods for specific event types
+   127→  broadcastPositions(positions: PositionData[]): void {
+   128→    this.broadcast({ type: 'position_update', positions });
+   129→  }
+   130→
+   131→  broadcastSignal(signal: SignalData): void {
+   132→    this.broadcast({ type: 'signal', signal });
+   133→  }
+   134→
+   135→  broadcastMarketStatus(status: MarketStatusData): void {
+   136→    this.broadcast({ type: 'market_status', status });
+   137→  }
+   138→
+   139→  broadcastStats(stats: StatsData): void {
+   140→    this.broadcast({ type: 'stats_update', stats });
+   141→  }
+   142→
+   143→  broadcastScanTick(tick: ScanTickData): void {
+   144→    this.broadcast({ type: 'scan_tick', tick });
+   145→  }
+   146→
+   147→  getClientCount(): number {
+   148→    return this.clients.size;
+   149→  }
+   150→
+   151→  isRunning(): boolean {
+   152→    return this.wss !== null;
+   153→  }
+   154→}
+   155→
+   156→// Singleton instance
+   157→export const wsServer = new AutopilotWebSocketServer();
+   158→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

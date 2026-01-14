@@ -1,0 +1,119 @@
+---
+phase: 01-environment-config
+plan: 01
+type: execute
+---
+
+<objective>
+Add environment detection and typed config structure with `APP_ENV` support.
+
+Purpose: Enable deploy-time environment awareness while preserving zero-change local workflow.
+Output: Config system that detects local/beta/prod and types environment configuration.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/01-environment-config/01-CONTEXT.md
+
+@.planning/codebase/STACK.md
+@.planning/codebase/ARCHITECTURE.md
+@.planning/codebase/CONVENTIONS.md
+
+@src/config.ts
+
+**Established patterns:**
+- Named exports only (no default exports)
+- camelCase functions, PascalCase types
+- 4-space indentation, double quotes, semicolons
+- Discriminated unions for type safety
+
+**Constraining decisions:**
+- Zero local disruption (from 01-CONTEXT.md)
+- Deploy-time APP_ENV pattern (12-factor)
+- Local defaults to "local" if APP_ENV not set
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add environment type definitions</name>
+  <files>src/config.ts</files>
+  <action>
+Add typed environment definitions to config.ts:
+
+1. Add `Environment` type: `"local" | "beta" | "prod"`
+2. Add `getEnvironment()` function that reads `APP_ENV` env var
+3. Default to `"local"` when `APP_ENV` is not set (preserves existing behavior)
+4. Add `isLocal()`, `isBeta()`, `isProd()` helper functions for convenience
+5. Export the environment at module level as `config.environment`
+
+Pattern:
+```typescript
+export type Environment = "local" | "beta" | "prod";
+
+const getEnvironment = (): Environment => {
+    const env = process.env.APP_ENV;
+    if (env === "beta" || env === "prod") return env;
+    return "local";
+};
+```
+
+Do NOT modify existing ClickHouse credential loading - that stays exactly as-is.
+  </action>
+  <verify>TypeScript compiles without errors: `bun run typecheck`</verify>
+  <done>Environment type exported, getEnvironment() returns "local" by default, helper functions work</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Add environment to config object</name>
+  <files>src/config.ts</files>
+  <action>
+Integrate environment into the existing config object:
+
+1. Add `environment` field to config object: `environment: getEnvironment()`
+2. Add startup logging to show which environment is active
+3. Update assertConfig() to log environment on startup (info, not error)
+
+Add after successful config assertion:
+```typescript
+console.log(`[config] Environment: ${config.environment}`);
+```
+
+CRITICAL: Do NOT change anything about how ClickHouse credentials are loaded.
+The existing TBKM_CLICKHOUSE_* variables must continue to work exactly as before.
+  </action>
+  <verify>Run `APP_ENV=beta bun run src/server.ts` and verify "[config] Environment: beta" in output. Run without APP_ENV and verify "local".</verify>
+  <done>Config object has environment field, startup shows environment, existing credential loading unchanged</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `bun run typecheck` passes
+- [ ] `bun dev` works exactly as before (zero changes to local workflow)
+- [ ] Environment defaults to "local" when APP_ENV not set
+- [ ] `APP_ENV=beta bun dev` shows "beta" environment
+- [ ] `APP_ENV=prod bun dev` shows "prod" environment
+- [ ] All existing endpoints still work
+</verification>
+
+<success_criteria>
+
+- Environment type system added
+- Config object includes environment field
+- Helper functions (isLocal, isBeta, isProd) available
+- Zero changes to existing local development workflow
+- TypeScript types all pass
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-environment-config/01-01-SUMMARY.md`
+</output>

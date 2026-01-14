@@ -1,0 +1,238 @@
+# Context for TrenchBench API
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+TrenchBench API is a production-ready ClickHouse-backed HTTP service powering Community Tracker and TrenchBench custom queries. It provides REST endpoints for token analytics, trading data, wallet tracking, and discovery features.
+
+**Deployment modes:**
+- **Local**: Development with `bun dev` (uses TBKM credentials)
+- **Beta**: Auto-deploys on `main` push to `bonkbotbeta` Cloud Run
+- **Production**: Deploys on `v*` tag to `data-backend-prod` Cloud Run
+
+**Critical constraint:** Fetches PRODUCTION ClickHouse data. Treat all responses as sensitive.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Runtime | Bun | Modern JS runtime with native TypeScript |
+| Framework | Elysia v1.0.0 | Lightweight HTTP framework (Bun-native) |
+| Database | ClickHouse Cloud | Production data via Queries API |
+| Language | TypeScript 5.3+ | Strict mode enabled |
+| Container | Docker (oven/bun:1-slim) | Multi-stage build for Cloud Run |
+| CI/CD | GitHub Actions | WIF auth, Artifact Registry, Cloud Run deploy |
+| Secrets | GCP Secret Manager | ClickHouse credentials injection |
+
+### Services / Components
+
+| Service | Purpose |
+|---------|---------|
+| `trenchbench-api` (Cloud Run) | Production API service |
+| Artifact Registry | Container image storage |
+| Secret Manager | Credential management |
+
+### Key Directories
+
+```
+trenchbench-api/
+├── src/
+│   ├── server.ts              # Entry point, route registration
+│   ├── config.ts              # Environment-aware config (local/beta/prod)
+│   ├── clickhouse/
+│   │   └── client.ts          # ClickHouse Cloud Queries API client
+│   ├── endpoints/
+│   │   ├── generic/           # Production-mirror endpoints (15 files)
+│   │   ├── custom/            # User-defined local endpoints
+│   │   └── _template.ts       # Endpoint template
+│   └── extensions/            # Local-only augmentation layer
+│       ├── types.ts           # Extension metadata types
+│       ├── registry.ts        # Extension registry endpoint
+│       ├── register.ts        # Extension route registration
+│       └── catalog/           # Extension implementations
+├── scripts/
+│   └── gcp-setup.sh           # GCP infrastructure setup (WIF, SA, Secrets)
+├── docs/
+│   └── GCP-SETUP.md           # GCP configuration guide
+├── .github/workflows/
+│   ├── deploy.yml             # Beta deployment (main → bonkbotbeta)
+│   └── deploy-prod.yml        # Prod deployment (v* → data-backend-prod)
+├── .planning/                 # GSD project planning
+├── Dockerfile                 # Multi-stage Bun build
+├── .dockerignore              # Build exclusions
+├── env.example                # Credentials template (3 modes)
+└── README.md                  # Comprehensive documentation
+```
+
+## Capabilities
+
+### Data Sources
+
+| Source | Type | Access Pattern |
+|--------|------|----------------|
+| ClickHouse Cloud | Database | HTTP POST to Queries API with Basic Auth |
+
+**Tables accessed:**
+- `materializer_trades`, `materializer_trades_recent_1d` - Trade history
+- `materializer_token_market_data_latest` - Token metadata and pricing
+- `materializer_holder_mint_latest` - Holder statistics
+- `discovery_trending_token_stats_ts` - Trending calculations
+- Various `materializer_*` and `discovery_*` tables
+
+### APIs / Interfaces
+
+| Interface | Type | Purpose |
+|-----------|------|---------|
+| `/health` | REST GET | Health check |
+| `/local-api/trades/:mint` | REST GET | Trade history for token |
+| `/local-api/search/:mint` | REST GET | Token lookup by mint |
+| `/local-api/search` | REST GET | Text-based token search |
+| `/local-api/ohlcv/pool/:pool/:range` | REST GET | Pool candlestick data |
+| `/local-api/ohlcv/token/:mint/:range` | REST GET | Token candlestick data |
+| `/local-api/holders_stats/:mint` | REST GET | Top 100 holders |
+| `/local-api/holder_stats/:mint/:address` | REST GET | Holder stats for wallet on token |
+| `/local-api/discovery/trending` | REST GET | Trending tokens list |
+| `/local-api/discovery/whale_moves` | REST GET | Whale activity (24h) |
+| `/local-api/wallet_tracker/*` | REST GET | Wallet tracking endpoints |
+| `/local-api/wallet_funding/:address` | REST GET | Wallet funding sources |
+| `/local-api/multi-wallet-families/:mint` | REST GET | Multi-wallet family detection |
+| `/local-api/market_data/:mint` | REST GET | Token market data (single) |
+| `/local-api/market_data_batch` | REST GET | Token market data (batch) |
+| `/local-api/labs/wallet_trades_snapshot` | REST POST | Bounded wallet trades (labs) |
+| `/local-api/labs/holders_stats_batch` | REST POST | Batch holder lookup (labs) |
+| `/local-api/ext/registry` | REST GET | Extension metadata |
+| `/local-api/ext/search/:mint` | REST GET | Extended token lookup |
+
+### Extension Points
+
+- **Custom endpoints**: Copy `_template.ts` to `endpoints/custom/`, register in `server.ts`
+- **Extensions system**: Add to `extensions/catalog/`, implement `ExtensionDefinition` interface
+- **Environment flags**: `LOCAL_API_ENABLE_EXTENSIONS=true` enables extension routes
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- All endpoints live under `/local-api/*` prefix (for Vite proxy compatibility)
+- Labs endpoints (local-only) use `POST` method and `/local-api/labs/*` prefix
+- Generic endpoints mirror production API shapes exactly
+- SQL queries use parameterized limits with `clamp()` for safety
+- All responses follow `{ ok: boolean, ... }` pattern
+- Environment detection via `APP_ENV` (local/beta/prod)
+
+### Common Tasks
+
+#### Local Development
+
+```bash
+bun install          # Install dependencies
+cp env.example .env  # Create config (use TBKM credentials section)
+bun dev              # Start with watch mode (localhost:8080)
+```
+
+#### Adding a New Endpoint
+
+```bash
+cp src/endpoints/_template.ts src/endpoints/generic/my_endpoint.ts
+# Edit the file: rename function, change route, add SQL
+# Register in src/server.ts: import and call register function
+```
+
+#### Docker Build (Local Test)
+
+```bash
+docker build -t trenchbench-api .
+docker run -p 8080:8080 --env-file .env trenchbench-api
+```
+
+#### GCP Setup (First-Time)
+
+```bash
+# Preview commands
+./scripts/gcp-setup.sh bonkbotbeta --dry-run
+
+# Execute setup (requires GCP admin access)
+./scripts/gcp-setup.sh bonkbotbeta
+
+# See docs/GCP-SETUP.md for full guide
+```
+
+#### Finding Code
+
+- Endpoint handlers: `src/endpoints/generic/*.ts`
+- ClickHouse queries: SQL strings within each endpoint file
+- Extension metadata: `src/extensions/types.ts`
+- Config validation: `src/config.ts`
+- Deployment workflows: `.github/workflows/*.yml`
+- GCP setup: `scripts/gcp-setup.sh`, `docs/GCP-SETUP.md`
+
+### Things to Avoid
+
+- Committing `.env` files or fetched data
+- Removing limit caps on queries (prevent expensive ClickHouse calls)
+- Modifying generic endpoints to diverge from production API shapes
+- Using `git add .` (always stage files individually)
+
+## Related Documentation
+
+- [README.md](README.md) - Comprehensive setup, endpoint docs
+- [docs/GCP-SETUP.md](docs/GCP-SETUP.md) - GCP infrastructure configuration
+- [src/endpoints/custom/README.md](src/endpoints/custom/README.md) - Custom endpoint guide
+- [.planning/PROJECT.md](.planning/PROJECT.md) - Project goals and decisions
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| ClickHouse Cloud | Production trading data, token metadata, holder stats |
+| GCP Secret Manager | ClickHouse credentials (beta/prod) |
+| GitHub Actions | CI/CD pipeline execution |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| web-terminal-frontend | REST API endpoints via Vite proxy (local dev) |
+| Community Tracker | Token analytics, trending, whale moves |
+| TrenchBench | Custom query endpoints |
+
+### Deployment Architecture
+
+```
+GitHub (BonkBotTeam/trenchbench-api)
+    │
+    ├── push main ──► GitHub Actions ──► bonkbotbeta (Cloud Run)
+    │                     │
+    │                     ▼
+    │              Workload Identity Federation
+    │                     │
+    │                     ▼
+    │              Artifact Registry (us-central1)
+    │
+    └── push v* ───► GitHub Actions ──► data-backend-prod (Cloud Run)
+                          │
+                          ▼
+                   Secret Manager (ClickHouse creds)
+                          │
+                          ▼
+                   Cloud Run Service
+                          │
+                          ▼
+                   ClickHouse Cloud
+```
+
+### Integration Pattern
+
+- **Local dev**: Frontend proxies `/local-api/*` to `localhost:8080`
+- **Beta/Prod**: Direct Cloud Run URL access
+- **Auth**: Workload Identity Federation (no service account keys)
+- **Secrets**: Injected at runtime via Secret Manager references
+
+---
+*Repository: BonkBotTeam/trenchbench-api*
+*Verified: 2026-01-13*

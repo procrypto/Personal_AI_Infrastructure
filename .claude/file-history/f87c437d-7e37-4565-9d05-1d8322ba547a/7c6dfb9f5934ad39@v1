@@ -1,0 +1,180 @@
+# Phase 01 Plan — Turbo User Scan
+
+---
+phase: 01-turbo-user-scan
+plan: 01
+type: standard
+---
+
+<objective>
+Optimize User Mode stage 1 (user discovery) to match Group Mode's performance.
+
+**Current state:** User scan uses regex on entire buffer (~lines 373-527 in streamWorker.ts), processing all text including message bodies.
+
+**Target state:** Adapted byte-level scanner that extracts only user metadata fields (`from_id`, `from`, `actor_id`, `actor`) with minimal processing, matching group-mode's approach of skipping irrelevant content.
+
+**Success metric:** 4.6 GB export scans in under 15 seconds (matching group-mode behavior).
+</objective>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@src/streamWorker.ts
+@src/types.ts
+</context>
+
+<tasks>
+
+<task id="1" type="auto">
+<name>Profile current user scan performance</name>
+<action>
+1. Add timing instrumentation to `scanProcess` in streamWorker.ts
+2. Create a profile-notes.md in this phase directory documenting:
+   - Time spent in buffer accumulation
+   - Time spent in regex matching (fromIdPattern, actorIdPattern, fromNamePattern, actorNamePattern)
+   - Time spent in userMap operations
+   - Memory high-water marks
+3. Run against sample_export.json to establish baseline
+4. Document findings with specific bottleneck identification
+</action>
+<verification>
+- profile-notes.md exists with timing data
+- Bottleneck(s) clearly identified
+</verification>
+<done>Profile document created with actionable insights about what's slow</done>
+</task>
+
+<task id="2" type="auto">
+<name>Implement targeted field extraction scanner</name>
+<action>
+Adapt group-mode's bracket-tracking approach for user extraction:
+
+1. Create new `scanUsersProcess` function that:
+   - Tracks JSON structure depth with bracket counting (like scanGroupsProcess)
+   - When entering a message object (after `"type": "message"`), extracts ONLY:
+     - `from_id` / `actor_id` for user ID
+     - `from` / `actor` for display name
+   - Skips all other message content (text, media, etc.)
+   - Maintains string-aware parsing to handle escaped quotes
+
+2. Key optimization: Don't accumulate full message bodies in buffer - extract fields then discard
+
+3. Preserve existing userMap structure and progress reporting
+
+4. Add `FAST_USER_SCAN` feature flag (env var) defaulting to true
+</action>
+<verification>
+```bash
+# Build succeeds
+npm run build
+
+# Type check passes
+npm run typecheck
+```
+</verification>
+<done>New scanUsersProcess function implemented with bracket-tracking optimization</done>
+</task>
+
+<task id="3" type="auto">
+<name>Wire new scanner into worker message handler</name>
+<action>
+1. Update `self.onmessage` handler to use new `scanUsersProcess` when `FAST_USER_SCAN` is enabled
+2. Keep original `scanProcess` as fallback when flag is false
+3. Ensure WorkerScanResult type compatibility is maintained
+4. Update progress messages to indicate fast scan mode
+</action>
+<verification>
+```bash
+# Build and serve locally
+npm run dev
+
+# Manual verification: Load app, select User Mode, load a test export
+# Should see "scan X% | N users found" progress messages
+```
+</verification>
+<done>Worker routes to new scanner, falls back gracefully with flag</done>
+</task>
+
+<task id="4" type="auto">
+<name>Benchmark and document performance improvement</name>
+<action>
+1. Test new scanner against:
+   - Small export (sample_export.json)
+   - Large export (4.6 GB if available, or document expected behavior)
+2. Compare old vs new times in profile-notes.md
+3. Document memory usage observations
+4. Update README with performance notes if improvement is significant (>50% faster)
+</action>
+<verification>
+- profile-notes.md updated with before/after comparison
+- Performance improvement documented (target: under 15s for 4.6GB)
+</verification>
+<done>Performance validated and documented, README updated if warranted</done>
+</task>
+
+<task id="5" type="checkpoint:human-verify" gate="blocking">
+<what-built>Turbo user scanner matching group-mode performance</what-built>
+<how-to-verify>
+1. Start dev server: `npm run dev`
+2. Open app in browser
+3. Select User Mode
+4. Load a Telegram export file
+5. Observe:
+   - Progress messages show scan proceeding
+   - User list populates when complete
+   - No console errors
+6. Compare scan time to previous experience (should be noticeably faster)
+</how-to-verify>
+<resume-signal>Type "approved" if user scan works correctly, or describe any issues</resume-signal>
+</task>
+
+</tasks>
+
+<verification>
+All checks must pass:
+```bash
+npm run build      # No errors
+npm run typecheck  # No type errors
+npm run dev        # App loads and functions
+```
+</verification>
+
+<success_criteria>
+- [ ] User scan performance profiled and documented
+- [ ] New bracket-tracking scanner implemented
+- [ ] Feature flag allows fallback to original behavior
+- [ ] Performance improvement validated (target: match group-mode speeds)
+- [ ] App functions correctly in User Mode with new scanner
+- [ ] README updated with performance notes (if significant improvement)
+</success_criteria>
+
+<output>
+After completion, create `SUMMARY.md` documenting:
+- Performance comparison (before/after times)
+- Implementation approach taken
+- Any deviations from plan
+- Files created/modified
+</output>
+
+<commit_guidance>
+Each task produces one atomic commit:
+- Task 1: `chore(01-01): profile user scan performance`
+- Task 2: `feat(01-01): implement bracket-tracking user scanner`
+- Task 3: `feat(01-01): wire fast user scanner with feature flag`
+- Task 4: `docs(01-01): benchmark and document performance gains`
+- Final metadata: `docs(01-01): complete turbo user scan plan`
+</commit_guidance>
+
+---
+
+## Original Context (Preserved)
+
+### Risks & Mitigations
+- **Parser accuracy:** Byte-level parsing might miss users if Telegram changes export structure - keep fixtures/tests for representative chat blocks and fall back to the legacy parser when unexpected patterns appear.
+- **Memory spikes:** Large per-user maps may spike memory on mammoth exports - monitor during profiling and apply compaction strategies if needed.
+- **UX confusion:** Operators lose real-time message totals - clarify copy in the UI so expectations match the new behavior.
+
+### Open Questions
+- Do we need supplementary metadata (e.g., first timestamp per user) to keep the UI informative?
+- Should legacy scan remain accessible via query flag during rollout?
+- Define "works" for this phase: success is simply matching group-mode experience without regressions.

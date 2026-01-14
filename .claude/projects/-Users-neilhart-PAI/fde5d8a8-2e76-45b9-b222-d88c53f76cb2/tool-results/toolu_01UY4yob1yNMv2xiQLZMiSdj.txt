@@ -1,0 +1,1087 @@
+     1→# Hook System
+     2→
+     3→**Event-Driven Automation Infrastructure**
+     4→
+     5→**Location:** `${PAI_DIR}/Hooks/`
+     6→**Configuration:** `${PAI_DIR}/settings.json`
+     7→**Status:** Active - All hooks running in production
+     8→
+     9→---
+    10→
+    11→## Overview
+    12→
+    13→The PAI hook system is an event-driven automation infrastructure built on Claude Code's native hook support. Hooks are executable scripts (TypeScript/Python) that run automatically in response to specific events during Claude Code sessions.
+    14→
+    15→**Core Capabilities:**
+    16→- **Session Management** - Auto-load context, capture summaries, manage state
+    17→- **Voice Notifications** - Text-to-speech announcements for task completions
+    18→- **History Capture** - Automatic work/learning documentation to `${PAI_DIR}/History/`
+    19→- **Multi-Agent Support** - Agent-specific hooks with voice routing
+    20→- **Observability** - Real-time event streaming to dashboard
+    21→- **Tab Titles** - Dynamic terminal tab updates with task context
+    22→
+    23→**Key Principle:** Hooks run asynchronously and fail gracefully. They enhance the user experience but never block Claude Code's core functionality.
+    24→
+    25→---
+    26→
+    27→## Available Hook Types
+    28→
+    29→Claude Code supports the following hook events (from `${PAI_DIR}/Hooks/lib/observability.ts`):
+    30→
+    31→### 1. **SessionStart**
+    32→**When:** Claude Code session begins (new conversation)
+    33→**Use Cases:**
+    34→- Load PAI context from `skills/CORE/SKILL.md`
+    35→- Initialize session state
+    36→- Capture session metadata
+    37→
+    38→**Current Hooks:**
+    39→```typescript
+    40→{
+    41→  "SessionStart": [
+    42→    {
+    43→      "hooks": [
+    44→        {
+    45→          "type": "command",
+    46→          "command": "${PAI_DIR}/Hooks/load-core-context.ts"
+    47→        },
+    48→        {
+    49→          "type": "command",
+    50→          "command": "${PAI_DIR}/Hooks/initialize-pai-session.ts"
+    51→        },
+    52→        {
+    53→          "type": "command",
+    54→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type SessionStart"
+    55→        }
+    56→      ]
+    57→    }
+    58→  ]
+    59→}
+    60→```
+    61→
+    62→**What They Do:**
+    63→- `load-core-context.ts` - Reads `skills/CORE/SKILL.md` and injects PAI context as `<system-reminder>` at session start
+    64→- `initialize-pai-session.ts` - Sets up session state and environment
+    65→- `capture-all-events.ts` - Logs event to `${PAI_DIR}/History/raw-outputs/YYYY-MM/YYYY-MM-DD_all-events.jsonl`
+    66→
+    67→---
+    68→
+    69→### 2. **SessionEnd**
+    70→**When:** Claude Code session terminates (conversation ends)
+    71→**Use Cases:**
+    72→- Generate session summaries
+    73→- Save session metadata
+    74→- Cleanup temporary state
+    75→
+    76→**Current Hooks:**
+    77→```typescript
+    78→{
+    79→  "SessionEnd": [
+    80→    {
+    81→      "hooks": [
+    82→        {
+    83→          "type": "command",
+    84→          "command": "${PAI_DIR}/Hooks/capture-session-summary.ts"
+    85→        },
+    86→        {
+    87→          "type": "command",
+    88→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type SessionEnd"
+    89→        }
+    90→      ]
+    91→    }
+    92→  ]
+    93→}
+    94→```
+    95→
+    96→**What They Do:**
+    97→- `capture-session-summary.ts` - Analyzes session activity and creates summary document in `${PAI_DIR}/History/sessions/YYYY-MM/`
+    98→- Captures: files changed, commands executed, tools used, session focus, duration
+    99→
+   100→---
+   101→
+   102→### 3. **UserPromptSubmit**
+   103→**When:** User submits a new prompt to Claude
+   104→**Use Cases:**
+   105→- Update UI indicators
+   106→- Pre-process user input
+   107→- Capture prompts for analysis
+   108→
+   109→**Current Hooks:**
+   110→```typescript
+   111→{
+   112→  "UserPromptSubmit": [
+   113→    {
+   114→      "hooks": [
+   115→        {
+   116→          "type": "command",
+   117→          "command": "${PAI_DIR}/Hooks/update-tab-titles.ts"
+   118→        },
+   119→        {
+   120→          "type": "command",
+   121→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type UserPromptSubmit"
+   122→        }
+   123→      ]
+   124→    }
+   125→  ]
+   126→}
+   127→```
+   128→
+   129→**What They Do:**
+   130→- `update-tab-titles.ts` - Updates Kitty terminal tab title with task summary
+   131→- Launches background Haiku summarization for better tab titles
+   132→- Sets `♻️` emoji prefix to indicate processing
+   133→
+   134→---
+   135→
+   136→### 4. **Stop**
+   137→**When:** Main agent (Kai) completes a response
+   138→**Use Cases:**
+   139→- Voice notifications for task completion
+   140→- Capture work summaries and learnings
+   141→- Update terminal tab with completion status
+   142→
+   143→**Current Hooks:**
+   144→```typescript
+   145→{
+   146→  "Stop": [
+   147→    {
+   148→      "hooks": [
+   149→        {
+   150→          "type": "command",
+   151→          "command": "${PAI_DIR}/Hooks/stop-hook.ts"
+   152→        },
+   153→        {
+   154→          "type": "command",
+   155→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type Stop"
+   156→        }
+   157→      ]
+   158→    }
+   159→  ]
+   160→}
+   161→```
+   162→
+   163→**What They Do:**
+   164→- `stop-hook.ts` - THE CRITICAL HOOK for main agent completions
+   165→  - Extracts `🎯 COMPLETED:` line from response
+   166→  - Sends to voice server with PAI's voice ID (`s3TPKV1kjDlVtZbl4Ksh`)
+   167→  - Captures work summaries to `${PAI_DIR}/History/sessions/YYYY-MM/` or learnings to `${PAI_DIR}/History/learnings/YYYY-MM/`
+   168→  - Updates Kitty tab with `✅` prefix
+   169→  - Sends event to observability dashboard
+   170→
+   171→**Learning Detection:** Automatically identifies learning moments (2+ indicators: problem/issue/bug, fixed/solved, troubleshoot/debug, lesson/takeaway)
+   172→
+   173→---
+   174→
+   175→### 5. **SubagentStop**
+   176→**When:** Subagent (Task tool) completes execution
+   177→**Use Cases:**
+   178→- Agent-specific voice notifications
+   179→- Capture agent outputs
+   180→- Track multi-agent workflows
+   181→
+   182→**Current Hooks:**
+   183→```typescript
+   184→{
+   185→  "SubagentStop": [
+   186→    {
+   187→      "hooks": [
+   188→        {
+   189→          "type": "command",
+   190→          "command": "${PAI_DIR}/Hooks/subagent-stop-hook.ts"
+   191→        },
+   192→        {
+   193→          "type": "command",
+   194→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type SubagentStop"
+   195→        }
+   196→      ]
+   197→    }
+   198→  ]
+   199→}
+   200→```
+   201→
+   202→**What They Do:**
+   203→- `subagent-stop-hook.ts` - Agent-specific completion handling
+   204→  - Waits for Task tool result in transcript
+   205→  - Extracts `[AGENT:type]` tag and completion message
+   206→  - Routes to agent-specific voice (via agent's own voice notification in response)
+   207→  - Captures agent output to appropriate history category
+   208→  - Sends to observability dashboard
+   209→
+   210→**Agent-Specific Routing:**
+   211→- `[AGENT:engineer]` → Engineer voice ID
+   212→- `[AGENT:researcher]` → Researcher voice ID
+   213→- `[AGENT:pentester]` → Pentester voice ID
+   214→- etc.
+   215→
+   216→---
+   217→
+   218→### 6. **PreToolUse**
+   219→**When:** Before Claude executes any tool
+   220→**Use Cases:**
+   221→- Tool usage analytics
+   222→- Pre-execution validation
+   223→- Performance monitoring
+   224→
+   225→**Current Hooks:**
+   226→```typescript
+   227→{
+   228→  "PreToolUse": [
+   229→    {
+   230→      "matcher": "*",
+   231→      "hooks": [
+   232→        {
+   233→          "type": "command",
+   234→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type PreToolUse"
+   235→        }
+   236→      ]
+   237→    }
+   238→  ]
+   239→}
+   240→```
+   241→
+   242→**What They Do:**
+   243→- Captures tool name, input parameters, timestamp
+   244→- Logs to daily events file for analysis
+   245→
+   246→---
+   247→
+   248→### 7. **PostToolUse**
+   249→**When:** After Claude executes any tool
+   250→**Use Cases:**
+   251→- Capture tool outputs
+   252→- Error tracking
+   253→- Performance metrics
+   254→
+   255→**Current Hooks:**
+   256→```typescript
+   257→{
+   258→  "PostToolUse": [
+   259→    {
+   260→      "matcher": "*",
+   261→      "hooks": [
+   262→        {
+   263→          "type": "command",
+   264→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type PostToolUse"
+   265→        }
+   266→      ]
+   267→    }
+   268→  ]
+   269→}
+   270→```
+   271→
+   272→**What They Do:**
+   273→- Captures tool output, execution time, success/failure
+   274→- Logs to `${PAI_DIR}/History/raw-outputs/YYYY-MM/YYYY-MM-DD_all-events.jsonl`
+   275→- Powers observability dashboard
+   276→
+   277→---
+   278→
+   279→### 8. **PreCompact**
+   280→**When:** Before Claude compacts context (long conversations)
+   281→**Use Cases:**
+   282→- Preserve important context
+   283→- Log compaction events
+   284→- Pre-compaction cleanup
+   285→
+   286→**Current Hooks:**
+   287→```typescript
+   288→{
+   289→  "PreCompact": [
+   290→    {
+   291→      "matcher": "",
+   292→      "hooks": [
+   293→        {
+   294→          "type": "command",
+   295→          "command": "${PAI_DIR}/Hooks/context-compression-hook.ts"
+   296→        },
+   297→        {
+   298→          "type": "command",
+   299→          "command": "${PAI_DIR}/Hooks/capture-all-events.ts --event-type PreCompact"
+   300→        }
+   301→      ]
+   302→    }
+   303→  ]
+   304→}
+   305→```
+   306→
+   307→**What They Do:**
+   308→- `context-compression-hook.ts` - Handles context preservation before compaction
+   309→- Captures metadata about compaction events
+   310→
+   311→---
+   312→
+   313→## Configuration
+   314→
+   315→### Location
+   316→**File:** `${PAI_DIR}/settings.json`
+   317→**Section:** `"hooks": { ... }`
+   318→
+   319→### Environment Variables
+   320→Hooks have access to all environment variables from `${PAI_DIR}/settings.json` `"env"` section:
+   321→
+   322→```json
+   323→{
+   324→  "env": {
+   325→    "PAI_DIR": "/Users/daniel/.claude",
+   326→    "DA": "Kai",
+   327→    "MCP_API_KEY": "...",
+   328→    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
+   329→  }
+   330→}
+   331→```
+   332→
+   333→**Key Variables:**
+   334→- `PAI_DIR` - PAI installation directory (always `/Users/daniel/.claude`)
+   335→- `DA` - Digital Assistant name ("Kai")
+   336→- Hook scripts reference `${PAI_DIR}` in command paths
+   337→
+   338→### Hook Configuration Structure
+   339→
+   340→```json
+   341→{
+   342→  "hooks": {
+   343→    "HookEventName": [
+   344→      {
+   345→        "matcher": "pattern",  // Optional: filter which tools/events trigger hook
+   346→        "hooks": [
+   347→          {
+   348→            "type": "command",
+   349→            "command": "${PAI_DIR}/Hooks/my-hook.ts --arg value"
+   350→          }
+   351→        ]
+   352→      }
+   353→    ]
+   354→  }
+   355→}
+   356→```
+   357→
+   358→**Fields:**
+   359→- `HookEventName` - One of: SessionStart, SessionEnd, UserPromptSubmit, Stop, SubagentStop, PreToolUse, PostToolUse, PreCompact
+   360→- `matcher` - Pattern to match (use `"*"` for all tools, or specific tool names)
+   361→- `type` - Always `"command"` (executes external script)
+   362→- `command` - Path to executable hook script (TypeScript/Python/Bash)
+   363→
+   364→### Hook Input (stdin)
+   365→All hooks receive JSON data on stdin:
+   366→
+   367→```typescript
+   368→{
+   369→  session_id: string;         // Unique session identifier
+   370→  transcript_path: string;    // Path to JSONL transcript
+   371→  hook_event_name: string;    // Event that triggered hook
+   372→  prompt?: string;            // User prompt (UserPromptSubmit only)
+   373→  tool_name?: string;         // Tool name (PreToolUse/PostToolUse)
+   374→  tool_input?: any;           // Tool parameters (PreToolUse)
+   375→  tool_output?: any;          // Tool result (PostToolUse)
+   376→  // ... event-specific fields
+   377→}
+   378→```
+   379→
+   380→---
+   381→
+   382→## Common Patterns
+   383→
+   384→### 1. Voice Notifications
+   385→
+   386→**Pattern:** Extract completion message → Send to voice server
+   387→
+   388→```typescript
+   389→// stop-hook.ts pattern
+   390→const completionMessage = extractKaiCompletion(lastMessage);
+   391→
+   392→const payload = {
+   393→  title: 'PAI',
+   394→  message: completionMessage,
+   395→  voice_enabled: true,
+   396→  voice_id: 's3TPKV1kjDlVtZbl4Ksh'  // PAI's ElevenLabs voice
+   397→};
+   398→
+   399→await fetch('http://localhost:8888/notify', {
+   400→  method: 'POST',
+   401→  headers: { 'Content-Type': 'application/json' },
+   402→  body: JSON.stringify(payload)
+   403→});
+   404→```
+   405→
+   406→**Agent-Specific Voices:**
+   407→- Main agent (PAI): `s3TPKV1kjDlVtZbl4Ksh`
+   408→- Engineer: `fATgBRI8wg5KkDFg8vBd`
+   409→- Researcher: `AXdMgz6evoL7OPd7eU12`
+   410→- Pentester: `xvHLFjaUEpx4BOf7EiDd`
+   411→- Intern: `d3MFdIuCfbAIwiu7jC4a`
+   412→
+   413→See `skills/CORE/SKILL.md` for complete voice ID mapping.
+   414→
+   415→---
+   416→
+   417→### 2. History Capture (UOCS Pattern)
+   418→
+   419→**Pattern:** Parse structured response → Save to appropriate history directory
+   420→
+   421→**File Naming Convention:**
+   422→```
+   423→YYYY-MM-DD-HHMMSS_TYPE_description.md
+   424→```
+   425→
+   426→**Types:**
+   427→- `WORK` - General task completions
+   428→- `LEARNING` - Problem-solving learnings
+   429→- `SESSION` - Session summaries
+   430→- `RESEARCH` - Research findings (from agents)
+   431→- `FEATURE` - Feature implementations (from agents)
+   432→- `DECISION` - Architectural decisions (from agents)
+   433→
+   434→**Example from stop-hook.ts:**
+   435→```typescript
+   436→const structured = extractStructuredSections(lastMessage);
+   437→const isLearning = isLearningCapture(text, structured);
+   438→const captureType = isLearning ? 'LEARNING' : 'WORK';
+   439→
+   440→const targetDir = isLearning
+   441→  ? join(baseDir, 'history', 'learnings', yearMonth)
+   442→  : join(baseDir, 'history', 'sessions', yearMonth);
+   443→
+   444→const filename = generateFilename(description, captureType);
+   445→writeFileSync(join(targetDir, filename), content);
+   446→```
+   447→
+   448→**Structured Sections Parsed:**
+   449→- `📋 SUMMARY:` - Brief overview
+   450→- `🔍 ANALYSIS:` - Key findings
+   451→- `⚡ ACTIONS:` - Steps taken
+   452→- `✅ RESULTS:` - Outcomes
+   453→- `📊 STATUS:` - Current state
+   454→- `➡️ NEXT:` - Follow-up actions
+   455→- `🎯 COMPLETED:` - **Voice notification line**
+   456→
+   457→---
+   458→
+   459→### 3. Agent Type Detection
+   460→
+   461→**Pattern:** Identify which agent is executing → Route appropriately
+   462→
+   463→```typescript
+   464→// From capture-all-events.ts
+   465→let agentName = getAgentForSession(sessionId);
+   466→
+   467→// Detect from Task tool
+   468→if (hookData.tool_name === 'Task' && hookData.tool_input?.subagent_type) {
+   469→  agentName = hookData.tool_input.subagent_type;
+   470→  setAgentForSession(sessionId, agentName);
+   471→}
+   472→
+   473→// Detect from CLAUDE_CODE_AGENT env variable
+   474→else if (process.env.CLAUDE_CODE_AGENT) {
+   475→  agentName = process.env.CLAUDE_CODE_AGENT;
+   476→}
+   477→
+   478→// Detect from path (subagents run in /Agents/name/)
+   479→else if (hookData.cwd && hookData.cwd.includes('/Agents/')) {
+   480→  const agentMatch = hookData.cwd.match(/\/agents\/([^\/]+)/);
+   481→  if (agentMatch) agentName = agentMatch[1];
+   482→}
+   483→```
+   484→
+   485→**Session Mapping:** `${PAI_DIR}/agent-sessions.json`
+   486→```json
+   487→{
+   488→  "session-id-abc123": "engineer",
+   489→  "session-id-def456": "researcher"
+   490→}
+   491→```
+   492→
+   493→---
+   494→
+   495→### 4. Observability Integration
+   496→
+   497→**Pattern:** Send event to dashboard → Fail silently if offline
+   498→
+   499→```typescript
+   500→import { sendEventToObservability, getCurrentTimestamp, getSourceApp } from './lib/observability';
+   501→
+   502→await sendEventToObservability({
+   503→  source_app: getSourceApp(),           // 'PAI' or agent name
+   504→  session_id: hookInput.session_id,
+   505→  hook_event_type: 'Stop',
+   506→  timestamp: getCurrentTimestamp(),
+   507→  transcript_path: hookInput.transcript_path,
+   508→  summary: completionMessage,
+   509→  // ... additional fields
+   510→}).catch(() => {
+   511→  // Silently fail - dashboard may not be running
+   512→});
+   513→```
+   514→
+   515→**Dashboard URLs:**
+   516→- Server: `http://localhost:4000`
+   517→- Client: `http://localhost:5173`
+   518→
+   519→---
+   520→
+   521→### 5. Async Non-Blocking Execution
+   522→
+   523→**Pattern:** Hook executes quickly → Launch background processes for slow operations
+   524→
+   525→```typescript
+   526→// update-tab-titles.ts pattern
+   527→// Set immediate tab title (fast)
+   528→execSync(`printf '\\033]0;${titleWithEmoji}\\007' >&2`);
+   529→
+   530→// Launch background process for Haiku summary (slow)
+   531→Bun.spawn(['bun', `${paiDir}/Hooks/update-tab-title.ts`, prompt], {
+   532→  stdout: 'ignore',
+   533→  stderr: 'ignore',
+   534→  stdin: 'ignore'
+   535→});
+   536→
+   537→process.exit(0);  // Exit immediately
+   538→```
+   539→
+   540→**Key Principle:** Hooks must never block Claude Code. Always exit quickly, use background processes for slow work.
+   541→
+   542→---
+   543→
+   544→### 6. Graceful Failure
+   545→
+   546→**Pattern:** Wrap everything in try/catch → Log errors → Exit successfully
+   547→
+   548→```typescript
+   549→async function main() {
+   550→  try {
+   551→    // Hook logic here
+   552→  } catch (error) {
+   553→    // Log but don't fail
+   554→    console.error('Hook error:', error);
+   555→  }
+   556→
+   557→  process.exit(0);  // Always exit 0
+   558→}
+   559→```
+   560→
+   561→**Why:** If hooks crash, Claude Code may freeze. Always exit cleanly.
+   562→
+   563→---
+   564→
+   565→## Creating Custom Hooks
+   566→
+   567→### Step 1: Choose Hook Event
+   568→Decide which event should trigger your hook (SessionStart, Stop, PostToolUse, etc.)
+   569→
+   570→### Step 2: Create Hook Script
+   571→**Location:** `${PAI_DIR}/Hooks/my-custom-hook.ts`
+   572→
+   573→**Template:**
+   574→```typescript
+   575→#!/usr/bin/env bun
+   576→
+   577→interface HookInput {
+   578→  session_id: string;
+   579→  transcript_path: string;
+   580→  hook_event_name: string;
+   581→  // ... event-specific fields
+   582→}
+   583→
+   584→async function main() {
+   585→  try {
+   586→    // Read stdin
+   587→    const input = await Bun.stdin.text();
+   588→    const data: HookInput = JSON.parse(input);
+   589→
+   590→    // Your hook logic here
+   591→    console.log(`Hook triggered: ${data.hook_event_name}`);
+   592→
+   593→    // Example: Read transcript
+   594→    const fs = require('fs');
+   595→    const transcript = fs.readFileSync(data.transcript_path, 'utf-8');
+   596→
+   597→    // Do something with the data
+   598→
+   599→  } catch (error) {
+   600→    // Log but don't fail
+   601→    console.error('Hook error:', error);
+   602→  }
+   603→
+   604→  process.exit(0);  // Always exit 0
+   605→}
+   606→
+   607→main();
+   608→```
+   609→
+   610→### Step 3: Make Executable
+   611→```bash
+   612→chmod +x ${PAI_DIR}/Hooks/my-custom-hook.ts
+   613→```
+   614→
+   615→### Step 4: Add to settings.json
+   616→```json
+   617→{
+   618→  "hooks": {
+   619→    "Stop": [
+   620→      {
+   621→        "hooks": [
+   622→          {
+   623→            "type": "command",
+   624→            "command": "${PAI_DIR}/Hooks/my-custom-hook.ts"
+   625→          }
+   626→        ]
+   627→      }
+   628→    ]
+   629→  }
+   630→}
+   631→```
+   632→
+   633→### Step 5: Test
+   634→```bash
+   635→# Test hook directly
+   636→echo '{"session_id":"test","transcript_path":"/tmp/test.jsonl","hook_event_name":"Stop"}' | bun ${PAI_DIR}/Hooks/my-custom-hook.ts
+   637→```
+   638→
+   639→### Step 6: Restart Claude Code
+   640→Hooks are loaded at startup. Restart to apply changes.
+   641→
+   642→---
+   643→
+   644→## Hook Development Best Practices
+   645→
+   646→### 1. **Fast Execution**
+   647→- Hooks should complete in < 500ms
+   648→- Use background processes for slow work (Haiku API calls, file processing)
+   649→- Exit immediately after launching background work
+   650→
+   651→### 2. **Graceful Failure**
+   652→- Always wrap in try/catch
+   653→- Log errors to stderr (available in hook debug logs)
+   654→- Always `process.exit(0)` - never throw or exit(1)
+   655→
+   656→### 3. **Non-Blocking**
+   657→- Never wait for external services (unless they respond quickly)
+   658→- Use `.catch(() => {})` for async operations
+   659→- Fail silently if optional services are offline
+   660→
+   661→### 4. **Stdin Reading**
+   662→- Use timeout when reading stdin (Claude Code may not send data immediately)
+   663→- Handle empty/invalid input gracefully
+   664→
+   665→```typescript
+   666→const decoder = new TextDecoder();
+   667→const reader = Bun.stdin.stream().getReader();
+   668→
+   669→const timeoutPromise = new Promise<void>((resolve) => {
+   670→  setTimeout(() => resolve(), 500);  // 500ms timeout
+   671→});
+   672→
+   673→await Promise.race([readPromise, timeoutPromise]);
+   674→```
+   675→
+   676→### 5. **File I/O**
+   677→- Check `existsSync()` before reading files
+   678→- Create directories with `{ recursive: true }`
+   679→- Use PST timestamps for consistency
+   680→
+   681→### 6. **Environment Access**
+   682→- All `settings.json` env vars available via `process.env`
+   683→- Use `${PAI_DIR}` in settings.json for portability
+   684→- Access in code via `process.env.PAI_DIR`
+   685→
+   686→### 7. **Observability**
+   687→- Send events to dashboard for visibility
+   688→- Include all relevant metadata (session_id, tool_name, etc.)
+   689→- Use `.catch(() => {})` - dashboard may be offline
+   690→
+   691→---
+   692→
+   693→## Troubleshooting
+   694→
+   695→### Hook Not Running
+   696→
+   697→**Check:**
+   698→1. Is hook script executable? `chmod +x ${PAI_DIR}/Hooks/my-hook.ts`
+   699→2. Is path correct in settings.json? Use `${PAI_DIR}/Hooks/...`
+   700→3. Is settings.json valid JSON? `jq . ${PAI_DIR}/settings.json`
+   701→4. Did you restart Claude Code after editing settings.json?
+   702→
+   703→**Debug:**
+   704→```bash
+   705→# Test hook directly
+   706→echo '{"session_id":"test","transcript_path":"/tmp/test.jsonl","hook_event_name":"Stop"}' | bun ${PAI_DIR}/Hooks/my-hook.ts
+   707→
+   708→# Check hook logs (stderr output)
+   709→tail -f ${PAI_DIR}/Hooks/debug.log  # If you add logging
+   710→```
+   711→
+   712→---
+   713→
+   714→### Hook Hangs/Freezes Claude Code
+   715→
+   716→**Cause:** Hook not exiting (infinite loop, waiting for input, blocking operation)
+   717→
+   718→**Fix:**
+   719→1. Add timeouts to all blocking operations
+   720→2. Ensure `process.exit(0)` is always reached
+   721→3. Use background processes for long operations
+   722→4. Check stdin reading has timeout
+   723→
+   724→**Prevention:**
+   725→```typescript
+   726→// Always use timeout
+   727→setTimeout(() => {
+   728→  console.error('Hook timeout - exiting');
+   729→  process.exit(0);
+   730→}, 5000);  // 5 second max
+   731→```
+   732→
+   733→---
+   734→
+   735→### Voice Notifications Not Working
+   736→
+   737→**Check:**
+   738→1. Is voice server running? `curl http://localhost:8888/health`
+   739→2. Is voice_id correct? See `skills/CORE/SKILL.md` for mappings
+   740→3. Is message format correct? `{"message":"...", "voice_id":"...", "title":"..."}`
+   741→4. Is ElevenLabs API key in `${PAI_DIR}/.env`?
+   742→
+   743→**Debug:**
+   744→```bash
+   745→# Test voice server directly
+   746→curl -X POST http://localhost:8888/notify \
+   747→  -H "Content-Type: application/json" \
+   748→  -d '{"message":"Test message","voice_id":"s3TPKV1kjDlVtZbl4Ksh","title":"Test"}'
+   749→```
+   750→
+   751→**Common Issues:**
+   752→- Wrong voice_id → Silent failure (invalid ID)
+   753→- Voice server offline → Hook continues (graceful failure)
+   754→- No `🎯 COMPLETED:` line → No voice notification extracted
+   755→
+   756→---
+   757→
+   758→### History Not Capturing
+   759→
+   760→**Check:**
+   761→1. Does `${PAI_DIR}/History/` directory exist?
+   762→2. Are structured sections present in response? (`📋 SUMMARY:`, `🎯 COMPLETED:`, etc.)
+   763→3. Is hook actually running? Check `${PAI_DIR}/History/raw-outputs/` for events
+   764→4. File permissions? `ls -la ${PAI_DIR}/History/sessions/`
+   765→
+   766→**Debug:**
+   767→```bash
+   768→# Check recent captures
+   769→ls -lt ${PAI_DIR}/History/sessions/$(date +%Y-%m)/ | head -10
+   770→ls -lt ${PAI_DIR}/History/learnings/$(date +%Y-%m)/ | head -10
+   771→
+   772→# Check raw events
+   773→tail ${PAI_DIR}/History/raw-outputs/$(date +%Y-%m)/$(date +%Y-%m-%d)_all-events.jsonl
+   774→```
+   775→
+   776→**Common Issues:**
+   777→- Missing structured format → No parsing
+   778→- No `🎯 COMPLETED:` line → Capture may fail
+   779→- Learning detection too strict → Adjust `isLearningCapture()` logic
+   780→
+   781→---
+   782→
+   783→### Stop Event Not Firing (CRITICAL KNOWN ISSUE)
+   784→
+   785→**Symptom:** Stop hook configured and working, but Stop events not firing consistently
+   786→
+   787→**Evidence:**
+   788→```bash
+   789→# Check if Stop events fired today
+   790→grep '"event_type":"Stop"' ${PAI_DIR}/History/raw-outputs/$(date +%Y-%m)/$(date +%Y-%m-%d)_all-events.jsonl
+   791→# Result: 0 matches (no Stop events)
+   792→
+   793→# But other hooks ARE working
+   794→grep '"event_type":"PostToolUse"' ${PAI_DIR}/History/raw-outputs/$(date +%Y-%m)/$(date +%Y-%m-%d)_all-events.jsonl
+   795→# Result: 80+ matches (PostToolUse working fine)
+   796→```
+   797→
+   798→**Impact:**
+   799→- Automatic work summaries NOT captured to history (despite Stop hook logic being correct)
+   800→- Learning moments NOT auto-detected
+   801→- Voice notifications from main agent responses NOT sent
+   802→- Manual verification and capture REQUIRED
+   803→
+   804→**Root Cause:**
+   805→- Claude Code event trigger issue (external to hook system)
+   806→- Stop event not being emitted when main agent completes responses
+   807→- Hook configuration is correct, hook script works, event just never fires
+   808→- Other event types (PostToolUse, SessionEnd, UserPromptSubmit) work fine
+   809→
+   810→**Workaround (MANDATORY):**
+   811→
+   812→1. **Added CAPTURE field to response format** (see `${PAI_DIR}/Skills/CORE/SKILL.md`)
+   813→   - MANDATORY field in every response
+   814→   - Forces verification before completing responses
+   815→   - Must document: "Auto-captured" / "Manually saved" / "N/A"
+   816→
+   817→2. **Added MANDATORY VERIFICATION GATE** to file organization section
+   818→   - Before completing valuable work, MUST run verification commands
+   819→   - Check if auto-capture happened (ls -lt history directories)
+   820→   - If not, manually save to appropriate history location
+   821→
+   822→3. **Verification Commands:**
+   823→   ```bash
+   824→   # Check if auto-captured (should happen, but often doesn't due to Stop event bug)
+   825→   ls -lt ${PAI_DIR}/History/sessions/$(date +%Y-%m)/ | head -5
+   826→   ls -lt ${PAI_DIR}/History/learnings/$(date +%Y-%m)/ | head -5
+   827→
+   828→   # If 0 results or doesn't match current work → Manual capture required
+   829→   ```
+   830→
+   831→**Status:** UNRESOLVED (Claude Code issue, not hook configuration)
+   832→**Mitigation:** Structural enforcement via response format (cannot complete valuable work without verification)
+   833→**Tracking:** Documented in `${PAI_DIR}/Skills/CORE/SKILL.md` (History Capture System section)
+   834→
+   835→**Long-term Fix:**
+   836→- Report to Anthropic (Claude Code team) as Stop event reliability issue
+   837→- Monitor future Claude Code updates for fix
+   838→- Keep workaround in place until Stop events fire reliably
+   839→
+   840→---
+   841→
+   842→### Agent Detection Failing
+   843→
+   844→**Check:**
+   845→1. Is `${PAI_DIR}/agent-sessions.json` writable?
+   846→2. Is `[AGENT:type]` tag in `🎯 COMPLETED:` line?
+   847→3. Is agent running from correct directory? (`/Agents/name/`)
+   848→
+   849→**Debug:**
+   850→```bash
+   851→# Check session mappings
+   852→cat ${PAI_DIR}/agent-sessions.json | jq .
+   853→
+   854→# Check subagent-stop debug log
+   855→tail -f ${PAI_DIR}/Hooks/subagent-stop-debug.log
+   856→```
+   857→
+   858→**Fix:**
+   859→- Ensure agents include `[AGENT:type]` in completion line
+   860→- Verify Task tool passes `subagent_type` parameter
+   861→- Check cwd includes `/Agents/` in path
+   862→
+   863→---
+   864→
+   865→### Observability Dashboard Not Receiving Events
+   866→
+   867→**Check:**
+   868→1. Is dashboard server running? `curl http://localhost:4000/health`
+   869→2. Are hooks sending events? Check `sendEventToObservability()` calls
+   870→3. Network issues? `netstat -an | grep 4000`
+   871→
+   872→**Debug:**
+   873→```bash
+   874→# Start dashboard server
+   875→cd ${PAI_DIR}/Skills/system/observability/dashboard/apps/server
+   876→bun run dev
+   877→
+   878→# Check server logs
+   879→# Events should appear in real-time
+   880→```
+   881→
+   882→**Note:** Hooks fail silently if dashboard offline (by design). Not critical for operation.
+   883→
+   884→---
+   885→
+   886→### Context Loading Issues (SessionStart)
+   887→
+   888→**Check:**
+   889→1. Does `${PAI_DIR}/Skills/CORE/SKILL.md` exist?
+   890→2. Is `load-core-context.ts` executable?
+   891→3. Is `PAI_DIR` env variable set correctly?
+   892→
+   893→**Debug:**
+   894→```bash
+   895→# Test context loading directly
+   896→bun ${PAI_DIR}/Hooks/load-core-context.ts
+   897→
+   898→# Should output <system-reminder> with SKILL.md content
+   899→```
+   900→
+   901→**Common Issues:**
+   902→- Subagent sessions loading main context → Fixed (subagent detection in hook)
+   903→- File not found → Check `PAI_DIR` environment variable
+   904→- Permission denied → `chmod +x ${PAI_DIR}/Hooks/load-core-context.ts`
+   905→
+   906→---
+   907→
+   908→## Advanced Topics
+   909→
+   910→### Multi-Hook Execution Order
+   911→
+   912→Hooks in same event execute **sequentially** in order defined in settings.json:
+   913→
+   914→```json
+   915→{
+   916→  "Stop": [
+   917→    {
+   918→      "hooks": [
+   919→        { "command": "${PAI_DIR}/Hooks/stop-hook.ts" },      // Runs first
+   920→        { "command": "${PAI_DIR}/Hooks/capture-all-events.ts" }  // Runs second
+   921→      ]
+   922→    }
+   923→  ]
+   924→}
+   925→```
+   926→
+   927→**Note:** If first hook hangs, second won't run. Keep hooks fast!
+   928→
+   929→---
+   930→
+   931→### Matcher Patterns
+   932→
+   933→`"matcher"` field filters which events trigger hook:
+   934→
+   935→```json
+   936→{
+   937→  "PostToolUse": [
+   938→    {
+   939→      "matcher": "Bash",  // Only Bash tool executions
+   940→      "hooks": [...]
+   941→    },
+   942→    {
+   943→      "matcher": "*",     // All tool executions
+   944→      "hooks": [...]
+   945→    }
+   946→  ]
+   947→}
+   948→```
+   949→
+   950→**Patterns:**
+   951→- `"*"` - All events
+   952→- `"Bash"` - Specific tool name
+   953→- `""` - Empty (all events, same as `*`)
+   954→
+   955→---
+   956→
+   957→### Hook Data Payloads by Event Type
+   958→
+   959→**SessionStart:**
+   960→```typescript
+   961→{
+   962→  session_id: string;
+   963→  transcript_path: string;
+   964→  hook_event_name: "SessionStart";
+   965→  cwd: string;
+   966→}
+   967→```
+   968→
+   969→**UserPromptSubmit:**
+   970→```typescript
+   971→{
+   972→  session_id: string;
+   973→  transcript_path: string;
+   974→  hook_event_name: "UserPromptSubmit";
+   975→  prompt: string;  // The user's prompt text
+   976→}
+   977→```
+   978→
+   979→**PreToolUse:**
+   980→```typescript
+   981→{
+   982→  session_id: string;
+   983→  transcript_path: string;
+   984→  hook_event_name: "PreToolUse";
+   985→  tool_name: string;
+   986→  tool_input: any;  // Tool parameters
+   987→}
+   988→```
+   989→
+   990→**PostToolUse:**
+   991→```typescript
+   992→{
+   993→  session_id: string;
+   994→  transcript_path: string;
+   995→  hook_event_name: "PostToolUse";
+   996→  tool_name: string;
+   997→  tool_input: any;
+   998→  tool_output: any;  // Tool result
+   999→  error?: string;    // If tool failed
+  1000→}
+  1001→```
+  1002→
+  1003→**Stop:**
+  1004→```typescript
+  1005→{
+  1006→  session_id: string;
+  1007→  transcript_path: string;
+  1008→  hook_event_name: "Stop";
+  1009→}
+  1010→```
+  1011→
+  1012→**SubagentStop:**
+  1013→```typescript
+  1014→{
+  1015→  session_id: string;
+  1016→  transcript_path: string;
+  1017→  hook_event_name: "SubagentStop";
+  1018→}
+  1019→```
+  1020→
+  1021→**SessionEnd:**
+  1022→```typescript
+  1023→{
+  1024→  conversation_id: string;  // Note: different field name
+  1025→  timestamp: string;
+  1026→}
+  1027→```
+  1028→
+  1029→---
+  1030→
+  1031→## Related Documentation
+  1032→
+  1033→- **Voice System:** `${PAI_DIR}/voice-server/USAGE.md`
+  1034→- **Agent Architecture:** `${PAI_DIR}/Skills/CORE/agent-protocols.md`
+  1035→- **History/UOCS:** `${PAI_DIR}/Skills/CORE/history-system.md`
+  1036→- **Observability Dashboard:** `${PAI_DIR}/Skills/Observability/`
+  1037→
+  1038→---
+  1039→
+  1040→## Quick Reference Card
+  1041→
+  1042→```
+  1043→HOOK LIFECYCLE:
+  1044→1. Event occurs (SessionStart, Stop, etc.)
+  1045→2. Claude Code writes hook data to stdin
+  1046→3. Hook script executes
+  1047→4. Hook reads stdin (with timeout)
+  1048→5. Hook performs actions (voice, capture, etc.)
+  1049→6. Hook exits 0 (always succeeds)
+  1050→7. Claude Code continues
+  1051→
+  1052→KEY FILES:
+  1053→${PAI_DIR}/settings.json           Hook configuration
+  1054→${PAI_DIR}/Hooks/                  Hook scripts
+  1055→${PAI_DIR}/Hooks/lib/observability.ts   Helper library
+  1056→${PAI_DIR}/History/raw-outputs/    Event logs (JSONL)
+  1057→${PAI_DIR}/History/sessions/       Work summaries
+  1058→${PAI_DIR}/History/learnings/      Learning captures
+  1059→${PAI_DIR}/agent-sessions.json     Session→Agent mapping
+  1060→
+  1061→CRITICAL HOOKS:
+  1062→stop-hook.ts          Voice + history capture (main agent)
+  1063→subagent-stop-hook.ts Voice + history capture (subagents)
+  1064→load-core-context.ts  PAI context loading
+  1065→capture-all-events.ts Universal event logger
+  1066→
+  1067→VOICE SERVER:
+  1068→URL: http://localhost:8888/notify
+  1069→Payload: {"message":"...", "voice_id":"...", "title":"..."}
+  1070→Main Voice: s3TPKV1kjDlVtZbl4Ksh (PAI)
+  1071→
+  1072→OBSERVABILITY:
+  1073→Server: http://localhost:4000
+  1074→Client: http://localhost:5173
+  1075→Events: All hooks send to /events endpoint
+  1076→```
+  1077→
+  1078→---
+  1079→
+  1080→**Last Updated:** 2025-11-01
+  1081→**Status:** Production - All hooks active and tested
+  1082→**Maintainer:** Daniel Miessler (maintainer@example.com)
+  1083→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,283 @@
+# Backend-Frontend Integration Status
+
+**Last Updated:** 2026-01-09
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        MAIN WEB-TERMINAL                            │
+│                      (localhost:8787 API)                           │
+│  - Discovery/Trending tokens                                        │
+│  - Whale moves                                                      │
+│  - Market data (fallback)                                           │
+│  - OHLCV data                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                │ HTTP API calls (polling)
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                   TOKEN-ANALYSIS-AUTOPILOT                          │
+│                     (This Repository)                               │
+│                                                                     │
+│  CLI: tsx src/cli.ts run --new-engine                               │
+│  WebSocket Server: ws://localhost:8765                              │
+│                                                                     │
+│  Responsibilities:                                                  │
+│  - Signal processing (rules engine)                                 │
+│  - Paper trading simulation                                         │
+│  - Position tracking                                                │
+│  - Strategy management                                              │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                │ WebSocket (bidirectional)
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    WEB-TERMINAL-FRONTEND                            │
+│               (feat-token-analysis-autopilot branch)                │
+│                                                                     │
+│  Connects to: ws://localhost:8765                                   │
+│                                                                     │
+│  Responsibilities:                                                  │
+│  - UI rendering                                                     │
+│  - User interactions                                                │
+│  - NATS subscription (real-time market data)                        │
+│  - Data feed forwarding to backend                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Data Flows
+
+### 1. Backend → Frontend (Events)
+
+Events broadcast from backend to all connected frontend clients.
+
+| Event Type | Payload | When Sent | Status |
+|------------|---------|-----------|--------|
+| `position_update` | `{ positions: PositionData[] }` | Every scan tick (30s), on position change | ✅ Sending |
+| `signal` | `{ signal: SignalData }` | When rule triggers buy/sell/alert | ✅ Sending |
+| `market_status` | `{ status: MarketStatusData }` | Every scan tick | ✅ Confirmed |
+| `stats_update` | `{ stats: StatsData }` | Every scan tick | ✅ Confirmed |
+| `scan_tick` | `{ tick: ScanTickData }` | Every scan tick | ✅ Sending |
+| `token_list` | `{ tokens: TokenListData }` | Every scan tick | ✅ Sending |
+| `config` | `{ config: ConfigData }` | On connect, on config change | ✅ Sending |
+| `strategies` | `{ strategies: StrategiesData }` | On connect, on strategy toggle | ✅ Sending |
+| `last_analysis` | `{ analysis: LastAnalysisData }` | After analysis completes | ✅ Sending |
+
+### 2. Frontend → Backend (Commands)
+
+Commands sent from frontend to control backend behavior.
+
+| Command | Payload | Purpose | Status |
+|---------|---------|---------|--------|
+| `toggle_sources` | `{ enabled: boolean }` | Enable/disable auto-sources | ⬜ Untested |
+| `toggle_trending` | `{ enabled: boolean }` | Enable/disable trending source | ⬜ Untested |
+| `toggle_whales` | `{ enabled: boolean }` | Enable/disable whales source | ⬜ Untested |
+| `toggle_filter` | `{ enabled: boolean }` | Enable/disable market filter | ⬜ Untested |
+| `set_mode` | `{ mode: 'paper' \| 'live' }` | Switch trading mode | ⬜ Untested |
+| `set_position_size` | `{ sizeSol: number }` | Set position size | ⬜ Untested |
+| `refresh_sources` | `{}` | Force refresh token sources | ⬜ Untested |
+| `get_config` | `{}` | Request current config | ⬜ Untested |
+| `get_strategies` | `{}` | Request strategies list | ⬜ Untested |
+| `toggle_strategy` | `{ strategyId: string, enabled: boolean }` | Enable/disable strategy | ⬜ Untested |
+| `close_position` | `{ mint: string }` | Close specific position | ⬜ Untested |
+| `close_all_positions` | `{}` | Close all open positions | ⬜ Untested |
+
+### 3. Frontend → Backend (Data Feeds)
+
+Real-time market data forwarded from frontend's NATS subscription to backend for signal processing.
+
+| Feed Type | Payload | Purpose | Status |
+|-----------|---------|---------|--------|
+| `market_data_feed` | `{ data: TokenMarketData }` | Token price/volume updates | ❓ Unknown |
+| `ohlcv_update` | `{ mint: string, ohlcv: OHLCV[] }` | Candlestick updates | ❓ Unknown |
+| `trade_feed` | `{ trade: Trade }` | Individual trade events | ❓ Unknown |
+| `cvd_update` | `{ data: CVDData }` | Cumulative volume delta | ❓ Unknown |
+
+**CRITICAL:** These data feeds are what power the `--new-engine` signal pipeline. Without them, the new engine has no data to process.
+
+### 4. Backend → Main API (HTTP Polling)
+
+Backend polls main web-terminal API for token discovery.
+
+| Endpoint | Purpose | Frequency | Status |
+|----------|---------|-----------|--------|
+| `/local-api/discovery/trending` | Get trending tokens | Every 15 min | ✅ Working |
+| `/local-api/discovery/whale_moves` | Get whale activity | Every 15 min | ✅ Working |
+| `/local-api/market_data/{mint}` | Get token market data | On demand | ✅ Working |
+| `/local-api/market_data_batch` | Batch market data | On demand | ✅ Working |
+| `/local-api/ohlcv/token/{mint}/{res}` | Get OHLCV candles | On demand | ✅ Working |
+
+---
+
+## Data Type Definitions
+
+### TokenMarketData (market_data_feed payload)
+
+```typescript
+interface TokenMarketData {
+  mint: string;
+  symbol: string;
+  name: string;
+  price_sol: number;
+  price_usd: number;
+  market_cap_sol: number;
+  market_cap_usd: number;
+  holders: string;
+
+  // Volume by timeframe
+  buy_volume_sol_5m: number;
+  sell_volume_sol_5m: number;
+  buy_volume_sol_1h: number;
+  sell_volume_sol_1h: number;
+  buy_volume_sol_6h: number;
+  sell_volume_sol_6h: number;
+  buy_volume_sol_24h: number;
+  sell_volume_sol_24h: number;
+  volume_24h_sol: number;
+
+  // Transaction counts
+  buys_5m: number;
+  buys_1h: number;
+  buys_6h: number;
+  buys_24h: number;
+  sells_5m: number;
+  sells_1h: number;
+  sells_6h: number;
+  sells_24h: number;
+
+  // Trader counts
+  buyers_5m: number;
+  buyers_1h: number;
+  buyers_6h: number;
+  buyers_24h: number;
+  sellers_5m: number;
+  sellers_1h: number;
+  sellers_6h: number;
+  sellers_24h: number;
+  traders_5m: number;
+  traders_1h: number;
+  traders_6h: number;
+  traders_24h: number;
+
+  // Price history for % change
+  earliest_price_sol_5m: number;
+  earliest_price_sol_1h: number;
+  earliest_price_sol_6h: number;
+  earliest_price_sol_24h: number;
+
+  // Additional
+  liquidity_sol: number;
+  liquidity_usd: number;
+  total_supply: number;
+  circulating_supply: number;
+}
+```
+
+### CVDData (cvd_update payload)
+
+```typescript
+interface CVDData {
+  mint: string;
+  timestamp: number;
+  cvd: number;           // Current cumulative volume delta
+  cvdChange: number;     // Change over period
+  buyVolume: number;     // Buy volume in period
+  sellVolume: number;    // Sell volume in period
+  netDelta: number;      // buyVolume - sellVolume for period
+  periodMs: number;      // Period length (e.g., 60000 for 1m)
+}
+```
+
+### OHLCV (ohlcv_update payload)
+
+```typescript
+interface OHLCV {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+```
+
+### Trade (trade_feed payload)
+
+```typescript
+interface Trade {
+  mint: string;
+  direction: 'buy' | 'sell';
+  maker: string;
+  sol_amount: number;
+  token_amount: number;
+  sol_amount_usd: number;
+  market_cap_sol: number;
+  market_cap_usd: number;
+  timestamp: number;
+  signature: string;
+  is_dev: boolean;
+  is_insider: boolean;
+  is_sniper: boolean;
+  is_bundler: boolean;
+  platform: string;
+}
+```
+
+---
+
+## Current State Summary
+
+### What's Working
+- ✅ WebSocket connection established
+- ✅ Backend sending events to frontend (market_status, stats_update confirmed)
+- ✅ Backend polling API for token discovery (trending, whales)
+- ✅ Signal pipeline initialized and ready
+
+### What's Unknown/Untested
+- ❓ Frontend sending data feeds (market_data_feed, cvd_update, etc.)
+- ⬜ All frontend → backend commands
+- ⬜ Full event coverage (position_update, signal, token_list, etc.)
+
+### What's Needed for Full Integration
+1. **Verify data feeds flowing:** Frontend must send `market_data_feed` messages for new engine to process signals
+2. **Test commands:** Frontend UI buttons should trigger backend commands
+3. **Remove legacy server:** Frontend should NOT start its own WebSocket server on 8765
+
+---
+
+## Testing Checklist
+
+### Events (Backend → Frontend)
+- [ ] `position_update` - Check frontend console for positions
+- [ ] `signal` - Trigger a rule, check frontend receives signal
+- [ ] `token_list` - Check frontend receives token list each tick
+- [ ] `config` - Check frontend receives config on connect
+- [ ] `strategies` - Check frontend receives strategies on connect
+
+### Commands (Frontend → Backend)
+- [ ] Toggle a strategy - Backend should log command
+- [ ] Close position - Backend should log command
+- [ ] Refresh sources - Backend should log command
+
+### Data Feeds (Frontend → Backend)
+- [ ] `market_data_feed` - Backend should log `[WS] Data feed received: market_data_feed`
+- [ ] `cvd_update` - Backend should log `[WS] Data feed received: cvd_update`
+
+---
+
+## File References
+
+### Backend (this repo)
+- `src/websocket-server.ts` - WebSocket server, event types, command handling
+- `src/api/client.ts` - API client for main web-terminal backend
+- `src/signal/integration.ts` - Signal pipeline that processes data feeds
+- `src/cli.ts` - Main CLI, wires everything together
+
+### Frontend (web-terminal-frontend)
+- `connectAutopilotWebsocket.ts` - WebSocket connection to backend
+- `feedAdapters.ts` - Convert NATS data to backend format
+- `useAutopilotDataForwarder.ts` - Hook to forward data to backend
+- `useAutopilotSubscription.ts` - NATS subscription management

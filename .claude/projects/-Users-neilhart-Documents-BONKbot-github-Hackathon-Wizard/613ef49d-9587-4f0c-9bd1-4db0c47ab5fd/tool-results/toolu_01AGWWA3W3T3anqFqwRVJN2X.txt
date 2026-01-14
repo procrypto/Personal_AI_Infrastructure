@@ -1,0 +1,83 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/rotations.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   216→
+   217→  return analysis;
+   218→}
+   219→
+   220→/**
+   221→ * Clear rotation state for a mint
+   222→ */
+   223→export function clearRotationState(mint: string): void {
+   224→  rotationStateCache.delete(mint);
+   225→}
+   226→
+   227→/**
+   228→ * Estimate rotation levels from market data when OHLCV is unavailable.
+   229→ * Uses price change data to infer market structure.
+   230→ */
+   231→export function estimateRotationFromMarketData(
+   232→  token: import('../api/types.js').TokenMarketData
+   233→): RotationLevels | null {
+   234→  const currentPrice = token.price_sol;
+   235→  if (!currentPrice || currentPrice <= 0) return null;
+   236→
+   237→  // Calculate price at different timeframes
+   238→  const price5mAgo = token.earliest_price_sol_5m > 0 ? token.earliest_price_sol_5m : currentPrice;
+   239→  const price1hAgo = token.earliest_price_sol_1h > 0 ? token.earliest_price_sol_1h : currentPrice;
+   240→
+   241→  // Calculate price changes
+   242→  const change5m = ((currentPrice - price5mAgo) / price5mAgo) * 100;
+   243→  const change1h = ((currentPrice - price1hAgo) / price1hAgo) * 100;
+   244→
+   245→  // Determine rotation state from price action
+   246→  // Upward rotation: price trending up (both 5m and 1h positive or strongly positive short-term)
+   247→  // Downward rotation: price trending down
+   248→  // Invalidation: mixed signals
+   249→  let state: RotationState = 0;
+   250→
+   251→  if (change5m > 1 && change1h > 0) {
+   252→    // Strong short-term bullish momentum with positive hourly trend
+   253→    state = 1;
+   254→  } else if (change5m < -1 && change1h < 0) {
+   255→    // Strong short-term bearish momentum with negative hourly trend
+   256→    state = -1;
+   257→  } else if (change5m > 2) {
+   258→    // Very strong 5m move overrides hourly
+   259→    state = 1;
+   260→  } else if (change5m < -2) {
+   261→    state = -1;
+   262→  }
+   263→  // Otherwise stays at 0 (invalidation/ranging)
+   264→
+   265→  // Estimate rotation levels based on recent price range
+   266→  // Use a percentage of current price as the range
+   267→  const rangePercent = Math.max(Math.abs(change5m), 2); // At least 2% range
+   268→  const halfRange = (rangePercent / 100) * currentPrice;
+   269→
+   270→  let rotationHigh: number;
+   271→  let rotationLow: number;
+   272→
+   273→  if (state === 1) {
+   274→    // Uptrend: high is current, low is support
+   275→    rotationHigh = currentPrice;
+   276→    rotationLow = Math.min(price5mAgo, currentPrice - halfRange);
+   277→  } else if (state === -1) {
+   278→    // Downtrend: low is current, high is resistance
+   279→    rotationHigh = Math.max(price5mAgo, currentPrice + halfRange);
+   280→    rotationLow = currentPrice;
+   281→  } else {
+   282→    // Ranging: use price range
+   283→    rotationHigh = Math.max(currentPrice, price5mAgo) * 1.01;
+   284→    rotationLow = Math.min(currentPrice, price5mAgo) * 0.99;
+   285→  }
+   286→
+   287→  return {
+   288→    rotationHigh,
+   289→    rotationLow,
+   290→    state,
+   291→    barIndex: 0, // Unknown without OHLCV
+   292→  };
+   293→}
+   294→
+   295→/**
+   296→ * Get current rotation levels for a mint (if cached)
+   297→ */

@@ -1,0 +1,38 @@
+# Phase 12 Plan 01: Data Flow Debugging Summary
+
+**Fixed NATS market data enrichment for tokens and positions, added SOL price derivation from market data.**
+
+## Accomplishments
+
+- Fixed token price enrichment by integrating `useAutopilotTokensWithPrices` into `useAutopilotData`
+- Fixed position P&L calculation by parsing `price_sol` as string (NATS sends strings, not numbers)
+- Added SOL/USD price derivation from market data (`price_usd / price_sol`) as fallback
+- Updated `MarketStatusBadge` to display "SOL $XXX.XX" with separate change indicator
+- Added `solPriceUsd` to `AutopilotMarketStatus` type for frontend-derived price
+
+## Root Cause
+
+NATS market data sends `price_sol` as a **string** (e.g., `"0.0000000782302542957124424692"`) but the code expected a **number**. The type check `typeof priceSol === "number"` was failing silently, causing all enrichment to return `undefined`.
+
+## Files Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts` - Added SOL price derivation from market data
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts` - Fixed string-to-number parsing for price_sol
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts` - Fixed string-to-number parsing for price_sol
+- `apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts` - Added sol_price topic subscription (inactive but ready)
+- `apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx` - Updated MarketStatusBadge display format
+- `apps/web-terminal/src/store/memoryStore/slices/autopilot-store/types.ts` - Added `solPriceUsd` to `AutopilotMarketStatus`
+
+## Decisions Made
+
+- **SOL price source**: Derive from market data (`price_usd / price_sol`) rather than relying on `sol_price` NATS topic (which isn't broadcasting)
+- **String parsing**: Handle both string and number types for price fields to be defensive against NATS data format
+
+## Issues Encountered
+
+- `sol_price` NATS topic exists but isn't receiving data - backend likely not publishing to it
+- Other parts of the app receive pre-computed USD values from backend, so `sol_price` topic may be intentionally unused
+
+## Next Step
+
+Ready for Phase 13: Layout & Clarity

@@ -1,0 +1,45 @@
+ COMPLETED: Frontend-backend connected and syncing
+
+❯ 20[Violation] 'message' handler took <N>ms                                                                                                                                                                                                               
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 193ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 171ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 155ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 185ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 214ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 332ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 248ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 186ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 242ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 189ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 222ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 178ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 196ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 217ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 186ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message' handler took 151ms                                                                                                                                                                           
+  react-dom-client.development.js:18985 [Violation] 'message'                                                                                                                                                                                              
+
+⏺ That's a frontend performance issue - not backend. The React message handlers are blocking the main thread for 150-330ms.
+
+  SUMMARY: Frontend WebSocket message handlers are too slow
+
+  ANALYSIS:
+  - Chrome flags handlers taking >50ms as violations
+  - These are 150-330ms - 3-6x the threshold
+  - Likely causes on frontend side:
+    a. Expensive re-renders on every WS message
+    b. Not using React.memo / useMemo
+    c. State updates triggering cascading re-renders
+    d. Processing large payloads synchronously
+
+  Backend is fine - our messages are small and emit quickly. This is frontend React optimization work.
+
+  Frontend fixes to consider:
+  - Batch state updates with unstable_batchedUpdates
+  - Debounce/throttle high-frequency message handlers
+  - Use React.memo on components receiving WS data
+  - Move heavy processing to Web Worker
+
+  STATUS: Backend working correctly - frontend needs performance optimization
+
+  COMPLETED: Identified as frontend performance issue, not backend

@@ -1,0 +1,273 @@
+# Phase 3: Slack Listener & Threads - Discovery
+
+**Researched:** 2026-01-08
+**Domain:** Slack Events API and Block Kit for message capture and thread replies
+**Confidence:** HIGH
+
+<research_summary>
+## Summary
+
+Researched Slack Events API for capturing Linear's native Slack messages and Block Kit for interactive thread replies. The architecture is straightforward:
+
+1. **Slack Events API** listens for `message.channels` events
+2. Linear's bot messages have `subtype: 'bot_message'` and a specific `bot_id`
+3. We parse the message to extract the Linear issue ID
+4. Store the mapping via existing `linear-message-store.ts`
+5. Reply in-thread using `chat.postMessage` with `thread_ts`
+6. Block Kit buttons trigger `block_actions` payloads to our interactivity endpoint
+
+**Primary recommendation:** Use `@slack/bolt` for both event listening and web API. It handles signature verification, event dispatch, and Block Kit interactions in a unified framework.
+</research_summary>
+
+<standard_stack>
+## Standard Stack
+
+### Core
+| Library | Version | Purpose | Why Standard |
+|---------|---------|---------|--------------|
+| @slack/bolt | ^4.x | Slack app framework | Official SDK, handles events + interactions + signature verification |
+
+### Supporting
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| @slack/web-api | (bundled) | API calls | Included in Bolt, use for direct API calls |
+| @slack/types | (bundled) | TypeScript types | Included in Bolt, provides all Slack types |
+
+### Alternatives Considered
+| Instead of | Could Use | Tradeoff |
+|------------|-----------|----------|
+| @slack/bolt | @slack/events-api + @slack/web-api | Bolt unifies both, less boilerplate |
+| @slack/bolt | Raw HTTP handlers | Manual signature verification, no type safety |
+
+**Installation:**
+```bash
+bun add @slack/bolt
+```
+</standard_stack>
+
+<architecture_patterns>
+## Architecture Patterns
+
+### Recommended Project Structure
+```
+src/
+├── coordination/
+│   ├── slack/                  # NEW: Slack integration
+│   │   ├── client.ts           # Bolt App singleton
+│   │   ├── listener.ts         # Message event listener
+│   │   ├── block-kit.ts        # Block Kit message builders
+│   │   ├── thread-reply.ts     # Thread reply functions
+│   │   └── index.ts            # Barrel export
+│   ├── linear/                 # Existing
+│   ├── store/                  # Existing (linear-message-store.ts)
+│   └── events/                 # Existing event bus
+```
+
+### Pattern 1: Bolt App Singleton
+**What:** Single Bolt App instance for Slack integration
+**When to use:** All Slack API interactions
+**Example:**
+```typescript
+import { App, LogLevel } from '@slack/bolt';
+
+let slackApp: App | null = null;
+
+export function getSlackApp(): App {
+  if (!slackApp) {
+    slackApp = new App({
+      token: process.env.SLACK_BOT_TOKEN,
+      signingSecret: process.env.SLACK_SIGNING_SECRET,
+      logLevel: process.env.NODE_ENV === 'production' ? LogLevel.INFO : LogLevel.DEBUG,
+    });
+  }
+  return slackApp;
+}
+```
+
+### Pattern 2: Linear Message Detection
+**What:** Identify Linear bot messages and extract issue IDs
+**When to use:** Message event handler
+**Example:**
+```typescript
+const LINEAR_BOT_ID = process.env.LINEAR_BOT_ID; // Get from Slack app admin
+
+function isLinearMessage(event: MessageEvent): boolean {
+  return event.subtype === 'bot_message' && event.bot_id === LINEAR_BOT_ID;
+}
+
+function extractLinearIssueId(text: string): string | null {
+  // Linear URLs: https://linear.app/workspace/issue/ABC-123
+  const match = text.match(/linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)/);
+  return match ? match[1] : null;
+}
+```
+
+### Pattern 3: Thread Reply with Block Kit
+**What:** Reply in thread with interactive buttons
+**When to use:** After capturing Linear message
+**Example:**
+```typescript
+async function replyInThread(
+  channelId: string,
+  threadTs: string,
+  ticket: QATicket
+): Promise<void> {
+  const client = getSlackApp().client;
+  await client.chat.postMessage({
+    channel: channelId,
+    thread_ts: threadTs,
+    text: `QA Assignment: ${ticket.title}`, // Fallback
+    blocks: buildQAAssignmentBlocks(ticket),
+  });
+}
+```
+
+### Pattern 4: Block Kit Builder
+**What:** Type-safe Block Kit message construction
+**When to use:** All Slack message formatting
+**Example:**
+```typescript
+import type { KnownBlock } from '@slack/types';
+
+function buildQAAssignmentBlocks(ticket: QATicket): KnownBlock[] {
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*QA Assignment*\n<${ticket.linearUrl}|${ticket.title}>`,
+      },
+    },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Priority:* ${priorityEmoji(ticket.priority)} ${ticket.priority}` },
+        { type: 'mrkdwn', text: `*Status:* ${ticket.status}` },
+      ],
+    },
+    {
+      type: 'actions',
+      block_id: `qa_actions_${ticket.id}`,
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Claim', emoji: true },
+          value: ticket.id,
+          action_id: 'qa_claim',
+          style: 'primary',
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Pass', emoji: true },
+          value: ticket.id,
+          action_id: 'qa_pass',
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Blocked', emoji: true },
+          value: ticket.id,
+          action_id: 'qa_blocked',
+          style: 'danger',
+        },
+      ],
+    },
+  ];
+}
+```
+</architecture_patterns>
+
+<dont_hand_roll>
+## Don't Hand-Roll
+
+| Problem | Use Instead | Why |
+|---------|-------------|-----|
+| Signature verification | Bolt handles automatically | Timing-safe comparison, replay protection built-in |
+| Event dispatch | Bolt `app.event()` | Type-safe, automatic retry handling |
+| Block Kit JSON | @slack/types + builders | Type checking catches errors at compile time |
+| HTTP request handling | Bolt receivers | Handles response within 3-second requirement |
+</dont_hand_roll>
+
+<common_pitfalls>
+## Common Pitfalls
+
+| Pitfall | Solution |
+|---------|----------|
+| **3-second timeout** | Respond immediately, process async. Bolt handles this automatically. |
+| **Duplicate events** | Slack may retry. Use `event.event_id` for deduplication if needed. |
+| **Bot self-loop** | Check `bot_id` to ignore own messages - Bolt does this by default. |
+| **Missing scopes** | Need `channels:history`, `chat:write`, `groups:history` (if private channels). |
+| **Raw body for verification** | Bolt handles this; if manual, use express raw body middleware. |
+| **Linear bot ID changes** | Store in env var, not hardcoded. Check Slack app admin for current ID. |
+</common_pitfalls>
+
+<env_vars>
+## Environment Variables Needed
+
+```bash
+# Slack App credentials (from api.slack.com)
+SLACK_BOT_TOKEN=xoxb-...      # Bot User OAuth Token
+SLACK_SIGNING_SECRET=...       # Signing Secret from Basic Information
+SLACK_APP_TOKEN=xapp-...       # App-Level Token (for Socket Mode, optional)
+
+# Linear's Slack app ID (from Slack admin)
+LINEAR_BOT_ID=B...             # Bot ID of Linear's Slack integration
+```
+</env_vars>
+
+<code_examples>
+## Code Examples
+
+### Complete Message Listener
+```typescript
+import { App, LogLevel, type MessageEvent } from '@slack/bolt';
+import { storeLinearMessage } from '../store/linear-message-store.js';
+
+const LINEAR_BOT_ID = process.env.LINEAR_BOT_ID;
+
+export function setupSlackListener(app: App): void {
+  app.event('message', async ({ event, logger }) => {
+    // Type guard for message events
+    if (!('subtype' in event)) return;
+    if (event.subtype !== 'bot_message') return;
+    if (event.bot_id !== LINEAR_BOT_ID) return;
+
+    const text = event.text || '';
+    const issueId = extractLinearIssueId(text);
+    if (!issueId) {
+      logger.debug('Linear message without issue ID, skipping');
+      return;
+    }
+
+    // Store the mapping
+    await storeLinearMessage({
+      slackMessageTs: event.ts,
+      slackChannelId: event.channel,
+      linearIssueId: issueId,
+      capturedAt: new Date().toISOString(),
+    });
+
+    logger.info(`Captured Linear message for ${issueId}`);
+  });
+}
+
+function extractLinearIssueId(text: string): string | null {
+  const match = text.match(/linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)/);
+  return match ? match[1] : null;
+}
+```
+
+### Block Actions Handler (Phase 5, but setup here)
+```typescript
+export function setupBlockActions(app: App): void {
+  app.action('qa_claim', async ({ ack, body, client, logger }) => {
+    await ack(); // Acknowledge within 3 seconds
+
+    const ticketId = body.actions[0].value;
+    const userId = body.user.id;
+
+    // TODO: Phase 5 - actual claim logic
+    logger.info(`User ${userId} claimed ${ticketId}`);
+  });
+}
+```
+</code_examples>

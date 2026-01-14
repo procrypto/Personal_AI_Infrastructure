@@ -1,0 +1,283 @@
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-7-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-8-import type { TokenMarketData, OHLCV } from '../api/types.js';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-9-import type { Signal } from '../rules/types.js';
+src/signal/integration.ts:10:import type { DataFeedMessage } from '../websocket-server.js';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-11-import { RuleEngine } from '../rules/engine.js';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-12-import { SignalProcessor } from './processor.js';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-13-
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-15-  /** The underlying SignalProcessor instance */
+src/signal/integration.ts-16-  processor: SignalProcessor;
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-17-  /** Handle incoming data feed messages - routes to appropriate processor method */
+src/signal/integration.ts:18:  handleDataFeed: (message: DataFeedMessage) => Signal[];
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-19-  /** Register callback for real-time signal emission */
+src/signal/integration.ts-20-  onSignal: (callback: (signal: Signal) => void) => void;
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-21-  /** Aggregate signals using engine's aggregation logic */
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-60-  /**
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-61-   * Route data feed messages to appropriate processor method
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-62-   */
+src/signal/integration.ts:63:  function handleDataFeed(message: DataFeedMessage): Signal[] {
+src/signal/integration.ts-64-    let signals: Signal[] = [];
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-65-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/signal/integration.ts-66-    switch (message.type) {
+--
+src/websocket-server.ts-49-  | { command: 'toggle_strategy'; strategyId: string; enabled: boolean };
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-50-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-51-// Data feed message types for incoming market data from main app
+src/websocket-server.ts:52:export type DataFeedMessage =
+src/websocket-server.ts-53-  | { type: 'market_data_feed'; data: TokenMarketData }
+src/websocket-server.ts-54-  | { type: 'ohlcv_update'; mint: string; ohlcv: OHLCV[] }
+src/websocket-server.ts-55-  | { type: 'trade_feed'; trade: Trade };
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-56-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-57-// Union of all incoming message types
+src/websocket-server.ts:58:export type IncomingMessage = AutopilotCommand | DataFeedMessage;
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-59-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-60-// Handler type for data feed messages
+src/websocket-server.ts:61:export type DataFeedHandler = (message: DataFeedMessage) => void;
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-62-
+src/websocket-server.ts-63-/ LOIS COMPATIBLE: partial
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-64-// - mode field controls paper vs live execution path
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-249-            await this.commandHandler(message);
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-250-          }
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-251-          // Check if it's a data feed (has 'type' field matching data feed types)
+src/websocket-server.ts:252:          else if ('type' in message && this.isDataFeedMessage(message)) {
+src/websocket-server.ts:253:            this.handleDataFeed(message as DataFeedMessage);
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-254-          }
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-255-        } catch (err) {
+src/websocket-server.ts-256-          console.error('[WS] Failed to parse message:', err);
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-291-  }
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-292-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-293-  // Type guard to check if message is a data feed type
+src/websocket-server.ts:294:  private isDataFeedMessage(message: IncomingMessage): message is DataFeedMessage {
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-295-    if (!('type' in message)) return false;
+src/websocket-server.ts-296-    const type = (message as { type?: string }).type;
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-297-    return type === 'market_data_feed' || type === 'ohlcv_update' || type === 'trade_feed';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-298-  }
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-299-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-300-  // Handle incoming data feed messages
+src/websocket-server.ts:301:  private handleDataFeed(message: DataFeedMessage): void {
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-302-    switch (message.type) {
+src/websocket-server.ts-303-      case 'market_data_feed':
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/websocket-server.ts-304-        // Upsert market data by mint
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-6- */
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-7-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-8-import type { TokenMarketData, OHLCV, Trade } from '../api/types.js';
+src/data/normalizer.ts:9:import type { DataFeedMessage } from '../websocket-server.js';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-10-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-11-/**
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-12- * Normalize TokenMarketData
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-136-}
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-137-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-138-/**
+src/data/normalizer.ts:139: * Normalize a DataFeedMessage
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-140- * Routes to appropriate normalizer based on message type
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-141- * Returns normalized message ready for storage
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-142- */
+src/data/normalizer.ts:143:export function normalizeDataFeed(message: DataFeedMessage): DataFeedMessage {
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-144-  switch (message.type) {
+src/data/normalizer.ts-145-    case 'market_data_feed':
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.ts-146-      return {
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-10-  normalizeDataFeed,
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-11-} from './normalizer.js';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-12-import type { TokenMarketData, OHLCV, Trade } from '../api/types.js';
+src/data/normalizer.test.ts:13:import type { DataFeedMessage } from '../websocket-server.js';
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-14-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-15-describe('normalizeTokenMarketData', () => {
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-16-  it('passes through complete data unchanged except mint lowercase', () => {
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-367-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-368-describe('normalizeDataFeed', () => {
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-369-  it('routes market_data_feed to normalizeTokenMarketData', () => {
+src/data/normalizer.test.ts:370:    const message: DataFeedMessage = {
+src/data/normalizer.test.ts-371-      type: 'market_data_feed',
+src/data/normalizer.test.ts-372-      data: {
+src/data/normalizer.test.ts-373-        mint: 'EPJFWDD5AUFQSSQEM2QN1XZYBAPС8G4WEGGKZWYTDT1V',
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-386-  });
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-387-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-388-  it('routes ohlcv_update to normalizeOHLCV', () => {
+src/data/normalizer.test.ts:389:    const message: DataFeedMessage = {
+src/data/normalizer.test.ts-390-      type: 'ohlcv_update',
+src/data/normalizer.test.ts-391-      mint: 'EPJFWDD5AUFQSSQEM2QN1XZYBAPС8G4WEGGKZWYTDT1V',
+src/data/normalizer.test.ts-392-      ohlcv: [
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-406-  });
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-407-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-408-  it('routes trade_feed to normalizeTrade', () => {
+src/data/normalizer.test.ts:409:    const message: DataFeedMessage = {
+src/data/normalizer.test.ts-410-      type: 'trade_feed',
+src/data/normalizer.test.ts-411-      trade: {
+src/data/normalizer.test.ts-412-        mint: 'EPJFWDD5AUFQSSQEM2QN1XZYBAPС8G4WEGGKZWYTDT1V',
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-426-  });
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-427-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/data/normalizer.test.ts-428-  it('lowercases mint in ohlcv_update', () => {
+src/data/normalizer.test.ts:429:    const message: DataFeedMessage = {
+src/data/normalizer.test.ts-430-      type: 'ohlcv_update',
+src/data/normalizer.test.ts-431-      mint: 'UPPERCASE_MINT',
+src/data/normalizer.test.ts-432-      ohlcv: [] as any,
+--
+.planning/phases/02-dual-path-engine/02-03-PLAN.md-34-**Established patterns:**
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/02-dual-path-engine/02-03-PLAN.md-35-- wsServer.onDataFeed(handler) for data feed callbacks
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/02-dual-path-engine/02-03-PLAN.md-36-- wsServer.broadcastSignal(signal) for signal output
+.planning/phases/02-dual-path-engine/02-03-PLAN.md:37:- DataFeedMessage union type for routing
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/02-dual-path-engine/02-03-PLAN.md-38-
+.planning/phases/02-dual-path-engine/02-03-PLAN.md-39-**Constraining decisions:**
+.planning/phases/02-dual-path-engine/02-03-PLAN.md-40-- Phase 1: Data feed handler registered via onDataFeed()
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/02-dual-path-engine/02-03-PLAN.md-54-   - Creates SignalProcessor with marketDataProvider pointing to wsServer.getAllMarketData
+.planning/phases/02-dual-path-engine/02-03-PLAN.md-55-   - Returns object with:
+.planning/phases/02-dual-path-engine/02-03-PLAN.md-56-     - `processor`: the SignalProcessor instance
+.planning/phases/02-dual-path-engine/02-03-PLAN.md:57:     - `handleDataFeed(message: DataFeedMessage)`: routes messages to appropriate processor method
+.planning/phases/02-dual-path-engine/02-03-PLAN.md-58-     - `getSignals()`: method to retrieve accumulated signals (for batch processing)
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/02-dual-path-engine/02-03-PLAN.md-59-
+.planning/phases/02-dual-path-engine/02-03-PLAN.md-60-2. handleDataFeed implementation:
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/03-interface-cleanup-cutover/03-01-PLAN.md-62-   - timestamp, open, high, low, close, volume
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/03-interface-cleanup-cutover/03-01-PLAN.md-63-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/03-interface-cleanup-cutover/03-01-PLAN.md-64-5. **ISignalPipeline** - Pipeline contract
+.planning/phases/03-interface-cleanup-cutover/03-01-PLAN.md:65:   - handleDataFeed(message: IDataFeedMessage): ISignal[]
+.planning/phases/03-interface-cleanup-cutover/03-01-PLAN.md-66-   - onSignal(callback: (signal: ISignal) => void): void
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/03-interface-cleanup-cutover/03-01-PLAN.md-67-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/03-interface-cleanup-cutover/03-01-PLAN.md-68-Create `src/types/index.ts` to re-export all LOIS types.
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-6-
+.planning/phases/01-data-reception/01-01-SUMMARY.md-7-requires: []
+.planning/phases/01-data-reception/01-01-SUMMARY.md-8-provides:
+.planning/phases/01-data-reception/01-01-SUMMARY.md:9:  - DataFeedMessage types for market data, OHLCV, trades
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-10-  - IncomingMessage union for WebSocket message routing
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-11-  - In-memory storage for market data feeds
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-12-  - Getter methods for rule engine data access
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-26-    - src/websocket-server.ts
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-27-
+.planning/phases/01-data-reception/01-01-SUMMARY.md-28-key-decisions:
+.planning/phases/01-data-reception/01-01-SUMMARY.md:29:  - "Union type IncomingMessage = AutopilotCommand | DataFeedMessage for extensible routing"
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-30-  - "Circular buffer (max 1000) for recent trades to bound memory"
+.planning/phases/01-data-reception/01-01-SUMMARY.md:31:  - "Type guard isDataFeedMessage() for runtime message discrimination"
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-32-
+.planning/phases/01-data-reception/01-01-SUMMARY.md-33-patterns-established:
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-34-  - "Data feed messages use 'type' field, commands use 'command' field"
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-54-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-55-## Accomplishments
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-56-
+.planning/phases/01-data-reception/01-01-SUMMARY.md:57:- DataFeedMessage union type with market_data_feed, ohlcv_update, trade_feed variants
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-58-- IncomingMessage type unifying commands and data feeds for WebSocket routing
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-59-- In-memory storage (Maps for market data and OHLCV, array for trades)
+.planning/phases/01-data-reception/01-01-SUMMARY.md-60-- Getter methods for rule engine: getMarketData, getAllMarketData, getOHLCV, getRecentTrades
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-64-
+.planning/phases/01-data-reception/01-01-SUMMARY.md-65-Each task was committed atomically:
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-66-
+.planning/phases/01-data-reception/01-01-SUMMARY.md:67:1. **Task 1: Define DataFeedMessage types** - `c358b47` (feat)
+.planning/phases/01-data-reception/01-01-SUMMARY.md-68-2. **Task 2: Add handlers with in-memory storage** - `201c522` (feat)
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-69-
+.planning/phases/01-data-reception/01-01-SUMMARY.md-70-**Plan metadata:** `3fc7728` (docs: complete plan)
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-71-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-72-## Files Created/Modified
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-73-
+.planning/phases/01-data-reception/01-01-SUMMARY.md:74:- `src/websocket-server.ts` - Extended with DataFeedMessage types, storage Maps, message routing, getter methods
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-75-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-76-## Decisions Made
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-77-
+.planning/phases/01-data-reception/01-01-SUMMARY.md:78:- Used type guard pattern (`isDataFeedMessage`) for runtime message discrimination instead of explicit type field checks
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-79-- Circular buffer for trades (shift when > 1000) - simple and sufficient for rule engine lookups
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-80-- Getter methods return `undefined` for missing data rather than throwing - matches existing patterns
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-SUMMARY.md-81-
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-SUMMARY.md-6-
+.planning/phases/01-data-reception/01-02-SUMMARY.md-7-requires:
+.planning/phases/01-data-reception/01-02-SUMMARY.md-8-  - phase: 01-data-reception
+.planning/phases/01-data-reception/01-02-SUMMARY.md:9:    provides: DataFeedMessage types and data storage
+.planning/phases/01-data-reception/01-02-SUMMARY.md-10-provides:
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-SUMMARY.md-11-  - ValidationResult interface for consistent error reporting
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-SUMMARY.md-12-  - Validation functions for TokenMarketData, OHLCV, Trade
+--
+.planning/phases/01-data-reception/01-02-SUMMARY.md-66-- normalizeTokenMarketData: lowercase mint, fill ~40 optional fields with defaults
+.planning/phases/01-data-reception/01-02-SUMMARY.md-67-- normalizeOHLCV: sort by timestamp, fill volumes, filter incomplete candles
+.planning/phases/01-data-reception/01-02-SUMMARY.md-68-- normalizeTrade: lowercase mint, fill boolean flags, default platform
+.planning/phases/01-data-reception/01-02-SUMMARY.md:69:- normalizeDataFeed: routing pipeline for all DataFeedMessage types
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-SUMMARY.md-70-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-SUMMARY.md-71-## Task Commits
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-SUMMARY.md-72-
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-03-PLAN.md-24-@src/data/normalizer.ts
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-03-PLAN.md-25-
+.planning/phases/01-data-reception/01-03-PLAN.md-26-**Prior plan context:**
+.planning/phases/01-data-reception/01-03-PLAN.md:27:- 01-01 added DataFeedMessage types and WebSocket handlers
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-03-PLAN.md-28-- 01-02 created validator.ts and normalizer.ts
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-03-PLAN.md-29-
+.planning/phases/01-data-reception/01-03-PLAN.md-30-**Testing approach:**
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-24-@src/api/types.ts
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-25-
+.planning/phases/01-data-reception/01-02-PLAN.md-26-**Prior plan context:**
+.planning/phases/01-data-reception/01-02-PLAN.md:27:- 01-01 added DataFeedMessage types and storage
+.planning/phases/01-data-reception/01-02-PLAN.md-28-- Data flows: market_data_feed, ohlcv_update, trade_feed
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-29-
+.planning/phases/01-data-reception/01-02-PLAN.md-30-**Key requirements:**
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-106-
+.planning/phases/01-data-reception/01-02-PLAN.md-107-2. Create combined pipeline function:
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-108-
+.planning/phases/01-data-reception/01-02-PLAN.md:109:- `normalizeDataFeed(message: DataFeedMessage): DataFeedMessage`
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-110-  - Route to appropriate normalizer based on message.type
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-111-  - Return normalized message ready for storage
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-02-PLAN.md-112-
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-36-<tasks>
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-37-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-38-<task type="auto">
+.planning/phases/01-data-reception/01-01-PLAN.md:39:  <name>Task 1: Define DataFeedMessage types for incoming market data</name>
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-40-  <files>src/websocket-server.ts</files>
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-41-  <action>
+.planning/phases/01-data-reception/01-01-PLAN.md-42-Add new message types for incoming data feeds alongside existing AutopilotCommand:
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-43-
+.planning/phases/01-data-reception/01-01-PLAN.md:44:1. Create DataFeedMessage union type with three variants:
+.planning/phases/01-data-reception/01-01-PLAN.md-45-   - `{ type: 'market_data_feed'; data: TokenMarketData }` - full token snapshot
+.planning/phases/01-data-reception/01-01-PLAN.md-46-   - `{ type: 'ohlcv_update'; mint: string; ohlcv: OHLCV[] }` - candle updates
+.planning/phases/01-data-reception/01-01-PLAN.md-47-   - `{ type: 'trade_feed'; trade: Trade }` - individual trade events
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-48-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-49-2. Import TokenMarketData, OHLCV, Trade from './api/types.js'
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-50-
+.planning/phases/01-data-reception/01-01-PLAN.md:51:3. Create IncomingMessage type that unions AutopilotCommand | DataFeedMessage
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-52-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-53-Keep existing AutopilotCommand/AutopilotEvent types unchanged - this is additive.
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-54-  </action>
+.planning/phases/01-data-reception/01-01-PLAN.md-55-  <verify>TypeScript compiles without errors: `npx tsc --noEmit`</verify>
+.planning/phases/01-data-reception/01-01-PLAN.md:56:  <done>DataFeedMessage types defined, IncomingMessage union created, imports added</done>
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-57-</task>
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-58-
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-59-<task type="auto">
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-71-   - Route data feeds to new private handler method
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-72-   - Keep existing command handling unchanged
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-73-
+.planning/phases/01-data-reception/01-01-PLAN.md:74:3. Add private handleDataFeed(message: DataFeedMessage) method:
+.planning/phases/01-data-reception/01-01-PLAN.md-75-   - market_data_feed: upsert into marketData Map
+.planning/phases/01-data-reception/01-01-PLAN.md-76-   - ohlcv_update: replace OHLCV array for mint
+.planning/phases/01-data-reception/01-01-PLAN.md-77-   - trade_feed: push to recentTrades, trim to max 1000
+--
+.planning/phases/01-data-reception/01-01-PLAN.md-83-   - getRecentTrades(mint?: string): Trade[]
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-84-
+.planning/phases/01-data-reception/01-01-PLAN.md-85-5. Add optional dataFeedHandler callback (like commandHandler) for notifying when new data arrives:
+.planning/phases/01-data-reception/01-01-PLAN.md:86:   - `private dataFeedHandler: ((message: DataFeedMessage) => void) | null = null`
+.planning/phases/01-data-reception/01-01-PLAN.md:87:   - `onDataFeed(handler: (message: DataFeedMessage) => void): void`
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-88-  </action>
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-89-  <verify>
+.planning/phases/01-data-reception/01-01-PLAN.md-90-TypeScript compiles: `npx tsc --noEmit`
+--
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-104-<verification>
+.planning/phases/01-data-reception/01-01-PLAN.md-105-Before declaring plan complete:
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-106-- [ ] `npx tsc --noEmit` passes without errors
+.planning/phases/01-data-reception/01-01-PLAN.md:107:- [ ] DataFeedMessage types exported from websocket-server.ts
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-108-- [ ] wsServer has getMarketData, getAllMarketData, getOHLCV, getRecentTrades methods
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-109-- [ ] wsServer has onDataFeed callback registration
+/Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/.planning/phases/01-data-reception/01-01-PLAN.md-110-</verification>

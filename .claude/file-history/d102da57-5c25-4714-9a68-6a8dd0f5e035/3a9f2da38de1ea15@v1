@@ -1,0 +1,145 @@
+# Architecture
+
+**Analysis Date:** 2026-01-09
+
+## Pattern Overview
+
+**Overall:** Modular Layered Architecture with Domain-Driven Design
+
+**Key Characteristics:**
+- Event-driven (WebSocket broadcasts real-time signals)
+- Pluggable rules system (new analysis rules without core changes)
+- Paper trading simulation (full P&L tracking before live)
+- Execution-agnostic (supports paper and future LOIS live trading)
+
+## Layers
+
+**Entry Points & Orchestration:**
+- Purpose: User interaction and system coordination
+- Contains: CLI interface, WebSocket server, main loop
+- Key files: `src/cli.ts`, `src/websocket-server.ts`, `src/index.ts`
+- Depends on: All other layers
+- Used by: Users and frontend
+
+**Rules & Analysis Engine:**
+- Purpose: Token analysis and signal generation
+- Contains: Rule engine, rule implementations, signal aggregation
+- Key files: `src/rules/engine.ts`, `src/rules/types.ts`, `src/rules/*.ts`
+- Depends on: API layer (for market data)
+- Used by: CLI analysis loop
+
+**Trading Execution & Position Management:**
+- Purpose: Trade decisions, position tracking, risk management
+- Contains: Trade trigger, paper tracker, magic exits/buy, market filter
+- Key files: `src/trading/trigger.ts`, `src/trading/paper-tracker.ts`, `src/trading/magic-exits.ts`, `src/trading/magic-buy.ts`
+- Depends on: Rules layer (for signals), API layer (for prices)
+- Used by: CLI analysis loop
+
+**Configuration & State:**
+- Purpose: Persistent user configuration
+- Contains: Config store, schema definitions
+- Key files: `src/config/store.ts`, `src/config/types.ts`
+- Depends on: Filesystem
+- Used by: All layers
+
+**External APIs:**
+- Purpose: Market data fetching
+- Contains: HTTP client, type definitions
+- Key files: `src/api/client.ts`, `src/api/types.ts`
+- Depends on: External services (local-api, beta-data)
+- Used by: Rules and Trading layers
+
+## Data Flow
+
+**Analysis Cycle (from `src/cli.ts` run command):**
+
+1. Load config (watchlist, rules, trigger settings)
+2. Fetch token sources (watchlist + trending + whale moves)
+3. Batch fetch market data with SOL fallback
+4. Check market filter (SOL dump protection)
+5. For each token: Run rule engine → aggregate signals → determine action
+6. Check magic exits (for open positions)
+7. Check magic buy (for new entries)
+8. Execute triggers (paper tracker or LOIS)
+9. Broadcast to WebSocket
+10. Sleep for pollIntervalMs (default 30s)
+11. Loop
+
+**State Management:**
+- File-based: All state in `.autopilot/` directory
+- No persistent in-memory state
+- Each command execution is independent
+
+## Key Abstractions
+
+**Rule:**
+- Purpose: Encapsulate analysis logic for a specific condition
+- Examples: `PriceChangeRule`, `VolumeSpikeRule`, `RotationsRule`
+- Pattern: Interface with `analyze(context): Signal | null`
+- Location: `src/rules/*.ts`
+
+**Signal:**
+- Purpose: Represent analysis output
+- Examples: buy/sell signals with strength and reason
+- Pattern: Data interface with action, confidence, metadata
+- Location: `src/rules/types.ts`
+
+**RuleSet:**
+- Purpose: Group of rules with aggregation mode
+- Examples: momentum-buy, rotations templates
+- Pattern: Collection with 'all' or 'any' mode
+- Location: `src/rules/templates.ts`
+
+**ConfigStore:**
+- Purpose: Persist and manage user configuration
+- Pattern: Singleton with JSON file backing
+- Location: `src/config/store.ts`
+
+## Entry Points
+
+**CLI Entry:**
+- Location: `src/cli.ts`
+- Triggers: `npm run cli` or `tsx src/cli.ts [command]`
+- Responsibilities: Parse commands, manage config, run analysis loop
+
+**Demo Entry:**
+- Location: `src/index.ts`
+- Triggers: `npm start` or `tsx src/index.ts`
+- Responsibilities: Quick-start demo with sample token
+
+**WebSocket Server:**
+- Location: `src/websocket-server.ts`
+- Triggers: Started by CLI `run` command on port 8765
+- Responsibilities: Frontend communication, command handling, event broadcasting
+
+## Error Handling
+
+**Strategy:** Try-catch at boundaries, continue on errors, log failures
+
+**Patterns:**
+- API calls wrapped in try-catch with fallback
+- Rule analysis returns null on error
+- Trade triggers skip on validation failure
+- WebSocket errors logged but don't crash server
+
+## Cross-Cutting Concerns
+
+**Logging:**
+- Console.log for normal output with emoji indicators
+- Console.error for errors
+- Structured format with timestamps for WebSocket events
+
+**Validation:**
+- TypeScript strict mode for type safety
+- Runtime validation in trade trigger (cooldown, conflicts)
+- Market filter for SOL dump protection
+
+**Configuration:**
+- JSON file persistence in `.autopilot/`
+- Default config with merge-on-load pattern
+- Runtime updates via WebSocket commands
+
+---
+
+*Architecture analysis: 2026-01-09*
+*Update when major patterns change*

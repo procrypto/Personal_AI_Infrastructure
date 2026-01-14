@@ -1,0 +1,137 @@
+/**
+ * Local API Server
+ *
+ * ⚠️  WARNING: This service fetches PRODUCTION ClickHouse data into your local environment.
+ * Treat all responses as sensitive. Do not share outputs publicly.
+ *
+ * Run: bun dev
+ */
+
+import { Elysia } from "elysia";
+import { assertConfig, config } from "./config";
+import { readFile } from "fs/promises";
+import { join } from "path";
+import { registerTradesBackfillRoutes } from "./endpoints/generic/trades_backfill";
+import { registerTradesRoutes } from "./endpoints/generic/trades";
+import { registerWalletTrackerRoutes } from "./endpoints/generic/wallet_tracker";
+import { registerHoldersStatsRoutes } from "./endpoints/generic/holders_stats";
+import { registerHoldersStatsBatchRoutes } from "./endpoints/generic/holders_stats_batch";
+import { registerTradersStatsRoutes } from "./endpoints/generic/traders_stats";
+import { registerSearchTokenRoutes } from "./endpoints/generic/search_token";
+import { registerSearchTextRoutes } from "./endpoints/generic/search_text";
+import { registerOHLCVRoutes } from "./endpoints/generic/ohlcv";
+import { registerHolderStatsRoutes } from "./endpoints/generic/holder_stats";
+import { registerWhaleMovesRoutes } from "./endpoints/generic/discovery_whale_moves";
+import { registerTrendingRoutes } from "./endpoints/generic/discovery_trending";
+import { registerWalletFundingRoutes } from "./endpoints/generic/wallet_funding";
+import { registerMultiWalletFamiliesRoutes } from "./endpoints/generic/multi_wallet_families";
+import { registerTokenMarketDataRoutes } from "./endpoints/generic/token_market_data";
+import { registerTwitterProxyRoutes } from "./endpoints/generic/twitter_proxy";
+import { registerCommunityTrackerRoutes } from "./endpoints/generic/community_tracker";
+import { registerExtensionRegistry } from "./extensions/registry";
+import { registerExtensionRoutes } from "./extensions/register";
+
+// Validate credentials on startup
+assertConfig();
+
+// Import custom endpoints here (optional, user-defined)
+// import { registerMyCustomRoutes } from "./endpoints/custom/my_endpoint";
+
+const app = new Elysia();
+
+// Health check
+app.get("/health", () => ({ ok: true, warning: "This API fetches PRODUCTION data" }));
+
+// Register generic endpoints
+registerTradesBackfillRoutes(app);
+registerTradesRoutes(app);
+registerWalletTrackerRoutes(app);
+registerHoldersStatsRoutes(app);
+registerHoldersStatsBatchRoutes(app);
+registerTradersStatsRoutes(app);
+registerSearchTokenRoutes(app);
+registerSearchTextRoutes(app);
+registerOHLCVRoutes(app);
+registerHolderStatsRoutes(app);
+registerWhaleMovesRoutes(app);
+registerTrendingRoutes(app);
+registerWalletFundingRoutes(app);
+registerMultiWalletFamiliesRoutes(app);
+registerTokenMarketDataRoutes(app);
+registerTwitterProxyRoutes(app);
+registerCommunityTrackerRoutes(app);
+
+// Register extension registry and routes (always enabled)
+registerExtensionRegistry(app);
+registerExtensionRoutes(app);
+
+// Register custom endpoints here (optional)
+// registerMyCustomRoutes(app);
+
+// Serve static files from public/ directory (for smoke.html) - LOCAL ONLY
+app.get("/smoke.html", async ({ request, server }) => {
+    // Restrict to localhost only
+    const ip = server?.requestIP(request);
+    const clientAddress = ip?.address ?? "";
+    const isLocal = clientAddress === "127.0.0.1" || clientAddress === "::1" || clientAddress === "::ffff:127.0.0.1";
+
+    if (!isLocal) {
+        return new Response("Forbidden: smoke.html is local-only", { status: 403 });
+    }
+
+    try {
+        const filePath = join(process.cwd(), "public", "smoke.html");
+        const content = await readFile(filePath);
+        return new Response(content, {
+            headers: { "Content-Type": "text/html" },
+        });
+    } catch {
+        return new Response("smoke.html not found", { status: 404 });
+    }
+});
+
+const PORT = config.port;
+
+app.listen(PORT);
+
+console.log(`
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  ⚠️  LOCAL API — PRODUCTION DATA ACCESS                                      ║
+║                                                                              ║
+║  This service fetches REAL production ClickHouse data.                       ║
+║  • Treat responses as SENSITIVE                                              ║
+║  • Do NOT paste outputs into public channels                                 ║
+║  • Keep strict limits to avoid expensive queries                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Listening on http://localhost:${PORT}
+
+Endpoints:
+  GET  /health                                — Health check
+  POST /custom/wallet-trades-snapshot         — Wallet trades snapshot (custom)
+  GET  /trades/:mint                          — Trade history for a token
+  GET  /wallet-tracker/trades                 — Trades for tracked wallets
+  GET  /wallet-tracker/summary-all            — Aggregated summary for wallets
+  GET  /wallet-tracker/summary-all-v2         — Aggregated summary v2 (trimmed token_image)
+  GET  /holders-stats/:mint                   — Top 100 holders for a token
+  POST /custom/holders-stats-batch            — Batch holders for multiple mints (max 50)
+  GET  /traders-stats/:mint                   — Top 100 profitable traders
+  GET  /search                                — Text-based token search
+  GET  /search/:mint                          — Token lookup by mint
+  GET  /discovery/whale-moves                 — Whale moves (24h window)
+  GET  /discovery/trending                    — Trending tokens list
+  GET  /ext/registry                          — Extension registry (always on)
+  GET  /ext/search/:mint                      — Extension: token lookup + ext payload
+  GET  /ohlcv/pool/:pool/:range               — Pool OHLCV candlestick data
+  GET  /ohlcv/token/:mint/:range              — Token OHLCV candlestick data
+  GET  /holder-stats/:mint/:address           — Holder stats for wallet on token
+  GET  /wallet-funding/:address               — Wallet funding sources
+  GET  /multi-wallet-families/:mint           — Multi-wallet family detection
+  GET  /market-data/:mint                     — Token market data (single)
+  GET  /market-data-batch                     — Token market data (batch, max 100)
+  GET  /twitter-proxy                         — Twitter community proxy (info/tweets)
+  GET  /community-tracker                     — Fetch community tracker data
+  POST /community-tracker                     — Save community tracker data
+
+`);
+

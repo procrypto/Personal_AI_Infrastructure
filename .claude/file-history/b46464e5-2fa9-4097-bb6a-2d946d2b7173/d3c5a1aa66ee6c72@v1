@@ -1,0 +1,178 @@
+---
+phase: 05-unit-tests
+plan: 01
+type: execute
+---
+
+<objective>
+Unit tests for autopilot integration: P&L calculation, store slice, and message parsing.
+
+Purpose: Essential test coverage for the three core autopilot modules - ensures P&L math is correct, store actions work as expected, and message parsing handles all cases gracefully.
+Output: Three test files with ~15-20 tests covering happy paths and key edge cases.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+
+# Source files being tested:
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts
+@apps/web-terminal/src/store/memoryStore/slices/autopilot-store/autopilot-store.ts
+@apps/web-terminal/src/websocket/autopilot/connectAutopilotWebsocket.ts
+
+# Existing test patterns to follow:
+@apps/web-terminal/src/utils/math.test.ts
+@apps/web-terminal/src/websocket/nats/NatsWebsocket.test.ts
+
+# Test setup and vitest config:
+@apps/web-terminal/src/test-setup.ts
+@apps/web-terminal/vitest.config.ts
+
+**Constraints from ROADMAP:**
+- Essential cases only (happy path + key edge cases)
+- No mocking WebSocket connections or NATS subscriptions
+- Tests should be fast and reliable
+- Follow existing project test patterns (vitest, describe/it blocks)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create P&L calculation tests</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/pnl.test.ts</files>
+  <action>
+Create a test file for P&L calculation logic. Since useAutopilotPositions is a React hook that uses Zustand, extract the pure P&L calculation logic into a testable function OR test the calculation formula directly.
+
+Test cases:
+1. **Normal case**: Entry price 0.001 SOL, current price 0.0015 SOL → 50% gain, correct pnlSol
+2. **No market data**: Position exists but no NATS data → null currentPriceSol/pnlPercent/pnlSol
+3. **Zero entry price edge case**: entryPriceSol = 0 → null P&L (avoid division by zero)
+4. **Loss case**: Entry 0.002, current 0.001 → -50% loss
+5. **Price is NaN**: parseFloat returns NaN → null P&L
+
+Create a pure `calculatePnL` function that can be tested independently, then test it. The function signature should be:
+```typescript
+function calculatePnL(entryPriceSol: number, currentPriceSol: number, positionSizeSol: number): { pnlPercent: number; pnlSol: number } | null
+```
+
+Follow the existing math.test.ts pattern for structure.
+  </action>
+  <verify>npm run test:run -- pnl.test.ts passes with all 5 test cases</verify>
+  <done>P&L calculation tests pass: normal gain, no data, zero entry, loss, and NaN cases</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create store slice tests</name>
+  <files>apps/web-terminal/src/store/memoryStore/slices/autopilot-store/autopilot-store.test.ts</files>
+  <action>
+Create tests for the autopilot Zustand store slice. Since the store uses immer middleware via the global store, create a minimal test store or test the action logic directly.
+
+Test cases:
+1. **setPositions**: Sets positions correctly as a Map keyed by mint
+2. **setPositions empty**: Setting empty array clears positions
+3. **addSignal**: Adds signal to front of array
+4. **addSignal respects MAX_SIGNALS (50)**: Adding 51st signal drops oldest
+5. **reset**: Clears all state back to defaults (isConnected false, positions empty, signals empty)
+
+Implementation approach:
+- Create a minimal test store that includes just the autopilot slice
+- Or create pure action functions that can be tested independently
+- Use the pattern from existing store tests if any exist
+
+Follow existing test patterns. Mock the `set` function to capture state updates.
+  </action>
+  <verify>npm run test:run -- autopilot-store.test.ts passes with all 5 test cases</verify>
+  <done>Store slice tests pass: setPositions, addSignal with MAX_SIGNALS limit, and reset</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Create message parsing tests</name>
+  <files>apps/web-terminal/src/websocket/autopilot/messageParser.test.ts</files>
+  <action>
+Create tests for autopilot WebSocket message parsing. Extract the message parsing/routing logic from connectAutopilotWebsocket.ts into a pure function that can be tested without WebSocket mocking.
+
+Create a `parseAutopilotEvent` function that takes raw data and returns typed event or null:
+```typescript
+function parseAutopilotEvent(data: unknown): AutopilotEvent | null
+```
+
+Test cases:
+1. **position_update event**: Parses correctly, returns typed event
+2. **signal event**: Parses correctly with all signal fields
+3. **stats_update event**: Parses correctly
+4. **config event**: Parses correctly
+5. **strategies event**: Parses correctly
+6. **Unknown event type**: Returns null or logs, doesn't throw
+7. **Malformed data (not an object)**: Returns null, doesn't throw
+8. **Pong message**: Skipped (returns null)
+
+The key is making the parsing logic testable without requiring a real WebSocket. Extract the switch statement logic into a pure function.
+
+Follow the pattern from DiscoveryWebsocket.test.ts but without WS mocking - just test the parsing function directly.
+  </action>
+  <verify>npm run test:run -- messageParser.test.ts passes with all 8 test cases</verify>
+  <done>Message parsing tests pass: all event types, unknown events, malformed data, and pong skipping</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run test:run` in apps/web-terminal passes all new tests
+- [ ] No TypeScript errors: `npm run typecheck:web-terminal`
+- [ ] All 3 test files created with specified test cases
+- [ ] Tests are fast (<5s total for new tests)
+</verification>
+
+<success_criteria>
+
+- All 3 test files created and passing
+- ~18 total test cases covering P&L, store, and message parsing
+- No WebSocket or NATS mocking (per constraints)
+- Tests follow existing project patterns
+- TypeScript compiles without errors
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/05-unit-tests/05-01-SUMMARY.md`:
+
+# Phase 5 Plan 1: Unit Tests Summary
+
+**[One-liner describing test coverage added]**
+
+## Performance
+
+- **Duration:** X min
+- **Tasks:** 3/3
+- **Tests added:** ~18
+
+## Accomplishments
+
+- P&L calculation tests (5 cases)
+- Store slice tests (5 cases)
+- Message parsing tests (8 cases)
+
+## Files Created
+
+- `apps/web-terminal/src/hooks/useAutopilot/pnl.test.ts`
+- `apps/web-terminal/src/store/memoryStore/slices/autopilot-store/autopilot-store.test.ts`
+- `apps/web-terminal/src/websocket/autopilot/messageParser.test.ts`
+
+## Extracted Functions
+
+[List any pure functions extracted from hooks/handlers to enable testing]
+
+## Issues Encountered
+
+[Any issues and resolutions]
+
+## Next Phase Readiness
+
+- Milestone v1.1 complete: 1/1 phases done
+- Autopilot integration fully tested
+</output>

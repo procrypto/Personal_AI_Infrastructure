@@ -1,0 +1,93 @@
+     1→# Token Analysis Autopilot - Frontend Integration
+     2→
+     3→## What This Is
+     4→
+     5→Frontend integration for the token-analysis-autopilot paper trading system. Brings the CLI's rule-based analysis and paper trading capabilities into the web-terminal dashboard widget, using existing WebSocket patterns and NATS data sources.
+     6→
+     7→## Core Value
+     8→
+     9→**Full feature parity with the CLI through the dashboard widget.** Users should be able to configure strategies, monitor positions, view signals, and track P&L without touching the command line.
+    10→
+    11→## Requirements
+    12→
+    13→### Validated
+    14→
+    15→- Rule engine with configurable strategies (CLI) — existing
+    16→- Paper trading with P&L tracking (CLI) — existing
+    17→- Rotations S/R, Magic TP/SL, Market Filter (CLI) — existing
+    18→- Auto-sources: trending, whale moves (CLI) — existing
+    19→- WebSocket server foundation in autopilot repo — existing
+    20→- Dashboard widget UI scaffold — existing (uncommitted)
+    21→- Zustand store slice for autopilot data — existing (uncommitted)
+    22→- WebSocket client extending BaseWebsocket — existing (uncommitted)
+    23→
+    24→### Active
+    25→
+    26→- [ ] Complete WebSocket message protocol (backend→frontend)
+    27→- [ ] Wire autopilot backend to serve all CLI data via WebSocket
+    28→- [ ] Connect widget to backend and display live data
+    29→- [ ] Implement all control commands (strategies, sources, filter toggles)
+    30→- [ ] Calculate real-time P&L using NATS market_data subscriptions
+    31→- [ ] Add Vite proxy config to route autopilot WebSocket
+    32→- [ ] (Stretch) Auto-start autopilot backend alongside frontend dev server
+    33→
+    34→### Out of Scope
+    35→
+    36→- LOIS/live trading integration — separate milestone after paper trading proven
+    37→- Custom rule creation in UI — use pre-built templates only, no rule builder this sprint
+    38→- Deploying autopilot backend to production — local development only
+    39→- Changes to LOIS codebase in pum3 repo — that team's responsibility
+    40→
+    41→## Context
+    42→
+    43→**Related Repositories:**
+    44→
+    45→- `github/token-analysis-autopilot/` — CLI engine, WebSocket server, rule definitions
+    46→- `github/web-terminal-frontend/feat-token-analysis-autopilot/` — this worktree
+    47→- `github/local-api/` — ClickHouse dev server, Vite proxy pattern reference
+    48→- `github/pum3/` — LOIS reference (not modifying)
+    49→- `github/web-terminal/` — data backend reference (`ai.md`)
+    50→
+    51→**Current Implementation State:**
+    52→
+    53→- CLI is fully functional with all features
+    54→- Frontend has partially-built WebSocket client, store, widget
+    55→- WebSocket server exists in autopilot repo but message protocol incomplete
+    56→- Widget UI exists but not connected to real data
+    57→
+    58→**Data Flow:**
+    59→
+    60→```
+    61→autopilot backend (WebSocket server)
+    62→    ↓ positions, signals, stats, config, strategies
+    63→frontend widget (useAutopilotSubscription)
+    64→    ↓ stores in Zustand
+    65→AutopilotWidget renders
+    66→    ↓ position mints
+    67→NATS market_data subscriptions → live prices → P&L calculation
+    68→```
+    69→
+    70→## Constraints
+    71→
+    72→- **Existing Patterns**: Must follow web-terminal's established WebSocket/store patterns
+    73→- **Vite Proxy**: Backend communication via Vite dev server proxy (like local-api)
+    74→- **NATS for Prices**: Use existing NATS market_data subscriptions for real-time prices
+    75→- **No New Dependencies**: Use what's in package.json already
+    76→
+    77→## Key Decisions
+    78→
+    79→| Decision                           | Rationale                                                           | Outcome   |
+    80→| ---------------------------------- | ------------------------------------------------------------------- | --------- |
+    81→| Paper trading only (no LOIS)       | Prove the system works before live trading                          | — Pending |
+    82→| Templates only (no custom rules)   | Reduce scope, CLI still available for power users                   | — Pending |
+    83→| Feature parity before auto-startup | More valuable to have working features than convenient startup      | — Pending |
+    84→| NATS for P&L not backend           | Leverage existing subscription infrastructure, backend stays simple | — Pending |
+    85→
+    86→---
+    87→
+    88→_Last updated: 2026-01-08 after initialization_
+    89→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,248 @@
+# Context for BONKbot
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+BONKbot is a comprehensive Solana trading bot and portfolio management platform with dual interfaces: Telegram bot and Web Terminal API. It facilitates token swaps, limit orders, auto-strategies (DCA, rebalancing), and a referral program. The system processes user trades through Jupiter and Raydium DEX integrations with Jito MEV protection.
+
+This is a TypeScript/Node.js monorepo using pnpm workspaces and Turbo for build orchestration. It serves both the Telegram bot experience and the Web Terminal frontend API.
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Backend | Node.js 22 + TypeScript | Main runtime |
+| API Framework | Express.js + Inversify DI | HTTP server with dependency injection |
+| API Spec | TSOA | OpenAPI generation from controllers |
+| Database | PostgreSQL + Kysely | User data, orders, transactions |
+| Cache | Redis | Session management, rate limiting |
+| Analytics | ClickHouse | Swap history, user metrics |
+| Messaging | NATS | Async events between services |
+| Telegram | Telegraf | Bot interface |
+| Blockchain | @solana/web3.js + Jito | Solana transactions with MEV protection |
+
+### Services
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| `bonkbot` | 8800 | Main Telegram bot + Web Terminal API |
+| `notif` | - | Async notification delivery via NATS |
+| `internal-tool-api` | - | Admin API (Fastify) |
+| `internal-tool` | 5173 | Admin dashboard (React + Express) |
+
+### Key Directories
+
+```
+bonkbot/
+├── packages/              # Shared libraries
+│   ├── commons/           # Utilities, logging, Solana helpers
+│   ├── db/                # Kysely ORM, migrations (155+)
+│   ├── data-api/          # API response structures
+│   ├── jito-ts/           # Jito gRPC integration
+│   ├── nats/              # NATS pub/sub abstraction
+│   ├── signer/            # Transaction signing client
+│   └── pnl-card-generator/ # P&L image generation
+├── servers/
+│   ├── bonkbot/           # Main service
+│   │   ├── src/api/       # REST controllers (TSOA)
+│   │   ├── src/domain/    # Business logic by domain
+│   │   └── src/infrastructure/ # External integrations
+│   ├── notif/             # Notification service
+│   └── internal-tool*/    # Admin tools
+└── deploy/                # GCP deployment scripts
+```
+
+## Capabilities
+
+### Core Features
+
+| Feature | Location | Description |
+|---------|----------|-------------|
+| Swaps | `domain/swap/` | Single/multi-swap via Jupiter, Raydium |
+| Limit Orders | `domain/limit-order/` | Background-processed limit orders |
+| Auto Strategies | `domain/auto-strat/` | DCA, rebalancing strategies |
+| Referrals | `domain/referral/` | Tiered referral with DAO payouts |
+| User Auth | `infrastructure/webauth/` | Wallet signature + email verification |
+| Portfolio | `domain/token/`, `domain/transaction/` | Balance tracking, P&L |
+
+### Data Sources
+
+| Source | Type | Access |
+|--------|------|--------|
+| PostgreSQL | Database | `packages/db/` - Kysely ORM |
+| ClickHouse | Analytics | `@clickhouse/client` - swap history |
+| Redis | Cache | Rate limiting, sessions |
+| Solana RPC | Blockchain | `@solana/web3.js` |
+| Jito BlockEngine | MEV | `packages/jito-ts/` - gRPC streams |
+
+### External Integrations
+
+| Service | Purpose | Location |
+|---------|---------|----------|
+| Jupiter | DEX routing | `infrastructure/jupiter/` |
+| Raydium | Direct pools | `infrastructure/raydium/` |
+| MoonPay | Fiat onramp | `infrastructure/moonpay/` |
+| Sendgrid | Email | Notifications |
+| Rug.Check | Token safety | Scoring |
+
+### API Endpoints
+
+Controllers in `servers/bonkbot/src/api/controllers/`:
+
+| Controller | Base Path | Purpose |
+|------------|-----------|---------|
+| `auth-controller` | `/auth` | Login, wallet verification |
+| `user-controller` | `/user` | Settings, portfolio |
+| `swap-controller` | `/swap` | Swap execution |
+| `orders-controller` | `/orders` | Limit order queries |
+| `referral-controller` | `/referral` | Referral info, rewards |
+| `signer-wallet-controller` | `/signer-wallet` | Wallet operations |
+
+### NATS Topics
+
+| Topic | Publisher | Purpose |
+|-------|-----------|---------|
+| swap-status | bonkbot | Swap completion events |
+| limit-order-* | bonkbot | Order state changes |
+| user-portfolio | bonkbot | Portfolio updates |
+| notifications | bonkbot | Notification triggers |
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- **Dependency Injection**: All services use Inversify. Bindings in `inversify.config.ts` (2000+ lines)
+- **Domain-Driven**: Business logic organized by domain (`domain/swap/`, `domain/user/`, etc.)
+- **Type Safety**: Kysely for SQL, TSOA for API, strict TypeScript
+- **Logging**: Pino structured logging throughout
+- **Error Handling**: Custom error types, proper error propagation
+
+### Common Tasks
+
+#### Local Development
+
+```bash
+# Start dependencies (Postgres, Redis)
+docker-compose up -d
+
+# Install dependencies
+pnpm install
+
+# Run migrations
+pnpm --filter @bonkbot/db kysely migrate:latest
+
+# Start bonkbot server
+pnpm --filter @bonkbot/bonkbot dev
+
+# See HOW_TO_DEV_LOCAL.md for full setup
+```
+
+#### Finding Code
+
+| Task | Location |
+|------|----------|
+| Add REST endpoint | `servers/bonkbot/src/api/controllers/` |
+| Add business logic | `servers/bonkbot/src/domain/{domain}/` |
+| Add external integration | `servers/bonkbot/src/infrastructure/` |
+| Add database migration | `packages/db/migrations/` |
+| Add shared utility | `packages/commons/` |
+| Modify DI bindings | `servers/bonkbot/src/inversify.config.ts` |
+| Add NATS topic | `packages/nats/` |
+
+#### Database Operations
+
+```bash
+# Generate migration
+pnpm --filter @bonkbot/db kysely migrate:make migration_name
+
+# Run migrations
+pnpm --filter @bonkbot/db kysely migrate:latest
+
+# Regenerate types from DB
+pnpm --filter @bonkbot/db kysely-codegen
+```
+
+### Things to Avoid
+
+- Don't modify `inversify.config.ts` without understanding the DI graph
+- Don't bypass the domain layer for direct DB access
+- Don't hardcode secrets (use GCP Secret Manager)
+- Don't skip migrations for schema changes
+- Avoid direct Telegram API calls outside `telegraf/` integration
+
+## Related Documentation
+
+**Generated Documentation:**
+- [README.md](README.md) - Project overview, setup, architecture
+- [API.md](API.md) - REST API reference with endpoint details
+- [CHANGELOG.md](CHANGELOG.md) - Version history and changes
+
+**Development Guides:**
+- [HOW_TO_DEV_LOCAL.md](HOW_TO_DEV_LOCAL.md) - Local development setup
+- [HOW_TO_I18N.md](HOW_TO_I18N.md) - Internationalization guide
+- [deploy/README.md](deploy/README.md) - Deployment procedures
+- Notion docs (linked in README) - Migrations, signer updates
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get |
+|--------|-------------|
+| Solana RPC | Blockchain state, transactions |
+| Jito BlockEngine | MEV-protected transaction submission |
+| Jupiter API | DEX routing, price quotes |
+| Signer Service | Transaction signing (via NATS) |
+
+### Downstream Consumers
+
+| System | What They Get |
+|--------|---------------|
+| Web Terminal Frontend | REST API for trading, auth, portfolio |
+| Telegram Users | Bot interface for same features |
+| Internal Tools | Admin operations, monitoring |
+| Notification Service | Events to deliver to users |
+
+### Relationship to web-terminal
+
+BONKbot is the **Web API** that powers Web Terminal:
+- Web Terminal frontend calls BONKbot's REST API
+- Shares auth model (wallet signatures, JWT tokens)
+- **web-terminal** (Rust) provides market data; **bonkbot** handles user operations
+- Both consume Solana blockchain but for different purposes
+
+### Data Flow
+
+```
+User (Telegram/Web)
+       │
+       ▼
+  BONKbot API (Express)
+       │
+       ├──▶ PostgreSQL (user data, orders)
+       ├──▶ Redis (sessions, cache)
+       ├──▶ ClickHouse (analytics)
+       │
+       ├──▶ Jupiter/Raydium (swap routing)
+       ├──▶ Solana RPC (blockchain)
+       └──▶ Jito (MEV protection)
+              │
+              ▼
+       Solana Blockchain
+```
+
+## Background Jobs
+
+Cron jobs in `domain/` and `infrastructure/`:
+
+| Job | Purpose |
+|-----|---------|
+| Fee processor | Collect platform fees |
+| Fee distributor | Distribute to stakeholders |
+| Referral processor (TG) | Process Telegram referrals |
+| Referral processor (WT) | Process Web Terminal referrals |
+| Limit order monitor | Check and execute limit orders |
+| Waitlist processor | Process waitlist entries |

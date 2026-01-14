@@ -1,0 +1,102 @@
+     1→/**
+     2→ * Price Change Rule
+     3→ *
+     4→ * Triggers when price changes by a threshold percentage within a timeframe.
+     5→ * Uses market data earliest_price_sol_* fields for accurate % change calculation.
+     6→ */
+     7→
+     8→import type { Rule, PriceChangeRuleConfig, Signal, AnalysisContext } from './types.js';
+     9→
+    10→export class PriceChangeRule implements Rule<PriceChangeRuleConfig> {
+    11→  constructor(public config: PriceChangeRuleConfig) {}
+    12→
+    13→  analyze(context: AnalysisContext): Signal | null {
+    14→    if (!this.config.enabled) return null;
+    15→
+    16→    const { token } = context;
+    17→    const { timeframe, threshold, direction } = this.config;
+    18→
+    19→    // Get current and earliest price for the timeframe
+    20→    const currentPrice = token.price_sol;
+    21→    const earliestPriceKey = `earliest_price_sol_${timeframe}` as keyof typeof token;
+    22→    const earliestPrice = token[earliestPriceKey] as number | undefined;
+    23→
+    24→    if (!earliestPrice || earliestPrice === 0) {
+    25→      return null; // Not enough data
+    26→    }
+    27→
+    28→    // Calculate percentage change
+    29→    const percentChange = ((currentPrice - earliestPrice) / earliestPrice) * 100;
+    30→    const absChange = Math.abs(percentChange);
+    31→
+    32→    // Check if threshold is met
+    33→    if (absChange < threshold) {
+    34→      return null; // Below threshold
+    35→    }
+    36→
+    37→    // Check direction
+    38→    const isUp = percentChange > 0;
+    39→    const isDown = percentChange < 0;
+    40→
+    41→    if (direction === 'up' && !isUp) return null;
+    42→    if (direction === 'down' && !isDown) return null;
+    43→
+    44→    // Signal strength based on how much it exceeds threshold
+    45→    const strength = Math.min(absChange / (threshold * 2), 1);
+    46→
+    47→    // Determine signal type
+    48→    let signalType: 'buy' | 'sell' | 'alert' = 'alert';
+    49→    if (this.config.type === 'buy' && isUp) signalType = 'buy';
+    50→    if (this.config.type === 'sell' && isDown) signalType = 'sell';
+    51→    if (this.config.type === 'both') {
+    52→      signalType = isUp ? 'buy' : 'sell';
+    53→    }
+    54→
+    55→    return {
+    56→      ruleId: this.config.id,
+    57→      ruleName: this.config.name,
+    58→      mint: token.mint,
+    59→      symbol: token.symbol,
+    60→      type: signalType,
+    61→      strength,
+    62→      reason: `Price ${isUp ? 'up' : 'down'} ${absChange.toFixed(2)}% in ${timeframe} (threshold: ${threshold}%)`,
+    63→      data: {
+    64→        currentPrice,
+    65→        earliestPrice,
+    66→        percentChange,
+    67→        timeframe,
+    68→        threshold,
+    69→      },
+    70→      timestamp: Date.now(),
+    71→    };
+    72→  }
+    73→}
+    74→
+    75→// Factory function for easy creation
+    76→export function createPriceChangeRule(
+    77→  id: string,
+    78→  name: string,
+    79→  options: {
+    80→    timeframe: PriceChangeRuleConfig['timeframe'];
+    81→    threshold: number;
+    82→    direction: PriceChangeRuleConfig['direction'];
+    83→    type?: 'buy' | 'sell' | 'both';
+    84→  }
+    85→): PriceChangeRule {
+    86→  return new PriceChangeRule({
+    87→    id,
+    88→    name,
+    89→    description: `Triggers when price changes ${options.threshold}% ${options.direction} in ${options.timeframe}`,
+    90→    enabled: true,
+    91→    type: options.type ?? 'both',
+    92→    ruleType: 'price_change',
+    93→    timeframe: options.timeframe,
+    94→    threshold: options.threshold,
+    95→    direction: options.direction,
+    96→  });
+    97→}
+    98→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

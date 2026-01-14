@@ -1,0 +1,53 @@
+/**
+ * useAutopilotDiscoveryTokens
+ *
+ * Gets whale moves and trending tokens from Discovery API (fast, 1s refresh)
+ * and combines with watchlist from autopilot backend.
+ *
+ * Replaces slow backend token_list for whale/trending sources.
+ * Backend token_list polling is 30s; Discovery API is 1s for whale moves.
+ */
+
+import { useMemo } from "react";
+import { useWhaleMoves } from "@/api/discovery/useWhaleMoves";
+import { useTrendingList } from "@/api/discovery/useTrendingList";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type {
+  AutopilotWatchedToken,
+  AutopilotTokenList,
+} from "@/store/memoryStore/slices/autopilot-store/types";
+
+export const useAutopilotDiscoveryTokens = (): AutopilotTokenList => {
+  // Fast Discovery API data (1s refresh for whales)
+  const { data: whaleMoves } = useWhaleMoves();
+  const { data: trendingTokens } = useTrendingList(true);
+
+  // Watchlist still comes from backend (user-added tokens)
+  const watchlistFromStore = useGlobalStore(
+    useShallow(state => state.autopilot.tokenList.watchlist)
+  );
+
+  // Transform whale moves to AutopilotWatchedToken
+  const whales = useMemo((): AutopilotWatchedToken[] => {
+    return whaleMoves.map(whale => ({
+      mint: whale.mint,
+      symbol: whale.token_symbol,
+      source: "whales" as const,
+    }));
+  }, [whaleMoves]);
+
+  // Transform trending to AutopilotWatchedToken
+  const trending = useMemo((): AutopilotWatchedToken[] => {
+    return trendingTokens.map(token => ({
+      mint: token.mint,
+      symbol: token.symbol,
+      source: "trending" as const,
+    }));
+  }, [trendingTokens]);
+
+  return {
+    watchlist: watchlistFromStore,
+    trending,
+    whales,
+  };
+};

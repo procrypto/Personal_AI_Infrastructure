@@ -1,0 +1,121 @@
+/**
+ * Local API Server
+ *
+ * ⚠️  WARNING: This service fetches PRODUCTION ClickHouse data into your local environment.
+ * Treat all responses as sensitive. Do not share outputs publicly.
+ *
+ * Run: bun dev
+ */
+
+import { Elysia } from "elysia";
+import { assertConfig, config } from "./config";
+import { readFile } from "fs/promises";
+import { join } from "path";
+import { registerTradesBackfillRoutes } from "./endpoints/generic/trades_backfill";
+import { registerTradesRoutes } from "./endpoints/generic/trades";
+import { registerWalletTrackerRoutes } from "./endpoints/generic/wallet_tracker";
+import { registerHoldersStatsRoutes } from "./endpoints/generic/holders_stats";
+import { registerHoldersStatsBatchRoutes } from "./endpoints/generic/holders_stats_batch";
+import { registerTradersStatsRoutes } from "./endpoints/generic/traders_stats";
+import { registerSearchTokenRoutes } from "./endpoints/generic/search_token";
+import { registerSearchTextRoutes } from "./endpoints/generic/search_text";
+import { registerOHLCVRoutes } from "./endpoints/generic/ohlcv";
+import { registerHolderStatsRoutes } from "./endpoints/generic/holder_stats";
+import { registerWhaleMovesRoutes } from "./endpoints/generic/discovery_whale_moves";
+import { registerTrendingRoutes } from "./endpoints/generic/discovery_trending";
+import { registerWalletFundingRoutes } from "./endpoints/generic/wallet_funding";
+import { registerMultiWalletFamiliesRoutes } from "./endpoints/generic/multi_wallet_families";
+import { registerTokenMarketDataRoutes } from "./endpoints/generic/token_market_data";
+import { registerExtensionRegistry } from "./extensions/registry";
+import { registerExtensionRoutes } from "./extensions/register";
+
+// Validate credentials on startup
+assertConfig();
+
+// Import custom endpoints here (optional, user-defined)
+// import { registerMyCustomRoutes } from "./endpoints/custom/my_endpoint";
+
+const app = new Elysia();
+
+// Health check
+app.get("/health", () => ({ ok: true, warning: "This API fetches PRODUCTION data" }));
+
+// Register generic endpoints
+registerTradesBackfillRoutes(app);
+registerTradesRoutes(app);
+registerWalletTrackerRoutes(app);
+registerHoldersStatsRoutes(app);
+registerHoldersStatsBatchRoutes(app);
+registerTradersStatsRoutes(app);
+registerSearchTokenRoutes(app);
+registerSearchTextRoutes(app);
+registerOHLCVRoutes(app);
+registerHolderStatsRoutes(app);
+registerWhaleMovesRoutes(app);
+registerTrendingRoutes(app);
+registerWalletFundingRoutes(app);
+registerMultiWalletFamiliesRoutes(app);
+registerTokenMarketDataRoutes(app);
+
+// Register extension registry and routes (always enabled)
+registerExtensionRegistry(app);
+registerExtensionRoutes(app);
+
+// Register custom endpoints here (optional)
+// registerMyCustomRoutes(app);
+
+// Serve static files from public/ directory (for smoke.html)
+app.get("/smoke.html", async () => {
+    try {
+        const filePath = join(process.cwd(), "public", "smoke.html");
+        const content = await readFile(filePath);
+        return new Response(content, {
+            headers: { "Content-Type": "text/html" },
+        });
+    } catch {
+        return new Response("smoke.html not found", { status: 404 });
+    }
+});
+
+const PORT = config.port;
+
+app.listen(PORT);
+
+console.log(`
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  ⚠️  LOCAL API — PRODUCTION DATA ACCESS                                      ║
+║                                                                              ║
+║  This service fetches REAL production ClickHouse data.                       ║
+║  • Treat responses as SENSITIVE                                              ║
+║  • Do NOT paste outputs into public channels                                 ║
+║  • Keep strict limits to avoid expensive queries                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Listening on http://localhost:${PORT}
+
+Endpoints:
+  GET  /health                                — Health check
+  POST /local-api/labs/wallet_trades_snapshot — Wallet trades snapshot (labs)
+  GET  /local-api/trades/:mint                — Trade history for a token
+  GET  /local-api/wallet_tracker/trades       — Trades for tracked wallets
+  GET  /local-api/wallet_tracker/summary_all  — Aggregated summary for wallets
+  GET  /local-api/wallet_tracker/summary_all_v2— Aggregated summary v2 (trimmed token_image)
+  GET  /local-api/holders_stats/:mint         — Top 100 holders for a token
+  POST /local-api/labs/holders_stats_batch    — Batch holders for multiple mints (max 50)
+  GET  /local-api/traders_stats/:mint         — Top 100 profitable traders
+  GET  /local-api/search                      — Text-based token search
+  GET  /local-api/search/:mint                — Token lookup by mint
+  GET  /local-api/discovery/whale_moves       — Whale moves (24h window)
+  GET  /local-api/discovery/trending          — Trending tokens list
+  GET  /local-api/ext/registry                — Extension registry (always on)
+  GET  /local-api/ext/search/:mint            — Extension: token lookup + ext payload
+  GET  /local-api/ohlcv/pool/:pool/:range     — Pool OHLCV candlestick data
+  GET  /local-api/ohlcv/token/:mint/:range    — Token OHLCV candlestick data
+  GET  /local-api/holder_stats/:mint/:address — Holder stats for wallet on token
+  GET  /local-api/wallet_funding/:address     — Wallet funding sources
+  GET  /local-api/multi-wallet-families/:mint — Multi-wallet family detection
+  GET  /local-api/market_data/:mint           — Token market data (single)
+  GET  /local-api/market_data_batch           — Token market data (batch, max 100)
+
+`);
+

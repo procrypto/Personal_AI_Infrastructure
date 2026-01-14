@@ -1,0 +1,127 @@
+---
+phase: 10-data-flow-fixes
+plan: 01
+subsystem: data-flow
+tags: [nats, websocket, real-time, hooks]
+
+# Dependency graph
+requires:
+  - phase: 09-data-flow-investigation
+    provides: Root cause analysis and hybrid architecture decision
+  - phase: 03-controls-and-pnl
+    provides: Position P&L calculation pattern via NATS
+provides:
+  - Live token price enrichment via NATS subscriptions
+  - Real-time totalPnlSol computed from position data
+  - Live SOL price change percentage for market status
+affects: [11-design-system-alignment]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - "NATS subscription for tokenList mints (parallel to position subscriptions)"
+    - "Derived stats pattern: compute display values from live data"
+
+key-files:
+  created:
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts
+  modified:
+    - apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts
+    - apps/web-terminal/src/hooks/useAutopilot/index.ts
+
+key-decisions:
+  - "Extend existing NATS subscription pattern rather than creating new infrastructure"
+  - "Derive totalPnlSol from live position data rather than backend stats"
+  - "Track SOL price change since widget opened (not 24h change - would need historical data)"
+  - "Use undefined instead of null for optional price fields to match base interface"
+
+patterns-established:
+  - "Derived stats: Spread backend stats and override computed fields"
+  - "Derived market status: Spread backend status and override computed fields"
+
+issues-created: []
+
+# Metrics
+duration: 8min
+completed: 2026-01-08
+---
+
+# Phase 10 Plan 01: Data Flow Fixes Summary
+
+**Hybrid NATS enrichment for live token prices, derived stats P&L from positions, and SOL price change tracking for market status**
+
+## Performance
+
+- **Duration:** 8 min
+- **Started:** 2026-01-08T21:06:25Z
+- **Completed:** 2026-01-08T21:14:03Z
+- **Tasks:** 3
+- **Files modified:** 5
+
+## Accomplishments
+
+- Extended NATS subscriptions to tokenList mints (watchlist, trending, whales)
+- Created `useAutopilotTokensWithPrices` hook for live token price enrichment
+- Computed `totalPnlSol` in real-time from position P&L values
+- Added SOL price change tracking from NATS data for market status
+- Fixed type handling for market data prices (number vs string)
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Extend NATS subscriptions for tokenList mints** - `68676e115` (feat)
+2. **Task 2: Calculate derived totalPnlSol from positions** - `b5b10a92d` (feat)
+3. **Task 3: Track SOL price change for market status** - `963c18d5f` (feat)
+4. **Type fixes for market data prices** - `461c97f5a` (fix)
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts` - New hook for enriching tokens with NATS price data
+- `apps/web-terminal/src/hooks/useSubscriptions/useAutopilotSubscription.ts` - Extended to subscribe NATS for tokenList mints
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotData.ts` - Added derived stats and market status with live calculations
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotPositions.ts` - Fixed type handling for price_sol as number
+- `apps/web-terminal/src/hooks/useAutopilot/index.ts` - Exported new hook and types
+
+## Decisions Made
+
+- **Pattern Extension**: Extended existing NATS subscription pattern from positions to tokenList rather than creating new infrastructure
+- **Derived Stats**: Spread backend stats object and override `totalPnlSol` with computed value from positions
+- **SOL Price Change**: Shows change since widget opened (not true 24h change - would need historical price data from backend)
+- **Type Compatibility**: Used `undefined` instead of `null` for optional fields to match `AutopilotWatchedToken` base interface
+
+## Deviations from Plan
+
+### Auto-fixed Issues
+
+**1. [Rule 3 - Blocking] Fixed type errors in price handling**
+
+- **Found during:** Verification (typecheck)
+- **Issue:** `price_sol` is typed as `number` in `TokenMarketData` but code was calling `parseFloat()` on it; `solanaPrice.usd` is stored as `string` but code treated it as number
+- **Fix:** Removed parseFloat for price_sol, added parseFloat for solanaPrice.usd, used typeof checks
+- **Files modified:** useAutopilotData.ts, useAutopilotPositions.ts, useAutopilotTokensWithPrices.ts
+- **Verification:** typecheck passes for autopilot hooks
+- **Committed in:** `461c97f5a`
+
+---
+
+**Total deviations:** 1 auto-fixed (blocking type error)
+**Impact on plan:** Type fix necessary for code to compile. No scope creep.
+
+## Issues Encountered
+
+None.
+
+## Next Phase Readiness
+
+- All three display issues addressed with hybrid NATS enrichment
+- Autopilot-specific tests pass (5/5)
+- Ready for Phase 11: Design System Alignment
+
+---
+
+_Phase: 10-data-flow-fixes_
+_Completed: 2026-01-08_

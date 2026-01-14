@@ -1,0 +1,214 @@
+# LOIS Integration Guide
+
+> **For PUM3 Team Reference**
+>
+> This guide consolidates all LOIS integration documentation from the autopilot frontend implementation. It provides the information needed to add live trading support via LOIS.
+
+## Overview
+
+The token-analysis-autopilot system currently operates in **paper trading mode only**. This guide documents the integration points, data format differences, and implementation steps required to enable live trading via LOIS.
+
+**Current Architecture:**
+
+```
+autopilot backend (paper trading)
+    ↓ WebSocket (positions, signals, stats, config)
+frontend widget (Zustand store)
+    ↓ position mints
+NATS market_data → live prices → P&L calculation
+```
+
+**Future Architecture (with LOIS):**
+
+```
+autopilot backend (mode: live)
+    ↓ WebSocket (signals with confidence)
+LOIS execution engine
+    ↓ order execution
+Solana blockchain
+    ↓ transaction confirmations
+frontend widget (real positions, fills, txs)
+```
+
+## Type Compatibility
+
+All frontend types have LOIS compatibility markers. Here's the summary:
+
+| Type                   | LOIS Compatible | Notes                                         |
+| ---------------------- | --------------- | --------------------------------------------- |
+| AutopilotPositionEntry | Partial         | Needs: txSignature, fillPrice, fillStatus     |
+| AutopilotSignal        | Partial         | Needs: confidence, urgency, slippageTolerance |
+| AutopilotMarketStatus  | Yes             | Risk gates work for paper and live            |
+| AutopilotStats         | Yes             | Aggregate stats identical                     |
+| AutopilotConfig        | Partial         | Needs: walletAddress, rpcEndpoint, slippage   |
+| AutopilotStrategy      | Yes             | Strategy templates are execution-agnostic     |
+| AutopilotStrategies    | Yes             | Strategy state is execution-agnostic          |
+| AutopilotWatchedToken  | Yes             | Token discovery identical                     |
+
+**Source files:**
+
+- `types.ts` - All type definitions with LOIS COMPATIBLE markers
+- `websocket-server.ts` (backend) - Backend type definitions
+
+## Integration Points
+
+The following locations in the codebase would need modification for LOIS integration:
+
+### connectAutopilotWebsocket.ts
+
+```typescript
+// LOIS INTEGRATION POINT: Position entries would include txSignature, fillStatus for live trades
+case "position_update":
+  // Convert BackendPositionData to AutopilotPositionEntry
+  // For live: would include execution metadata
+
+// LOIS INTEGRATION POINT: Signals would trigger TriggerEvent dispatch to LOIS execution engine
+case "signal":
+  // For live: route signal to LOIS with confidence/urgency
+
+// LOIS INTEGRATION POINT: DUMP state would trigger emergency exit via LOIS
+case "market_status":
+  // For live: market_status.exitAll would send LOIS exit orders
+
+// LOIS INTEGRATION POINT: mode="live" would enable LOIS execution pipeline
+case "config":
+  // For live: config.mode === "live" activates LOIS routing
+```
+
+### New Event Types Needed
+
+For live trading, add these event types to the WebSocket protocol:
+
+```typescript
+| { type: 'order_submitted'; order: OrderData }
+| { type: 'order_filled'; fill: FillData }
+| { type: 'order_failed'; error: OrderErrorData }
+```
+
+## Data Format Differences
+
+When integrating with LOIS, handle these format conversions at the WebSocket boundary:
+
+### 1. Field Naming Convention
+
+- **Autopilot:** camelCase (`entryPriceSol`, `positionSizeSol`)
+- **LOIS:** snake_case (`entry_price_sol`, `position_size_sol`)
+
+### 2. Price Format
+
+- **Autopilot:** JavaScript number (`0.00001234`)
+- **LOIS:** DecimalString (`"0.00001234"`)
+- **Conversion:** `parseFloat()` / `toString()`
+
+### 3. Timestamp Format
+
+- **Autopilot:** Unix milliseconds (`1704067200000`)
+- **LOIS:** ISO 8601 string (`"2024-01-01T00:00:00.000Z"`)
+- **Conversion:** `new Date(ts).toISOString()` / `Date.parse(iso)`
+
+### 4. Wallet Address
+
+- **Autopilot:** Not present (paper trading)
+- **LOIS:** Base58-encoded Solana pubkey string
+
+### 5. Position Fields
+
+| Field           | Autopilot (Paper) | LOIS (Live)        |
+| --------------- | ----------------- | ------------------ |
+| mint            | ✓                 | ✓                  |
+| symbol          | ✓                 | ✓                  |
+| entryPriceSol   | ✓ (simulated)     | ✓ (actual fill)    |
+| positionSizeSol | ✓                 | ✓                  |
+| entryTime       | ✓                 | ✓                  |
+| txSignature     | ✗                 | ✓ (Solana tx hash) |
+| fillPrice       | ✗                 | ✓ (actual fill)    |
+| fillStatus      | ✗                 | ✓ (pending/filled) |
+| orderId         | ✗                 | ✓ (LOIS order ID)  |
+
+## Signal Type Mapping
+
+Autopilot signal types map to LOIS TriggerEvent as follows:
+
+| Autopilot signalType | LOIS TriggerEvent      | Action          |
+| -------------------- | ---------------------- | --------------- |
+| `magic_buy`          | `ENTRY_SIGNAL`         | Open position   |
+| `magic_exit`         | `EXIT_SIGNAL`          | Close position  |
+| `dump_exit`          | `EXIT_SIGNAL` (urgent) | Emergency close |
+| `rule_signal`        | `STRATEGY_MATCH`       | Strategy fired  |
+
+## Implementation Checklist
+
+### Phase 1: Type Extensions
+
+- [ ] Add execution fields to `AutopilotPositionEntry`
+- [ ] Add confidence/urgency to `AutopilotSignal`
+- [ ] Add wallet config to `AutopilotConfig`
+- [ ] Create `OrderData`, `FillData`, `OrderErrorData` types
+
+### Phase 2: Backend Changes
+
+- [ ] Update websocket-server.ts with live mode path
+- [ ] Implement LOIS client in autopilot backend
+- [ ] Add order lifecycle event broadcasts
+- [ ] Handle transaction confirmations
+
+### Phase 3: Frontend Changes
+
+- [ ] Create `lois-adapter.ts` for format conversion
+- [ ] Update store to handle order events
+- [ ] Add transaction status indicators to widget
+- [ ] Update P&L calculation for live fills
+
+### Phase 4: Testing
+
+- [ ] Paper mode regression testing
+- [ ] Live mode integration testing (testnet)
+- [ ] Error handling verification
+- [ ] Emergency exit verification
+
+## Recommended Integration Pattern
+
+Create a dedicated adapter module to handle LOIS format conversions:
+
+```typescript
+// lois-adapter.ts
+
+export function toLoisFormat(
+  autopilotData: AutopilotPositionEntry
+): LoisPosition {
+  return {
+    mint: autopilotData.mint,
+    symbol: autopilotData.symbol,
+    entry_price_sol: autopilotData.entryPriceSol.toString(),
+    position_size_sol: autopilotData.positionSizeSol.toString(),
+    entry_time: new Date(autopilotData.entryTime).toISOString(),
+  };
+}
+
+export function fromLoisFormat(loisData: LoisPosition): AutopilotPositionEntry {
+  return {
+    mint: loisData.mint,
+    symbol: loisData.symbol,
+    entryPriceSol: parseFloat(loisData.entry_price_sol),
+    positionSizeSol: parseFloat(loisData.position_size_sol),
+    entryTime: Date.parse(loisData.entry_time),
+  };
+}
+```
+
+**Key principle:** Keep autopilot types unchanged to maintain backward compatibility with paper mode. All LOIS-specific conversions happen at the adapter boundary.
+
+## Reference Files
+
+| File                            | Contains                                  |
+| ------------------------------- | ----------------------------------------- |
+| `types.ts`                      | All frontend type definitions             |
+| `connectAutopilotWebsocket.ts`  | WebSocket handler with integration points |
+| `websocket-server.ts` (backend) | Backend type definitions                  |
+| `useAutopilotPositions.ts`      | P&L calculation (unchanged for live)      |
+| `useAutopilotSubscription.ts`   | NATS subscription management              |
+
+---
+
+_Consolidated from Phases 1-4 of the Autopilot Frontend Integration milestone_
+_Last updated: 2026-01-08_

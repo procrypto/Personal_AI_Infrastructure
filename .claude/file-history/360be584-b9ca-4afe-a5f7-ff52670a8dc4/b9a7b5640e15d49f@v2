@@ -1,0 +1,403 @@
+# Knowledge Registry
+
+Central index of all mapped systems in the organizational technical memory.
+
+**Last Updated**: 2026-01-13
+
+---
+
+## Systems
+
+### web-terminal
+- **Path**: `~/Documents/BONKbot/github/web-terminal`
+- **Type**: Backend Service (Rust)
+- **Production**: Yes
+- **ai.md**: Yes (committed)
+- **context.md**: Yes
+- **Status**: Complete
+- **Last Discovered**: 2025-01-10 (pre-existing)
+- **Quality**: Excellent
+- **Primary Purpose**: Real-time cryptocurrency market data backend
+- **Key Interfaces**: REST `/data`, WebSocket, NATS messaging
+- **Notes**: Well-documented with comprehensive BACKEND_API_AND_DATA.md. Created by engineer with AI expertise. Use as reference for documentation quality.
+
+### bonkbot
+- **Path**: `~/Documents/BONKbot/github/bonkbot`
+- **Type**: Backend Service (TypeScript/Node.js)
+- **Production**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: Telegram bot + Web Terminal API (user operations, trading)
+- **Key Interfaces**: REST `/v1` (port 8800), NATS messaging, Telegram Bot API
+- **Notes**: This IS the "web-api" - powers Web Terminal frontend. Monorepo with shared packages. Inversify DI, TSOA OpenAPI, Kysely ORM.
+
+### web-terminal-frontend
+- **Path**: `~/Documents/BONKbot/github/web-terminal-frontend/main-ui`
+- **Type**: Frontend (React/TypeScript)
+- **Production**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: User-facing trading platform UI
+- **Key Interfaces**: Consumes `/v1` (bonkbot) + `/data` (web-terminal) + WebSocket
+- **Notes**: Turborepo monorepo. React 19, TanStack Router, Zustand (24 slices). Uses git worktrees (main-ui = prod). Has good internal docs in docs/ folder.
+
+---
+
+### pum3
+- **Path**: `~/Documents/BONKbot/github/pum3`
+- **Type**: Backend Service (Rust)
+- **Production**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: Real-time Solana state cache, price publishing, swap orchestration
+- **Key Interfaces**: NATS `pum3.pricing`, REST API (`/price`, `/quote`, `/build-transaction`)
+- **Notes**: 26-crate Cargo workspace. Supports 17 DEXes. Regional deployment (EU primary, US/AP publishers). LOIS for limit orders. THE bridge between Geyser and web-terminal.
+
+---
+
+### geyser-geezer
+- **Path**: `~/Documents/BONKbot/github/geyser-geezer`
+- **Type**: Backend Service (Rust)
+- **Production**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: Geyser stream ingestion, filtering, deduplication
+- **Key Interfaces**: Yellowstone gRPC (in), NATS `input_*_deduped.*` (out)
+- **Notes**: Entry point for ALL blockchain data. Two binaries: geezer (stream) + tracker (dedup). Multiple instances per provider for redundancy. Measures provider latency.
+
+---
+
+### wasm-validator
+- **Path**: `~/Documents/BONKbot/github/wasm-validator`
+- **Type**: Transaction Validator (Rust/WASM)
+- **Production**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: WASM-based Solana transaction validation before DEX execution
+- **Key Interfaces**: WASM FFI (lookup/result), 19 DEX program parsers
+- **Notes**: Critical security layer. Validates fees, destinations, amounts. Supports Jupiter, Raydium, Meteora, Orca, PumpFun, etc. tarquin-the-brave leads development.
+
+---
+
+### analytics-dataform
+- **Path**: `~/Documents/BONKbot/github/analytics-dataform`
+- **Type**: Data Pipeline (Dataform/BigQuery)
+- **Production**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Excellent
+- **Primary Purpose**: ELT pipeline for trading analytics (user metrics, referrals, leaderboards)
+- **Key Interfaces**: BigQuery, Cloud SQL Postgres (EXTERNAL_QUERY), Looker
+- **Notes**: Victor's data team. 37+ tables. SCD Type 2 user dimension. Recursive 3-level referral networks. Powers Looker dashboards and Web Terminal VIP status.
+
+---
+
+### analytics_clickhouse
+- **Path**: `~/Documents/BONKbot/github/analytics_clickhouse`
+- **Type**: Data Pipeline (dbt/ClickHouse)
+- **Production**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: Token market analytics with trending scores and honeypot detection
+- **Key Interfaces**: ClickHouse, dbt, materializer_token_market_data source
+- **Notes**: Victor's data team. Multi-timeframe aggregates (5m/1h/6h/24h). Z-score normalization. Trending score calculation. Powers token discovery.
+
+---
+
+## Internal Tools
+
+*Systems that support production but aren't in the user-facing critical path.*
+
+### local-api
+- **Path**: `~/Documents/BONKbot/github/local-api`
+- **Type**: Development Tool (TypeScript/Bun)
+- **Production**: No
+- **Supports**: web-terminal-frontend (local development data source)
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Complete
+- **Last Discovered**: 2026-01-13
+- **Quality**: Good
+- **Primary Purpose**: ClickHouse-backed REST API for local development
+- **Key Interfaces**: REST endpoints mirroring production API, Labs endpoints, Extensions
+- **Notes**: Fetches PRODUCTION ClickHouse data for local testing. Elysia framework. 20+ endpoints. Extension system with cost tracking. Supports Tailscale Serve for network deployment.
+
+---
+
+### web-terminal-frontend-tests
+- **Path**: `~/Documents/BONKbot/github/web-terminal-frontend-tests`
+- **Type**: Test Automation (TypeScript/Playwright)
+- **Production**: No
+- **Supports**: web-terminal-frontend
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Excellent
+- **Primary Purpose**: E2E test automation for web-terminal-frontend
+- **Key Interfaces**: Playwright, Mailosaur, Claude AI (assertions)
+- **Notes**: QA team's automation repo. Features AI-powered visual assertions via Claude (assertAI). WebAuthn/passkey automation. Multi-environment support (staging/prod/develop/preview). GitHub Actions CI with Slack notifications.
+
+---
+
+### team-skills
+- **Path**: `~/Documents/BONKbot/github/team-skills`
+- **Type**: Claude Code Skills (TypeScript/Markdown)
+- **Production**: No
+- **Supports**: all systems (developer tooling)
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Excellent
+- **Primary Purpose**: Shared Claude Code skills for BonkBot team
+- **Key Interfaces**: Claude Code skill system, `make install`
+- **Notes**: Created by Victor (vem), senior data expert. 5 skills: telemetry-judge (7 failure modes for quality evaluation), telemetry-webapp-screenshot (Playwright capture), mermaid-architecture, adr, telemetry-bootstrap. Judge skill similar to PAI's JudgeGate pattern.
+
+---
+
+### bonkbot-mcp-server
+- **Path**: `~/Documents/BONKbot/github/bonkbot-mcp-server`
+- **Type**: MCP Server (TypeScript/Bun)
+- **Production**: No
+- **Supports**: bonkbot
+- **Experimental**: Yes
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Excellent
+- **Primary Purpose**: MCP server for AI-powered trading via Claude
+- **Key Interfaces**: MCP stdio transport, bonkbot REST `/v1`
+- **Notes**: Created by Eli Krenzke. 15 tools for auth, trading, portfolio. Potential product direction - enables natural language trading commands. Uses Playwright for Telegram+Passkey browser auth. Destructive tools: buy, sell, limit_order.
+
+---
+
+### bonkbot-dashboard
+- **Path**: `~/Documents/BONKbot/github/bonkbot-dashboard`
+- **Type**: Internal Tool (Next.js/Fastify)
+- **Production**: No
+- **Supports**: bonkbot
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: Admin UI for managing users, DAOs, notifications, referrals
+- **Key Interfaces**: PostgreSQL, Solana RPC, Jupiter API, Google Cloud Secrets
+- **Notes**: Internal ops dashboard. Manages VIP status, referral codes, early access, partnership tiers, DAO creators, broadcast notifications. Deployed on GCP VMs (europe-west4-c). sentilesdal and fabicorp main contributors.
+
+---
+
+### ceremony
+- **Path**: `~/Documents/BONKbot/github/ceremony`
+- **Type**: Internal Tool (React/Vercel)
+- **Production**: No
+- **Supports**: none (human coordination only)
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Excellent
+- **Primary Purpose**: Human coordination UI for weekly release ceremonies
+- **Key Interfaces**: Vercel KV/Blob, Linear SDK, single-file React app
+- **Notes**: Tracks deployment steps and timing across 5 workstreams. No programmatic integration with production systems - purely human coordination. Real-time tracking, Linear integration. 8 detailed docs in docs/ folder. procrypto leads.
+
+---
+
+### nanochat-data-pipeline
+- **Path**: `~/Documents/BONKbot/github/nanochat-data-pipeline`
+- **Type**: ML Pipeline (Python/Claude API)
+- **Production**: No
+- **Supports**: analytics-dataform, analytics_clickhouse (training data source)
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Excellent
+- **Primary Purpose**: Training data extraction for custom LLM fine-tuning
+- **Key Interfaces**: Claude API, HuggingFace Hub, ClickHouse, BigQuery, Slack API
+- **Notes**: Victor's ML tooling. Extracts Q&A from SQL logs, code repos, Slack, Notion. 2,770 examples currently, target 40k. Feeds nanochat-deploy. Has comprehensive CLAUDE.md.
+
+---
+
+### nanochat-deploy
+- **Path**: `~/Documents/BONKbot/github/nanochat-deploy`
+- **Type**: Infrastructure (Terraform/GCP)
+- **Production**: No
+- **Supports**: nanochat-data-pipeline (deployment target)
+- **ai.md**: Yes (untracked)
+- **context.md**: Yes
+- **Status**: Documented (pending commit)
+- **Last Discovered**: 2026-01-10
+- **Quality**: Good
+- **Primary Purpose**: GCP deployment for internal SQL assistant
+- **Key Interfaces**: Terraform, GCE (T4/A100 GPU), Identity-Aware Proxy
+- **Notes**: Hosts fine-tuned NanoChat model for internal analyst queries. Cost $150-1500/mo depending on GPU config.
+
+---
+
+## Unmapped Systems
+
+*Systems known to exist but not yet documented:*
+
+| System | Path | Priority | Notes |
+|--------|------|----------|-------|
+| architecture-hub | Remote (BonkBotTeam) | Low | Architecture docs (futurekarol) |
+| ferris-the-sentinel | Remote (BonkBotTeam) | Low | Rust monitoring tool |
+
+## Excluded (Experimental/Unrelated/Third-Party)
+
+| System | Notes |
+|--------|-------|
+| bonkbot-rust | Founder's hackathon project - experimental Rust port of bonkbot. Not production. |
+| bonkbot-rs | Hackathon project (marked in repo description) |
+| tradingview | Unrelated to Telemetry's TradingView integration |
+| nanochat | Third-party fork (karpathy/nanochat → victoremnm → BonkBotTeam) |
+
+---
+
+## Quick Reference
+
+### Production Systems
+
+| System | Purpose | Key Interface | Quality |
+|--------|---------|---------------|---------|
+| geyser-geezer | Blockchain ingestion | Geyser gRPC → NATS | Good |
+| pum3 | Price/swap engine | NATS, REST API | Good |
+| web-terminal | Market data | WS, REST `/data`, NATS | Excellent |
+| bonkbot | User operations | REST `/v1`, NATS, TG | Good |
+| web-terminal-frontend | Trading UI | React app | Good |
+| wasm-validator | Transaction validation | WASM FFI, 19 DEX parsers | Good |
+| analytics-dataform | Trading analytics | Dataform, BigQuery | Excellent |
+| analytics_clickhouse | Token trending | dbt, ClickHouse | Good |
+
+### Internal Tools
+
+| System | Purpose | Supports | Quality |
+|--------|---------|----------|---------|
+| local-api | ClickHouse dev API | web-terminal-frontend | Good |
+| web-terminal-frontend-tests | E2E automation | web-terminal-frontend | Excellent |
+| team-skills | Claude Code skills | all systems | Excellent |
+| bonkbot-mcp-server | AI trading (experimental) | bonkbot | Excellent |
+| bonkbot-dashboard | Admin/ops UI | bonkbot | Good |
+| ceremony | Release coordination | none (human only) | Excellent |
+| nanochat-data-pipeline | ML training data | analytics pipelines | Good |
+| nanochat-deploy | ML model hosting | nanochat-data-pipeline | Good |
+
+---
+
+## System Relationships
+
+### High-Level Architecture
+
+```
+                         Solana Blockchain
+                                │
+              ┌─────────────────┼─────────────────┐
+              ▼                 ▼                 ▼
+           Geyser           Jito RPC         Solana RPC
+              │                 │                 │
+              ▼                 │                 │
+       geyser-geezer            │                 │
+              │                 │                 │
+              ▼                 │                 │
+            pum3                │                 │
+              │                 │                 │
+              ▼                 ▼                 ▼
+       web-terminal ◄───────────┴────────► bonkbot
+        (market data)                    (user ops)
+              │                              │
+              │         REST /data           │ REST /v1
+              │         WebSocket            │
+              │                              │
+              └──────────┬───────────────────┘
+                         ▼
+              web-terminal-frontend
+                         │
+                         ▼
+                      Users
+```
+
+### Data Flow Summary
+
+| Flow | Source → Destination | Interface |
+|------|---------------------|-----------|
+| Blockchain events | Geyser → geyser-geezer → pum3 | gRPC, NATS |
+| Market data | pum3 → web-terminal | NATS |
+| Real-time prices | web-terminal → frontend | WebSocket |
+| Historical data | web-terminal → frontend | REST `/data` |
+| User auth | frontend → bonkbot | REST `/v1` |
+| Swap execution | frontend → bonkbot → Solana | REST, RPC |
+| Trade updates | bonkbot → frontend | NATS → WS |
+
+### Internal Tool Dependencies
+
+```
+    team-skills ──────► [All engineers]
+
+    bonkbot-mcp-server ──► bonkbot (API integration)
+
+    bonkbot-dashboard ──► bonkbot (admin/ops UI)
+
+    web-terminal-frontend-tests ──► web-terminal-frontend (E2E tests)
+
+    nanochat-data-pipeline ──► nanochat-deploy
+           │
+           ▼
+    [Extracts from: analytics-dataform, analytics_clickhouse, Slack]
+
+    ceremony ──► [No system dependencies - human coordination only]
+```
+
+---
+
+## Cross-System Maps
+
+| Map | Last Updated | Status |
+|-----|--------------|--------|
+| data-flows.md | 2025-01-10 | Created |
+| dependencies.md | - | Not yet created |
+| interfaces.md | - | Not yet created |
+
+---
+
+## Registry Maintenance
+
+### Adding a System
+1. Run `Discover` workflow on the repo
+2. Entry is automatically added here
+3. Set `Production: Yes/No` based on whether it's in user-facing critical path
+4. If `Production: No`, add `Supports:` field listing production systems it affects
+5. Cross-system maps updated if connections found
+
+### Quality Ratings
+- **Excellent**: Complete ai.md, all sections filled, cross-system context documented
+- **Good**: ai.md exists with most sections, minor gaps
+- **Needs Update**: ai.md exists but stale or missing sections
+- **Not Mapped**: No ai.md, needs Discover workflow
+
+### Refresh Schedule
+- Re-run Discover after significant codebase changes
+- Review registry monthly for staleness
+- Update cross-system maps when integrations change

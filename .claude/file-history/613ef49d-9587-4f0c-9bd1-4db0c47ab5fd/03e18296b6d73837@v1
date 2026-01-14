@@ -1,0 +1,105 @@
+/**
+ * Buy/Sell Ratio Rule
+ *
+ * Triggers when the ratio of buy to sell activity exceeds a threshold.
+ * Can look at volume or transaction count.
+ */
+
+import type { Rule, BuySellRatioRuleConfig, Signal, AnalysisContext } from './types.js';
+
+export class BuySellRatioRule implements Rule<BuySellRatioRuleConfig> {
+  constructor(public config: BuySellRatioRuleConfig) {}
+
+  analyze(context: AnalysisContext): Signal | null {
+    if (!this.config.enabled) return null;
+
+    const { token } = context;
+    const { timeframe, minRatio } = this.config;
+
+    // Get buy/sell volumes for timeframe
+    const buyVolumeKey = `buy_volume_sol_${timeframe}` as keyof typeof token;
+    const sellVolumeKey = `sell_volume_sol_${timeframe}` as keyof typeof token;
+    const buysKey = `buys_${timeframe}` as keyof typeof token;
+    const sellsKey = `sells_${timeframe}` as keyof typeof token;
+
+    const buyVolume = (token[buyVolumeKey] as number) ?? 0;
+    const sellVolume = (token[sellVolumeKey] as number) ?? 0;
+    const buys = (token[buysKey] as number) ?? 0;
+    const sells = (token[sellsKey] as number) ?? 0;
+
+    if (buyVolume === 0 && sellVolume === 0) {
+      return null; // No volume data
+    }
+
+    // Calculate ratios (protect against division by zero)
+    const volumeRatio = buyVolume / (sellVolume || 0.001);
+    const txRatio = buys / (sells || 1);
+
+    // Use volume ratio as primary indicator
+    const ratio = volumeRatio;
+    const isBuyDominant = ratio > 1;
+
+    // For sell signals, we check if sell dominates (ratio < 1/minRatio)
+    const isSellDominant = ratio < 1 / minRatio;
+    const isBuyTriggered = ratio >= minRatio;
+
+    if (!isBuyTriggered && !isSellDominant) {
+      return null; // Below threshold
+    }
+
+    // Signal strength based on how much it exceeds threshold
+    const effectiveRatio = isBuyDominant ? ratio : 1 / ratio;
+    const strength = Math.min((effectiveRatio - minRatio) / minRatio + 0.5, 1);
+
+    // Determine signal type
+    let signalType: 'buy' | 'sell' | 'alert' = 'alert';
+    if (this.config.type === 'buy' && isBuyTriggered) signalType = 'buy';
+    if (this.config.type === 'sell' && isSellDominant) signalType = 'sell';
+    if (this.config.type === 'both') {
+      signalType = isBuyDominant ? 'buy' : 'sell';
+    }
+
+    return {
+      ruleId: this.config.id,
+      ruleName: this.config.name,
+      mint: token.mint,
+      symbol: token.symbol,
+      type: signalType,
+      strength,
+      reason: `${isBuyDominant ? 'Buy' : 'Sell'} pressure ${effectiveRatio.toFixed(1)}:1 in ${timeframe} (${buys} buys, ${sells} sells)`,
+      data: {
+        buyVolume,
+        sellVolume,
+        volumeRatio,
+        buys,
+        sells,
+        txRatio,
+        timeframe,
+        minRatio,
+      },
+      timestamp: Date.now(),
+    };
+  }
+}
+
+// Factory function
+export function createBuySellRatioRule(
+  id: string,
+  name: string,
+  options: {
+    timeframe: BuySellRatioRuleConfig['timeframe'];
+    minRatio: number;
+    type?: 'buy' | 'sell' | 'both';
+  }
+): BuySellRatioRule {
+  return new BuySellRatioRule({
+    id,
+    name,
+    description: `Triggers when buy/sell ratio exceeds ${options.minRatio}:1 in ${options.timeframe}`,
+    enabled: true,
+    type: options.type ?? 'both',
+    ruleType: 'buy_sell_ratio',
+    timeframe: options.timeframe,
+    minRatio: options.minRatio,
+  });
+}

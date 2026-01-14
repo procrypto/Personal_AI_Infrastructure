@@ -1,0 +1,71 @@
+---
+phase: 27-feed-forwarding
+plan: 01
+subsystem: data-feeds
+tags: [websocket, trending, ohlcv, feeds]
+
+requires:
+  - phase: 26-integration-testing
+    provides: Autopilot WebSocket architecture
+
+provides:
+  - trending_feed forwarding to backend
+  - ohlcv_update forwarding to backend
+  - TrendingFeed and WhaleFeed types
+
+affects: [backend-feed-consumption]
+
+tech-stack:
+  added: []
+  patterns: [feed-adapter-pattern, store-subscription-forwarding]
+
+key-files:
+  created: []
+  modified:
+    - apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts
+    - apps/web-terminal/src/websocket/autopilot/feedAdapters.ts
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts
+
+key-decisions:
+  - "Trending feed throttled to 5s (backend doesn't need sub-second updates)"
+  - "OHLCV forwarding uses existing toOhlcvFeed adapter"
+
+patterns-established:
+  - "Feed types live in AutopilotWebsocket.ts"
+  - "Adapters in feedAdapters.ts convert store data to feed format"
+
+issues-created: []
+
+duration: 5min
+completed: 2026-01-09
+---
+
+# Phase 27 Plan 1: Trending + OHLCV Feed Forwarding Summary
+
+**Added trending_feed and ohlcv_update forwarding from WebSocket stores to autopilot backend**
+
+## Accomplishments
+
+- Added TrendingFeed, TrendingFeedItem, WhaleFeed, WhaleMoveFeedItem types to AutopilotWebsocket.ts
+- Added toTrendingFeed and toWhaleFeed adapters to feedAdapters.ts
+- Wired trending_feed subscription (5s throttle) in useAutopilotDataForwarder
+- Wired ohlcv_update subscription (1s throttle) in useAutopilotDataForwarder
+
+## Files Modified
+
+- `apps/web-terminal/src/websocket/autopilot/AutopilotWebsocket.ts` - Added new feed types
+- `apps/web-terminal/src/websocket/autopilot/feedAdapters.ts` - Added toTrendingFeed, toWhaleFeed
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts` - Added trending + OHLCV subscriptions
+
+## Cross-Repo Status
+
+Backend (token-analysis-autopilot) can now receive:
+- ✅ market_data_feed
+- ✅ cvd_update
+- ✅ trending_feed (NEW)
+- ✅ ohlcv_update (NEW)
+- ⏳ whale_feed (Plan 27-02)
+
+## Next Step
+
+Execute Plan 27-02 for whale_feed forwarding

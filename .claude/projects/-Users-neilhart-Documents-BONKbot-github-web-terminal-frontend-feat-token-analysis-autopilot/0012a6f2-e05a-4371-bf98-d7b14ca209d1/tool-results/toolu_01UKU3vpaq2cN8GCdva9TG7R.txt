@@ -1,0 +1,104 @@
+     1→/**
+     2→ * WebSocket Server for Frontend Integration
+     3→ *
+     4→ * Broadcasts live autopilot events to connected clients.
+     5→ *
+     6→ * LOIS INTEGRATION PATH
+     7→ * =====================
+     8→ * This WebSocket server provides the protocol for frontend integration with the
+     9→ * token-analysis-autopilot. Data types here are designed for future LOIS live
+    10→ * trading compatibility.
+    11→ *
+    12→ * Current Status: Paper trading only (no real order execution)
+    13→ *
+    14→ * For live trading integration:
+    15→ * - SignalData.signalType maps to LOIS TriggerEvent types
+    16→ * - PositionData would need execution IDs, fill prices, and order status
+    17→ * - ConfigData.mode='live' path would route to LOIS order execution
+    18→ *
+    19→ * See LOIS compatibility markers on each interface for specific mapping notes.
+    20→ */
+    21→
+    22→import { WebSocketServer, WebSocket } from 'ws';
+    23→import type { PaperTrade } from './trading/types.js';
+    24→
+    25→// Event types the frontend can receive
+    26→export type AutopilotEvent =
+    27→  | { type: 'position_update'; positions: PositionData[] }
+    28→  | { type: 'signal'; signal: SignalData }
+    29→  | { type: 'market_status'; status: MarketStatusData }
+    30→  | { type: 'stats_update'; stats: StatsData }
+    31→  | { type: 'scan_tick'; tick: ScanTickData }
+    32→  | { type: 'token_list'; tokens: TokenListData }
+    33→  | { type: 'config'; config: ConfigData }
+    34→  | { type: 'strategies'; strategies: StrategiesData };
+    35→
+    36→// Command types the frontend can send
+    37→export type AutopilotCommand =
+    38→  | { command: 'toggle_sources'; enabled: boolean }
+    39→  | { command: 'toggle_trending'; enabled: boolean }
+    40→  | { command: 'toggle_whales'; enabled: boolean }
+    41→  | { command: 'toggle_filter'; enabled: boolean }
+    42→  | { command: 'set_mode'; mode: 'paper' | 'live' }
+    43→  | { command: 'set_position_size'; sizeSol: number }
+    44→  | { command: 'refresh_sources' }
+    45→  | { command: 'get_config' }
+    46→  | { command: 'get_strategies' }
+    47→  | { command: 'toggle_strategy'; strategyId: string; enabled: boolean };
+    48→
+    49→// LOIS COMPATIBLE: partial
+    50→// - mode field controls paper vs live execution path
+    51→// - For live trading: would add walletAddress, rpcEndpoint, and slippage config
+    52→// - positionSizeSol used for both paper and live
+    53→export interface ConfigData {
+    54→  autoSourcesEnabled: boolean;
+    55→  trendingEnabled: boolean;
+    56→  whalesEnabled: boolean;
+    57→  marketFilterEnabled: boolean;
+    58→  mode: 'paper' | 'live';
+    59→  positionSizeSol: number;
+    60→  pollIntervalMs: number;
+    61→}
+    62→
+    63→// LOIS COMPATIBLE: yes
+    64→// - Strategy templates are execution-agnostic (same for paper and live)
+    65→// - id maps directly to LOIS strategy identifiers
+    66→export interface StrategyInfo {
+    67→  id: string;
+    68→  name: string;
+    69→  description: string;
+    70→  mode: 'all' | 'any';
+    71→  ruleCount: number;
+    72→  summary: string; // Compact rule summary
+    73→}
+    74→
+    75→// LOIS COMPATIBLE: yes
+    76→// - Strategy state is execution-agnostic
+    77→// - active[] array used for both paper and live mode filtering
+    78→export interface StrategiesData {
+    79→  available: StrategyInfo[];  // All available templates
+    80→  active: string[];           // IDs of currently active strategies
+    81→}
+    82→
+    83→export type CommandHandler = (command: AutopilotCommand) => Promise<void> | void;
+    84→
+    85→// LOIS COMPATIBLE: partial
+    86→// - Paper trading only: no execution IDs, fill prices, or order status
+    87→// - For live trading: add txSignature, executionPrice, fillStatus, orderId
+    88→// - entryPriceSol is simulated in paper mode, would be actual fill in live
+    89→// - Frontend calculates P&L from NATS market data (same for paper and live)
+    90→export interface PositionData {
+    91→  mint: string;
+    92→  symbol: string;
+    93→  action: 'buy' | 'sell';
+    94→  entryPriceSol: number;
+    95→  positionSizeSol: number;
+    96→  entryTime: number;
+    97→}
+    98→
+    99→// LOIS COMPATIBLE: partial
+   100→// - signalType maps to LOIS TriggerEvent:
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

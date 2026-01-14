@@ -1,0 +1,45 @@
+/**
+ * Linear API Client
+ *
+ * Singleton pattern for LinearClient instance, authenticated via LINEAR_API_KEY.
+ * Matches the singleton pattern from event-bus.ts for consistency.
+ *
+ * Usage:
+ *   const client = getLinearClient();
+ *   const users = await client.users();
+ */
+
+import { LinearClient } from '@linear/sdk';
+
+// ============================================================================
+// Singleton Implementation
+// ============================================================================
+
+let linearClient: LinearClient | null = null;
+
+/**
+ * Get the singleton LinearClient instance.
+ * Creates the client on first call with LINEAR_API_KEY from environment.
+ *
+ * @throws Error if LINEAR_API_KEY is not configured
+ */
+export function getLinearClient(): LinearClient {
+  if (!linearClient) {
+    const apiKey = process.env.LINEAR_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'LINEAR_API_KEY not configured. Set LINEAR_API_KEY environment variable.'
+      );
+    }
+    linearClient = new LinearClient({ apiKey });
+  }
+  return linearClient;
+}
+
+/**
+ * Reset the singleton (for testing).
+ * Allows tests to reset state between test cases.
+ */
+export function resetLinearClient(): void {
+  linearClient = null;
+}

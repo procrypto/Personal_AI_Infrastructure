@@ -1,0 +1,93 @@
+/**
+ * useAutopilotPositions
+ *
+ * Combines autopilot position entries with NATS market data to calculate
+ * live P&L. Position entry data comes from autopilot backend, live prices
+ * come from NATS market_data subscriptions.
+ */
+
+import { useMemo } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type { AutopilotPositionEntry } from "@/store/memoryStore/slices/autopilot-store/types";
+
+/**
+ * Position with calculated P&L.
+ * Current price and P&L are nullable - null when market data isn't available.
+ */
+export interface AutopilotPositionWithPnL extends AutopilotPositionEntry {
+  currentPriceSol: number | null;
+  pnlPercent: number | null;
+  pnlSol: number | null;
+}
+
+/**
+ * Hook to get autopilot positions with live P&L calculated from NATS market data.
+ */
+export const useAutopilotPositions = (): AutopilotPositionWithPnL[] => {
+  // Get position entries from autopilot store
+  const positions = useGlobalStore(
+    useShallow(state => Array.from(state.autopilot.positions.values()))
+  );
+
+  // Get market data map
+  const marketDataMap = useGlobalStore(
+    useShallow(state => state.websocketMessages.market_data.data)
+  );
+
+  // Combine positions with live prices
+  return useMemo(() => {
+    return positions.map(position => {
+      // Get latest market data for this mint
+      const mintData = marketDataMap[position.mint];
+
+      if (!mintData || mintData.size === 0) {
+        // No market data available yet
+        return {
+          ...position,
+          currentPriceSol: null,
+          pnlPercent: null,
+          pnlSol: null,
+        };
+      }
+
+      // Get the latest market data (there's only one item keyed as "latest")
+      const latestMarketData = Array.from(mintData.values())[0];
+
+      if (!latestMarketData?.price_sol) {
+        return {
+          ...position,
+          currentPriceSol: null,
+          pnlPercent: null,
+          pnlSol: null,
+        };
+      }
+
+      // price_sol can be string or number from NATS, parse it
+      const rawPriceSol = latestMarketData.price_sol;
+      const currentPriceSol =
+        typeof rawPriceSol === "string" ? parseFloat(rawPriceSol) : rawPriceSol;
+
+      if (isNaN(currentPriceSol) || position.entryPriceSol === 0) {
+        return {
+          ...position,
+          currentPriceSol: null,
+          pnlPercent: null,
+          pnlSol: null,
+        };
+      }
+
+      // Calculate P&L
+      const pnlPercent =
+        ((currentPriceSol - position.entryPriceSol) / position.entryPriceSol) *
+        100;
+      const pnlSol = (pnlPercent / 100) * position.positionSizeSol;
+
+      return {
+        ...position,
+        currentPriceSol,
+        pnlPercent,
+        pnlSol,
+      };
+    });
+  }, [positions, marketDataMap]);
+};

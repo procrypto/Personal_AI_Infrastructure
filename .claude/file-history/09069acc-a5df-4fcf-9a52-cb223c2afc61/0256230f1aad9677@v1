@@ -1,0 +1,398 @@
+---
+phase: 01-foundation
+plan: 03
+type: execute
+---
+
+<objective>
+Create typed event bus for decoupling core coordination logic from surface notifications.
+
+Purpose: Enable loose coupling between the QA coordination core and notification surfaces (Slack, webhooks). Core publishes events, surfaces subscribe and react. This pattern allows adding new surfaces without modifying core logic.
+Output: `src/coordination/events/` with event bus class and typed event emitters.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/codebase/CONVENTIONS.md
+@src/coordination/types.ts
+
+**Discovery findings (Event Bus Pattern):**
+- Singleton pattern with getInstance()
+- TypeScript generics for type-safe payloads
+- Methods: register(event, callback) returns unsubscribe, dispatch(event, payload)
+- Clean up empty event entries after unsubscribe to prevent memory leaks
+
+**From types.ts (Plan 01-01):**
+- NotificationEvent union type defines all event names
+- Event payload interfaces: TicketCreatedPayload, TicketAssignedPayload, etc.
+
+**Usage pattern:**
+- Core actions (createTicket, claimTicket) dispatch events
+- Slack surface subscribes to events and posts messages
+- Future surfaces (webhook, UI) can subscribe without core changes
+
+**Depends on:** Plan 01-01 (types.ts must exist)
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Create typed event bus class</name>
+  <files>src/coordination/events/event-bus.ts</files>
+  <action>
+Create src/coordination/events/ directory and event-bus.ts:
+
+```typescript
+import type {
+  NotificationEvent,
+  TicketCreatedPayload,
+  TicketAssignedPayload,
+  TicketStatusChangedPayload,
+  TicketEscalatedPayload,
+  SessionStartedPayload,
+  SessionCompletedPayload,
+  AlertTriggeredPayload,
+} from '../types.js';
+
+// Map event names to their payload types
+type EventPayloadMap = {
+  'ticket:created': TicketCreatedPayload;
+  'ticket:assigned': TicketAssignedPayload;
+  'ticket:claimed': TicketAssignedPayload; // Same shape as assigned
+  'ticket:status_changed': TicketStatusChangedPayload;
+  'ticket:escalated': TicketEscalatedPayload;
+  'session:started': SessionStartedPayload;
+  'session:completed': SessionCompletedPayload;
+  'alert:triggered': AlertTriggeredPayload;
+};
+
+// Callback type with proper typing
+type EventCallback<T extends NotificationEvent> = (payload: EventPayloadMap[T]) => void | Promise<void>;
+
+// Registry entry for unsubscription
+interface Subscription {
+  unsubscribe: () => void;
+}
+
+// Subscriber storage
+type SubscriberMap = {
+  [K in NotificationEvent]?: Map<number, EventCallback<K>>;
+};
+
+/**
+ * Type-safe event bus for QA coordination notifications.
+ * Singleton pattern ensures a single bus instance across the application.
+ */
+class EventBus {
+  private static instance: EventBus | null = null;
+  private subscribers: SubscriberMap = {};
+  private nextId = 1;
+
+  private constructor() {
+    // Private constructor for singleton
+  }
+
+  /**
+   * Get the singleton EventBus instance
+   */
+  static getInstance(): EventBus {
+    if (!EventBus.instance) {
+      EventBus.instance = new EventBus();
+    }
+    return EventBus.instance;
+  }
+
+  /**
+   * Reset the singleton (for testing)
+   */
+  static resetInstance(): void {
+    EventBus.instance = null;
+  }
+
+  /**
+   * Subscribe to an event. Returns a Subscription with unsubscribe method.
+   */
+  subscribe<T extends NotificationEvent>(
+    event: T,
+    callback: EventCallback<T>
+  ): Subscription {
+    if (!this.subscribers[event]) {
+      this.subscribers[event] = new Map();
+    }
+
+    const id = this.nextId++;
+    // Type assertion needed due to TypeScript limitations with mapped types
+    (this.subscribers[event] as Map<number, EventCallback<T>>).set(id, callback);
+
+    return {
+      unsubscribe: () => {
+        const eventSubscribers = this.subscribers[event];
+        if (eventSubscribers) {
+          eventSubscribers.delete(id);
+          // Clean up empty maps to prevent memory leaks
+          if (eventSubscribers.size === 0) {
+            delete this.subscribers[event];
+          }
+        }
+      },
+    };
+  }
+
+  /**
+   * Dispatch an event to all subscribers. Async callbacks are awaited in parallel.
+   */
+  async dispatch<T extends NotificationEvent>(
+    event: T,
+    payload: EventPayloadMap[T]
+  ): Promise<void> {
+    const eventSubscribers = this.subscribers[event];
+    if (!eventSubscribers || eventSubscribers.size === 0) {
+      return;
+    }
+
+    const callbacks = Array.from(eventSubscribers.values());
+    await Promise.all(
+      callbacks.map(async (callback) => {
+        try {
+          await callback(payload as EventPayloadMap[typeof event]);
+        } catch (error) {
+          // Log but don't throw - one subscriber failure shouldn't break others
+          console.error(`Event bus error in ${event} handler:`, error);
+        }
+      })
+    );
+  }
+
+  /**
+   * Get subscriber count for an event (for debugging/testing)
+   */
+  getSubscriberCount(event: NotificationEvent): number {
+    return this.subscribers[event]?.size ?? 0;
+  }
+}
+
+// Export singleton getter
+export function getEventBus(): EventBus {
+  return EventBus.getInstance();
+}
+
+// Export for testing
+export function resetEventBus(): void {
+  EventBus.resetInstance();
+}
+
+// Re-export types for convenience
+export type { EventPayloadMap, EventCallback, Subscription };
+```
+
+Use singleton pattern. Export getEventBus() and resetEventBus() functions.
+  </action>
+  <verify>tsc --noEmit src/coordination/events/event-bus.ts compiles without errors</verify>
+  <done>EventBus class created with typed subscribe/dispatch methods, singleton pattern, and proper cleanup</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create event emitter helpers for core actions</name>
+  <files>src/coordination/events/emitters.ts</files>
+  <action>
+Create emitters.ts with typed helper functions for common events:
+
+```typescript
+import { getEventBus } from './event-bus.js';
+import type {
+  QATicket,
+  TesterProfile,
+  TicketStatus,
+  QASession,
+} from '../types.js';
+
+/**
+ * Emit when a new ticket is created
+ */
+export async function emitTicketCreated(ticket: QATicket): Promise<void> {
+  await getEventBus().dispatch('ticket:created', { ticket });
+}
+
+/**
+ * Emit when a ticket is assigned (auto or manual)
+ */
+export async function emitTicketAssigned(
+  ticket: QATicket,
+  tester: TesterProfile,
+  autoAssigned: boolean
+): Promise<void> {
+  await getEventBus().dispatch('ticket:assigned', {
+    ticket,
+    tester,
+    autoAssigned,
+  });
+}
+
+/**
+ * Emit when a ticket is claimed by a tester
+ */
+export async function emitTicketClaimed(
+  ticket: QATicket,
+  tester: TesterProfile
+): Promise<void> {
+  await getEventBus().dispatch('ticket:claimed', {
+    ticket,
+    tester,
+    autoAssigned: false,
+  });
+}
+
+/**
+ * Emit when a ticket status changes
+ */
+export async function emitTicketStatusChanged(
+  ticket: QATicket,
+  previousStatus: TicketStatus,
+  changedBy: string
+): Promise<void> {
+  await getEventBus().dispatch('ticket:status_changed', {
+    ticket,
+    previousStatus,
+    changedBy,
+  });
+}
+
+/**
+ * Emit when a ticket is escalated due to age
+ */
+export async function emitTicketEscalated(
+  ticket: QATicket,
+  escalationLevel: 'warning_24h' | 'critical_48h',
+  hoursSinceCreated: number
+): Promise<void> {
+  await getEventBus().dispatch('ticket:escalated', {
+    ticket,
+    escalationLevel,
+    hoursSinceCreated,
+  });
+}
+
+/**
+ * Emit when a ceremony QA session starts
+ */
+export async function emitSessionStarted(session: QASession): Promise<void> {
+  await getEventBus().dispatch('session:started', { session });
+}
+
+/**
+ * Emit when a ceremony QA session completes
+ */
+export async function emitSessionCompleted(
+  session: QASession,
+  passedCount: number,
+  failedCount: number
+): Promise<void> {
+  await getEventBus().dispatch('session:completed', {
+    session,
+    passedCount,
+    failedCount,
+  });
+}
+
+/**
+ * Emit when a Grafana alert triggers QA attention
+ */
+export async function emitAlertTriggered(
+  alertName: string,
+  alertUrl: string,
+  severity: 'warning' | 'critical',
+  metric: string,
+  currentValue: number,
+  threshold: number
+): Promise<void> {
+  await getEventBus().dispatch('alert:triggered', {
+    alertName,
+    alertUrl,
+    severity,
+    metric,
+    currentValue,
+    threshold,
+  });
+}
+```
+
+Export all emitter functions. These are the public API for core code to dispatch events.
+  </action>
+  <verify>tsc --noEmit src/coordination/events/emitters.ts compiles without errors</verify>
+  <done>8 typed emitter functions created for all NotificationEvent types</done>
+</task>
+
+<task type="auto">
+  <name>Task 3: Create barrel export and coordination module index</name>
+  <files>src/coordination/events/index.ts, src/coordination/index.ts</files>
+  <action>
+1. Create events/index.ts barrel:
+
+```typescript
+// Event bus core
+export { getEventBus, resetEventBus } from './event-bus.js';
+export type { EventPayloadMap, EventCallback, Subscription } from './event-bus.js';
+
+// Event emitters
+export {
+  emitTicketCreated,
+  emitTicketAssigned,
+  emitTicketClaimed,
+  emitTicketStatusChanged,
+  emitTicketEscalated,
+  emitSessionStarted,
+  emitSessionCompleted,
+  emitAlertTriggered,
+} from './emitters.js';
+```
+
+2. Create src/coordination/index.ts as the main barrel for the coordination module:
+
+```typescript
+// Types
+export * from './types.js';
+
+// Store
+export * from './store/index.js';
+
+// Events
+export * from './events/index.js';
+```
+
+This creates a clean public API: `import { QATicket, createTicket, emitTicketCreated } from './coordination/index.js'`
+  </action>
+  <verify>tsc --noEmit src/coordination/index.ts compiles without errors</verify>
+  <done>Barrel files created, coordination module has clean public API</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npx tsc --noEmit` passes without errors
+- [ ] Event bus implements subscribe/dispatch with type safety
+- [ ] All 8 event emitters match NotificationEvent types
+- [ ] Main index exports types, store, and events
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Event bus decouples core from surfaces
+- Phase 1 Foundation complete
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/01-foundation/01-03-SUMMARY.md` with:
+- Phase 1 complete indication
+- All files created across 3 plans
+- Foundation ready for Phase 2 (Linear Integration)
+</output>

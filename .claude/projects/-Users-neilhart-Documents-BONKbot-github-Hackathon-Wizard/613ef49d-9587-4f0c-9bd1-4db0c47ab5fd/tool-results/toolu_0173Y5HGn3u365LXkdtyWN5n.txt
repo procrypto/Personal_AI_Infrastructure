@@ -1,0 +1,35 @@
+63,70d62
+<     // Set esbuild target for development transforms
+<     esbuild: {
+<       target: "es2020",
+<       // Suppress import.meta warnings - they're harmless as import.meta works at runtime
+<       logOverride: {
+<         "empty-import-meta": "silent",
+<       },
+<     },
+157a150,160
+>       // ─────────────────────────────────────────────────────────────────────────
+>       // LOCAL DEV: 431 "Request Headers Too Large" errors with 500+ tracked wallets
+>       // ─────────────────────────────────────────────────────────────────────────
+>       // The wallet tracker WebSocket passes all addresses in the URL query string.
+>       // With 500 wallets × ~44 chars/address = ~22KB, exceeding Node's 8KB default.
+>       //
+>       // Production works because nginx/CloudFlare have higher limits configured.
+>       //
+>       // Fix: The dev script uses NODE_OPTIONS='--max-http-header-size=65536'.
+>       // Always run `bun dev` (not `vite` directly) to pick up this flag.
+>       // ─────────────────────────────────────────────────────────────────────────
+158a162,165
+>         "/health": {
+>           target: "http://localhost:8787",
+>           changeOrigin: true,
+>         },
+171a179,184
+>         // Local API proxy — fetches PRODUCTION ClickHouse data for local dev
+>         // Run `bun dev` in /github/local-api first
+>         "/local-api": {
+>           target: "http://localhost:8787",
+>           changeOrigin: true,
+>         },
+207a221
+>       __SERVER_SESSION_ID__: JSON.stringify(Date.now().toString()),

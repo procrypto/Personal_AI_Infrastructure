@@ -1,0 +1,92 @@
+# Local API - System Context
+
+**Last Updated**: 2026-01-13
+**Source**: `~/Documents/BONKbot/github/local-api`
+
+## Overview
+
+Local API is a Bun/Elysia HTTP service that provides ClickHouse-backed REST endpoints for local development. It mirrors production API behavior while enabling testing with real production data via the ClickHouse Cloud Queries API.
+
+**Critical Constraint**: Fetches PRODUCTION data. All responses are sensitive.
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Runtime | Bun |
+| Framework | Elysia v1.0.0 |
+| Database | ClickHouse Cloud (Queries API) |
+| Language | TypeScript 5.3+ |
+
+## Primary Purpose
+
+Enable local development and testing against production ClickHouse data without needing direct database access. Provides:
+- Production-mirror endpoints (same routes/shapes as main API)
+- Labs endpoints (local-only experimental queries)
+- Extension system (augment responses with additional data)
+
+## Key Interfaces
+
+### REST Endpoints (20+)
+
+**Production Mirrors:**
+- `GET /local-api/trades/:mint` - Trade history
+- `GET /local-api/search/:mint` - Token lookup
+- `GET /local-api/ohlcv/pool/:pool/:range` - Candlestick data
+- `GET /local-api/holders_stats/:mint` - Top holders
+- `GET /local-api/discovery/trending` - Trending tokens
+- `GET /local-api/discovery/whale_moves` - Whale activity
+
+**Labs (Local-Only):**
+- `POST /local-api/labs/wallet_trades_snapshot` - Bounded wallet trades
+- `POST /local-api/labs/holders_stats_batch` - Batch holder lookup
+
+**Extensions:**
+- `GET /local-api/ext/registry` - Extension metadata
+- `GET /local-api/ext/search/:mint` - Extended token lookup
+
+## Data Access
+
+Uses ClickHouse Cloud Queries API with Basic Auth:
+```
+POST https://queries.clickhouse.cloud/service/{service_id}/run?format=JSONEachRow
+Authorization: Basic base64(key_id:key_secret)
+```
+
+**Key Tables:**
+- `materializer_trades`, `materializer_trades_recent_1d`
+- `materializer_token_market_data_latest`
+- `materializer_holder_mint_latest`
+- `discovery_trending_token_stats_ts`
+
+## Cross-System Relationships
+
+### Upstream
+- **ClickHouse Cloud**: Production trading data source
+- **TrenchBench**: Credential source (same service)
+
+### Downstream
+- **web-terminal-frontend**: Consumes via Vite proxy (`/local-api/*` → `localhost:8787`)
+
+### Integration Pattern
+
+Frontend devs use localStorage overrides (`localApi.override.*`) to switch between production and dev data sources per endpoint during development.
+
+## Development
+
+```bash
+bun install
+cp env.example .env  # Fill in credentials
+bun dev              # localhost:8787
+```
+
+## Notable Patterns
+
+- All endpoints under `/local-api/*` prefix
+- Labs endpoints use POST method
+- SQL queries parameterized with `clamp()` for safety limits
+- Responses follow `{ ok: boolean, ... }` pattern
+- Extension system with cost tier tracking (`same_result` vs `extra_query`)
+
+---
+*Verified: 2026-01-13*

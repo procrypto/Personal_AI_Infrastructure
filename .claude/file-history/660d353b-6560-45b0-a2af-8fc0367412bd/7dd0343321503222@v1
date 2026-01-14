@@ -1,0 +1,145 @@
+# BONKbot
+
+A comprehensive Solana trading bot and portfolio management platform with dual interfaces: Telegram bot and Web Terminal API.
+
+## Overview
+
+BONKbot facilitates token swaps, limit orders, auto-strategies (DCA, rebalancing), and a referral program. The system processes user trades through Jupiter and Raydium DEX integrations with Jito MEV protection.
+
+This is a TypeScript/Node.js monorepo using pnpm workspaces and Turbo for build orchestration.
+
+## Features
+
+- **Token Swaps** - Single and multi-swap via Jupiter and Raydium
+- **Limit Orders** - Background-processed limit orders with price triggers
+- **Auto Strategies** - DCA and rebalancing strategies
+- **Referral Program** - Tiered referral system with DAO payouts
+- **Dual Interface** - Both Telegram bot and Web Terminal API
+- **MEV Protection** - Jito integration for MEV-protected transactions
+- **Multi-wallet Support** - Manage multiple signer wallets per user
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Runtime | Node.js 22 + TypeScript |
+| API Framework | Express.js + Inversify DI |
+| Database | PostgreSQL + Kysely ORM |
+| Cache | Redis |
+| Analytics | ClickHouse |
+| Messaging | NATS |
+| Telegram | Telegraf |
+| Blockchain | @solana/web3.js + Jito |
+
+## Project Structure
+
+```
+bonkbot/
+├── packages/              # Shared libraries
+│   ├── commons/           # Utilities, logging, Solana helpers
+│   ├── db/                # Kysely ORM, migrations (155+)
+│   ├── data-api/          # API response structures
+│   ├── jito-ts/           # Jito gRPC integration
+│   ├── nats/              # NATS pub/sub abstraction
+│   ├── signer/            # Transaction signing client
+│   └── pnl-card-generator/ # P&L image generation
+├── servers/
+│   ├── bonkbot/           # Main service (port 8800)
+│   │   ├── src/api/       # REST controllers
+│   │   ├── src/domain/    # Business logic by domain
+│   │   └── src/infrastructure/ # External integrations
+│   ├── notif/             # Notification service
+│   └── internal-tool*/    # Admin tools
+└── deploy/                # GCP deployment scripts
+```
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js 22+
+- pnpm 8.14+
+- Docker (for local dependencies)
+- Access to required secrets (GCP Secret Manager)
+
+### Local Development
+
+```bash
+# Start dependencies (Postgres, Redis)
+docker-compose up -d
+
+# Install dependencies
+pnpm install
+
+# Run migrations
+pnpm --filter @bonkbot/db kysely migrate:latest
+
+# Start bonkbot server
+pnpm --filter @bonkbot/bonkbot dev
+```
+
+For detailed local setup, see [HOW_TO_DEV_LOCAL.md](HOW_TO_DEV_LOCAL.md).
+
+## API Reference
+
+The main bonkbot service exposes a REST API on port 8800. Key endpoint groups:
+
+| Controller | Base Path | Purpose |
+|------------|-----------|---------|
+| Auth | `/v1/auth` | Login, wallet verification, email verification |
+| User | `/v1/user` | User settings, portfolio |
+| Swap | `/v1/swap` | Token swap execution |
+| Orders | `/v1/orders` | Limit order queries |
+| Limit Orders | `/v1/limit-order` | Limit order management |
+| Auto Strat | `/v1/auto-strat` | DCA and rebalancing strategies |
+| Referral | `/v1/referral` | Referral info, rewards |
+| Signer Wallet | `/v1/signer-wallet` | Wallet operations |
+| Tokens | `/v1/tokens` | Token information |
+| Watchlist | `/v1/watchlist-token` | Token watchlist |
+
+See [API.md](API.md) for detailed endpoint documentation.
+
+## Database Operations
+
+```bash
+# Generate a new migration
+pnpm --filter @bonkbot/db kysely migrate:make migration_name
+
+# Run pending migrations
+pnpm --filter @bonkbot/db kysely migrate:latest
+
+# Regenerate types from DB schema
+pnpm --filter @bonkbot/db kysely-codegen
+```
+
+For migration execution procedures, see [Executing BONKbot DB Migrations](https://www.notion.so/Executing-BONKbot-DB-Migrations-1c02420e776c80e5a90bd1ebd13ba1cd).
+
+## External Integrations
+
+| Service | Purpose |
+|---------|---------|
+| Jupiter | DEX routing and swap aggregation |
+| Raydium | Direct pool access |
+| Jito | MEV protection via BlockEngine |
+| MoonPay | Fiat onramp |
+| Sendgrid | Email notifications |
+| Rug.Check | Token safety scoring |
+
+## Architecture Notes
+
+- **Dependency Injection**: All services use Inversify. Bindings in `inversify.config.ts`
+- **Domain-Driven**: Business logic organized by domain (`domain/swap/`, `domain/user/`, etc.)
+- **Type Safety**: Kysely for SQL, strict TypeScript throughout
+- **Logging**: Pino structured logging
+
+## Related Documentation
+
+- [HOW_TO_DEV_LOCAL.md](HOW_TO_DEV_LOCAL.md) - Local development setup
+- [HOW_TO_I18N.md](HOW_TO_I18N.md) - Internationalization guide
+- [deploy/README.md](deploy/README.md) - Deployment procedures
+- [Updating Dev Signer WASM Modules](https://www.notion.so/Updating-Dev-Signer-WASM-Modules-1ae2420e776c80dba67bec673bf5ae70)
+- [Deploying a New Instance or New Bot](https://www.notion.so/Deploying-a-New-Instance-or-New-Bot-1c02420e776c80c99de9f963e96daf0e)
+
+## License
+
+Proprietary - BONKbot Team

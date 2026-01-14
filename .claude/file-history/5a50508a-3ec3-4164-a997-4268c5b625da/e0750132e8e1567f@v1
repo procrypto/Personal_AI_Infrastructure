@@ -1,0 +1,280 @@
+---
+phase: 03-topic-mode-foundations
+plan: 02
+type: execute
+---
+
+<objective>
+Build the search infrastructure with semantic expansion and context windowing.
+
+Purpose: Enable keyword search across indexed messages with LLM-generated phrase sets for semantic richness, plus intelligent context extraction around matches.
+Output: Search engine that finds matches and returns them with surrounding conversation context.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./03-02-SUMMARY.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/phases/03-topic-mode-foundations/03-CONTEXT.md
+
+# Prior plan context:
+@.planning/phases/03-topic-mode-foundations/03-01-PLAN.md
+
+# Source files (after Plan 01):
+@src/topicWorker.ts
+@src/types.ts
+
+**Key insight from user:**
+Use LLM-generated phrase/word sets to expand search terms semantically. This gives LLM-like understanding without runtime LLM calls - the expansions are pre-computed and shipped with the app.
+
+**Context algorithm from CONTEXT.md:**
+- Primary: Show other messages from the triggering author near the match
+- Fallback: Time-based window if no strong author clustering
+
+**Privacy constraint:**
+All processing runs locally in browser - no external calls.
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Build keyword search with semantic expansion</name>
+  <files>src/semanticSets.ts (new), src/topicWorker.ts, src/types.ts</files>
+  <action>
+Create a semantic expansion system and search engine:
+
+1. Create `src/semanticSets.ts` with pre-computed phrase sets:
+```typescript
+// LLM-generated expansions for common search intents
+// These can be updated/expanded over time without code changes
+
+export interface SemanticSet {
+  id: string;
+  label: string;
+  description: string;
+  terms: string[]; // all terms that match this concept
+}
+
+export const SEMANTIC_SETS: SemanticSet[] = [
+  {
+    id: 'bug',
+    label: 'Bug/Issue',
+    description: 'Problems, errors, things not working',
+    terms: ['bug', 'broken', 'error', 'crash', 'issue', 'problem', 'not working',
+            'doesn\'t work', 'failed', 'failing', 'glitch', 'stuck', 'frozen',
+            'can\'t', 'unable to', 'won\'t', 'stopped working', 'broke']
+  },
+  {
+    id: 'feature',
+    label: 'Feature Request',
+    description: 'Wishes, suggestions, feature ideas',
+    terms: ['feature', 'wish', 'would be nice', 'should have', 'need', 'want',
+            'suggestion', 'idea', 'could you add', 'please add', 'missing',
+            'would love', 'hoping for', 'request', 'enhance', 'improvement']
+  },
+  {
+    id: 'frustration',
+    label: 'Frustration',
+    description: 'Negative sentiment, complaints',
+    terms: ['frustrating', 'annoying', 'hate', 'terrible', 'awful', 'worst',
+            'disappointed', 'upset', 'angry', 'ridiculous', 'unacceptable',
+            'useless', 'waste of time', 'give up', 'fed up', 'sick of']
+  },
+  {
+    id: 'praise',
+    label: 'Praise',
+    description: 'Positive feedback, appreciation',
+    terms: ['love', 'amazing', 'awesome', 'great', 'fantastic', 'perfect',
+            'thank you', 'thanks', 'appreciate', 'helpful', 'excellent',
+            'best', 'wonderful', 'brilliant', 'impressive', 'well done']
+  },
+  {
+    id: 'partnership',
+    label: 'Partnership/Business',
+    description: 'Business discussions, collaborations',
+    terms: ['partner', 'partnership', 'collaborate', 'collaboration', 'deal',
+            'business', 'opportunity', 'proposal', 'integration', 'api',
+            'enterprise', 'contract', 'agreement', 'work together']
+  },
+  {
+    id: 'competitor',
+    label: 'Competitor Mentions',
+    description: 'References to alternatives or competitors',
+    terms: ['competitor', 'alternative', 'instead', 'switch to', 'moved to',
+            'compared to', 'better than', 'worse than', 'vs', 'versus',
+            'other option', 'tried', 'using']
+  }
+];
+
+// Expand a search query using semantic sets
+export function expandQuery(query: string): string[] {
+  const lowerQuery = query.toLowerCase();
+  const expanded = new Set<string>([query]);
+
+  // Check if query matches any semantic set
+  for (const set of SEMANTIC_SETS) {
+    if (set.terms.some(term => lowerQuery.includes(term) || term.includes(lowerQuery))) {
+      set.terms.forEach(term => expanded.add(term));
+    }
+  }
+
+  return Array.from(expanded);
+}
+```
+
+2. Add search types to `src/types.ts`:
+```typescript
+interface SearchMatch {
+  chatId: string;
+  chatName: string;
+  messageIndex: number;
+  message: EnrichedMessage;
+  matchedTerms: string[];
+  score: number; // relevance score based on term frequency
+}
+
+interface SearchRequest {
+  type: 'search';
+  query: string;
+  useSemanticExpansion: boolean;
+}
+
+interface SearchResult {
+  type: 'searchResult';
+  query: string;
+  expandedTerms: string[];
+  matches: SearchMatch[];
+  totalMatches: number;
+}
+```
+
+3. Add search handler to `src/topicWorker.ts`:
+   - Import semantic sets and expandQuery
+   - Handle `search` message type
+   - If useSemanticExpansion, expand query terms
+   - Search all indexed messages for any expanded term
+   - Score matches by term frequency and specificity
+   - Return matches sorted by score
+
+Search should be case-insensitive and handle partial word matches.
+  </action>
+  <verify>
+- `npm run build` succeeds
+- Search for "bug" returns messages containing "bug", "broken", "error", etc.
+- Search with expansion disabled returns only exact matches
+- Matches include score and matched terms
+  </verify>
+  <done>Search returns semantically expanded matches with relevance scoring</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Implement context windowing algorithm</name>
+  <files>src/topicWorker.ts, src/types.ts</files>
+  <action>
+Add context extraction around search matches:
+
+1. Add context types to `src/types.ts`:
+```typescript
+interface ContextWindow {
+  match: SearchMatch;
+  contextMessages: EnrichedMessage[];
+  contextType: 'author' | 'time';
+  authorId?: string; // if author-based context
+}
+
+interface SearchResultWithContext {
+  type: 'searchResultWithContext';
+  query: string;
+  expandedTerms: string[];
+  results: ContextWindow[];
+  totalMatches: number;
+}
+```
+
+2. Implement context extraction in `src/topicWorker.ts`:
+
+**Author-based context (primary):**
+- Get the `from_id` of the matching message
+- Find other messages from the same author within ±10 messages of the match
+- Include up to 3 messages before and 3 after from that author
+- This captures the author's full thought on the topic
+
+**Time-based context (fallback):**
+- If author has fewer than 2 nearby messages, use time-based
+- Include ±5 messages around the match regardless of author
+- This captures the conversation flow
+
+3. Algorithm:
+```typescript
+function extractContext(
+  messages: EnrichedMessage[],
+  matchIndex: number,
+  windowSize: number = 10
+): { contextMessages: EnrichedMessage[]; contextType: 'author' | 'time' } {
+  const match = messages[matchIndex];
+  const authorId = match.from_id;
+
+  // Try author-based first
+  const authorMessages: EnrichedMessage[] = [];
+  const start = Math.max(0, matchIndex - windowSize);
+  const end = Math.min(messages.length, matchIndex + windowSize + 1);
+
+  for (let i = start; i < end; i++) {
+    if (messages[i].from_id === authorId) {
+      authorMessages.push(messages[i]);
+    }
+  }
+
+  // If author has enough context, use it
+  if (authorMessages.length >= 3) {
+    return { contextMessages: authorMessages, contextType: 'author' };
+  }
+
+  // Fallback to time-based
+  const timeMessages = messages.slice(
+    Math.max(0, matchIndex - 5),
+    Math.min(messages.length, matchIndex + 6)
+  );
+  return { contextMessages: timeMessages, contextType: 'time' };
+}
+```
+
+4. Update search to return results with context by default.
+  </action>
+  <verify>
+- `npm run build` succeeds
+- Search results include context messages
+- Author-based context shows when author has multiple nearby messages
+- Time-based fallback activates when author context is sparse
+- Context type is correctly labeled in results
+  </verify>
+  <done>Context windowing extracts relevant surrounding messages, prefers author-based when available</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `npm run build` succeeds without errors
+- [ ] Semantic expansion works (search "bug" finds "error", "broken", etc.)
+- [ ] Direct search works without expansion
+- [ ] Author-based context extracts same-author messages
+- [ ] Time-based fallback works when author context is sparse
+- [ ] Results include context type indicator
+</verification>
+
+<success_criteria>
+- All tasks completed
+- All verification checks pass
+- No TypeScript errors
+- Search with semantic expansion functional
+- Context windowing algorithm working with both modes
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/03-topic-mode-foundations/03-02-SUMMARY.md`
+</output>

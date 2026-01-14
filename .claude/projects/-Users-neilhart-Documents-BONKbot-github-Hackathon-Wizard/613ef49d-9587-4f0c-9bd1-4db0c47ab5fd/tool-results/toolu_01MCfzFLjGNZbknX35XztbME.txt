@@ -1,0 +1,27 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   392→        const tokens = getAllTokens();
+   393→        const openTrades = paperTracker.getOpenTrades();
+   394→        const openMints = new Set(openTrades.map(t => t.mint));
+   395→
+   396→        // Batch fetch all market data upfront (much faster than individual calls)
+   397→        const allMints = tokens.map(t => t.mint);
+   398→        const marketDataCache = await localApi.getMarketDataBatch(allMints);
+   399→
+   400→        // Check magic exits (TP at resistance, SL at support break)
+   401→        const magicExitResults = await magicExits.executeExits(marketDataCache, true);
+   402→
+   403→        const scanResults: string[] = [];
+   404→        const tradeResults: string[] = [];
+   405→        const magicResults: string[] = [];
+   406→
+   407→        // Record magic exits
+   408→        for (const closed of magicExitResults) {
+   409→          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+   410→          const color = (closed.pnlPercent ?? 0) >= 0 ? '\x1b[32m' : '\x1b[31m';
+   411→          const reset = '\x1b[0m';
+   412→          magicResults.push(`${closed.symbol}:${color}${pnlSign}${closed.pnlPercent?.toFixed(1)}%${reset}`);
+   413→        }
+   414→
+   415→        // Process all tokens (fast path - no additional API calls)
+   416→        for (const token of tokens) {
+   417→          const isOpenTrade = openMints.has(token.mint);

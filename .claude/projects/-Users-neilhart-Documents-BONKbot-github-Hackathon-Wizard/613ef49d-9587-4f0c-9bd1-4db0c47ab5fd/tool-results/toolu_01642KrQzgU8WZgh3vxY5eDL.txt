@@ -1,0 +1,69 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/trading/market-filter.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   267→    const change = ((currentPrice - closestPoint.price) / closestPoint.price) * 100;
+   268→    return change;
+   269→  }
+   270→
+   271→  /**
+   272→   * Derive SOL/USD price from any token's market data.
+   273→   * Since all tokens have both price_sol and price_usd, we can calculate:
+   274→   * SOL price = price_usd / price_sol
+   275→   *
+   276→   * @param marketDataMap - Map of token market data
+   277→   * @returns SOL price in USD, or null if can't be derived
+   278→   */
+   279→  deriveSolPrice(marketDataMap: Map<string, TokenMarketData>): number | null {
+   280→    // Find any token with valid price data
+   281→    for (const [, data] of marketDataMap) {
+   282→      if (data.price_sol && data.price_sol > 0 && data.price_usd && data.price_usd > 0) {
+   283→        return data.price_usd / data.price_sol;
+   284→      }
+   285→    }
+   286→    return null;
+   287→  }
+   288→
+   289→  /**
+   290→   * Check market conditions and update filter state.
+   291→   *
+   292→   * This is the main entry point - call this at the start of each scan cycle.
+   293→   *
+   294→   * @param solMarketData - Market data for SOL (or provide solPrice directly)
+   295→   * @param solPrice - Direct SOL price (if market data not available)
+   296→   * @param marketDataMap - Optional: derive SOL price from token prices if direct price unavailable
+   297→   * @returns MarketFilterResult with current state and actions
+   298→   */
+   299→  check(
+   300→    solMarketData?: TokenMarketData,
+   301→    solPrice?: number,
+   302→    marketDataMap?: Map<string, TokenMarketData>
+   303→  ): MarketFilterResult {
+   304→    if (!this.config.enabled) {
+   305→      return {
+   306→        state: 'NORMAL',
+   307→        priceChangePercent: 0,
+   308→        blockEntries: false,
+   309→        exitAll: false,
+   310→        message: 'Market filter disabled',
+   311→      };
+   312→    }
+   313→
+   314→    // Get current SOL price - try multiple sources
+   315→    let currentPrice = solPrice ?? solMarketData?.price_usd;
+   316→
+   317→    // Fallback: derive from token prices (price_usd / price_sol)
+   318→    if (!currentPrice && marketDataMap) {
+   319→      currentPrice = this.deriveSolPrice(marketDataMap) ?? undefined;
+   320→    }
+   321→
+   322→    if (!currentPrice) {
+   323→      return {
+   324→        state: this.state,
+   325→        priceChangePercent: 0,
+   326→        blockEntries: this.state !== 'NORMAL',
+   327→        exitAll: false,
+   328→        message: 'No SOL price available',
+   329→      };
+   330→    }
+   331→
+   332→    // Record price for history
+   333→    this.recordPrice(currentPrice);
+   334→

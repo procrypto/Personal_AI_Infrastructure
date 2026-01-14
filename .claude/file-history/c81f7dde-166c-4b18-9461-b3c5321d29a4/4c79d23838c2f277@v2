@@ -1,0 +1,437 @@
+# Context for Geyser-Geezer
+
+Context and rules for Claude Code sessions working in this repository.
+
+## Project Overview
+
+Geyser-Geezer is a high-performance Geyser stream ingestion and routing system. It connects to multiple Geyser providers (Helius, Triton, Laserstream), filters account/transaction updates by program, publishes to NATS, and deduplicates via JetStream. It serves as the entry point for all blockchain data into the BONKbot platform.
+
+This is a Rust project with two binaries: `geezer` (stream ingestion) and `tracker` (deduplication/monitoring).
+
+### Why This Exists
+
+Historically, indexing components (PUM3, Initializer) streamed directly from Geyser providers. This caused:
+- **Operational complexity**: Multiple instances of each indexer needed per provider for redundancy
+- **Data integrity errors**: Unreliable streams led to missed or duplicate data
+- **Resource waste**: Each indexer duplicating the same Geyser subscriptions
+
+Geyser Geezer solves this by ingesting Geyser streams at the edge, providing a consistent deduplicated stream via NATS for all downstream consumers.
+
+### Project Roadmap
+
+| Version | Status | Description |
+|---------|--------|-------------|
+| **V1** | Current | Regional NATS - Geyser behind standalone NATS in each region |
+| **V2** | Planned | Global NATS JetStream - combine regions so all get same input data |
+| **V3** | Planned | Correct ordering - proper sequencing of input data |
+
+**V1 Architecture Diagram**: https://miro.com/app/board/uXjVGaff3Ec=/
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Language | Rust 2024 | High-performance streaming |
+| Geyser | Yellowstone gRPC 6.0 | Blockchain streaming |
+| Messaging | async-nats | NATS pub/sub |
+| Deduplication | NATS JetStream | Message dedup |
+| HTTP | Axum | Health/metrics endpoints |
+| Metrics | Prometheus | Observability |
+| Shared | pum3-common | Types from PUM3 |
+
+### Project Structure
+
+```
+geyser-geezer/
+├── config/                    # 28 YAML configs per provider/region
+│   ├── geezer-prod-us-helius-ewr.yaml
+│   ├── geezer-prod-us-triton-ewr.yaml
+│   ├── geezer-prod-us-laserstream-ewr.yaml
+│   ├── tracker-prod-us.yaml
+│   └── ...
+├── deploy/                    # GCP deployment scripts
+├── src/
+│   ├── lib.rs                 # Shared utilities
+│   ├── bin/geezer/
+│   │   ├── main.rs            # Entry point
+│   │   ├── config.rs          # Configuration
+│   │   ├── publishers.rs      # NATS publishing
+│   │   ├── metrics.rs         # Prometheus metrics
+│   │   ├── latest_slot.rs     # Slot tracking
+│   │   ├── subscriptions/     # Geyser filters
+│   │   │   ├── account.rs     # 19+ program filters
+│   │   │   └── transaction.rs # Transaction filters
+│   │   └── geyser/
+│   │       ├── geyser_subscriber.rs  # Core gRPC loop
+│   │       └── subscribe_util.rs     # Filter builders
+│   └── bin/tracker/
+│       ├── main.rs            # JetStream setup
+│       ├── config.rs          # Tracker config
+│       └── jetstream_management.rs  # Stream creation
+```
+
+### Binaries
+
+| Binary | Purpose | Deployment |
+|--------|---------|------------|
+| `geezer` | Stream Geyser → NATS | Multiple per region/provider |
+| `tracker` | Deduplicate, measure latency | One per region |
+
+## Capabilities
+
+### Geyser Providers Supported
+
+| Provider | Endpoint Pattern | Notes |
+|----------|------------------|-------|
+| Helius | `*.helius-rpc.com` | Standard + Laserstream |
+| Triton | `bonkbot-*.rpcpool.com` | RPC Pool |
+| Laserstream | Helius ultra-low latency | Premium |
+
+### Account Subscriptions (19+ programs)
+
+**PUM3-bound (DEX pools):**
+```
+boop, heaven, meteora_cpamm, meteora_dbc, meteora_dlmm,
+meteora_dynamic, moonshot, orca, pumpfun, pumpswap,
+raydium_amm, raydium_clmm, raydium_cpmm, raydium_launchpad,
+token_mill, vertigo, virtuals
+```
+
+**Shared (PUM3 + Initializer):**
+```
+token_program, token_2022_program
+```
+
+**Initializer-only:**
+```
+mpl_token_metadata, pyth
+```
+
+**Oracles:**
+```
+chainlink (SOL/USD feed), clock (sysvar)
+```
+
+### NATS Topics
+
+**Raw (from Geezer instances):**
+```
+input_pum3.account.{program}
+input_pum3.transaction.{type}
+input_pum3.block
+input_initializer.account.{program}
+input_initializer.transaction.{type}
+input_initializer.block
+input_slot.{channel}
+```
+
+**Deduplicated (via Tracker/JetStream):**
+```
+input_pum3_deduped.account.{program}      → PUM3 consumes
+input_pum3_deduped.transaction.{type}
+input_pum3_deduped.block
+input_initializer_deduped.account.{program} → web-terminal consumes
+input_initializer_deduped.transaction.{type}
+input_initializer_deduped.block
+```
+
+### Slot Age Rejection
+
+- **Config**: `reject_slot_age` (default: 25 slots)
+- **Logic**: Reject if `message_slot < (latest_slot - reject_slot_age)`
+- **Purpose**: Prevent stale updates from slow providers
+
+## Working in This Repo
+
+### Standards & Conventions
+
+- Each Geyser provider gets its own config file
+- Account subscriptions defined in `subscriptions/account.rs`
+- Transaction subscriptions in `subscriptions/transaction.rs`
+- Metrics exposed on port 9000, health on port 3000
+
+### Common Tasks
+
+#### Local Development
+
+**Standalone (default uses Beta NATS via Tailscale):**
+```bash
+# Build
+cargo build
+
+# Run geezer with specific config
+CONFIG_FILE=config/geezer-prod-us-helius-ewr.yaml cargo run --bin geezer
+
+# Run tracker
+CONFIG_FILE=config/tracker-prod-us.yaml cargo run --bin tracker
+
+# Check formatting
+cargo fmt --check
+cargo clippy
+```
+
+**With Local NATS (for iterating on subscriptions):**
+```bash
+# Run local NATS server
+nats-server --jetstream &
+
+# Authenticate for secrets
+gcloud auth application-default login
+
+# Run tracker first (configures JetStreams)
+RUST_LOG=info cargo run --release --bin tracker
+
+# Run geezer
+RUST_LOG=info cargo run --release --bin geezer
+
+# Validate data is flowing
+nats stream info
+nats subscribe --headers-only 'input_pum3_deduped.block'
+```
+
+**Running with PUM3 Locally:**
+
+In `pum3/nami/.env`:
+```bash
+NATS_INPUT_ENABLED=true
+INPUT_NATS_URL=nats://localhost:4222
+OUTPUT_NATS_URL=nats://localhost:4222  # If testing Publisher
+```
+
+Then: `cd pum3 && ulimit -Sn unlimited && RUST_LOG=info cargo run --release -p nami`
+
+**Running with Web Terminal Locally:**
+
+Use the NATS server from WT stack. In `.env`:
+```bash
+INPUT_NATS_URL=nats://nats-server:4222
+```
+
+See [HOW_TO_RUN_PUM3_LOCALLY.md](https://github.com/BonkBotTeam/web-terminal/blob/main/HOW_TO_RUN_PUM3_LOCALLY.md) for full setup.
+
+**Note**: Don't use Laserstream endpoints locally - they have connection limits.
+
+#### Finding Code
+
+| Task | Location |
+|------|----------|
+| Add program subscription | `src/bin/geezer/subscriptions/account.rs` |
+| Add transaction filter | `src/bin/geezer/subscriptions/transaction.rs` |
+| Modify NATS publishing | `src/bin/geezer/publishers.rs` |
+| Add JetStream stream | `src/bin/tracker/jetstream_management.rs` |
+| Add new Geyser provider | Create config in `config/` |
+| Modify slot rejection | `src/bin/geezer/latest_slot.rs` |
+
+#### Adding a New Program Subscription
+
+1. Add program ID constant (or import from `pum3-common`)
+2. Add subscription in `subscriptions/account.rs`
+3. Map to appropriate NATS topic (pum3 or initializer)
+4. Deploy new config or update existing
+
+#### Adding a New Geezer Instance
+
+New geezer instances are cheap to add - we want as many as possible for redundancy:
+
+1. Create config file under `config/` following naming convention (see Configuration section)
+2. Update `VALID_PROVIDERS` array in `deploy/deploy.sh`
+3. Push changes to GitHub
+4. Run `./deploy/deploy.sh --provider <your-provider>`
+
+#### Deploy & Release
+
+```bash
+# Prerequisites
+gcloud auth login
+
+# Deploy (see helptext for options)
+./deploy/deploy.sh --help
+
+# Release (same pattern as bonkbot/PUM3)
+./deploy/release.sh --help
+```
+
+### Things to Avoid
+
+- Don't process data in geezer - just route to NATS
+- Don't skip deduplication (always use `*_deduped` topics downstream)
+- Don't hardcode Geyser URLs (use config files)
+- Avoid blocking the async Geyser subscription loop
+- Don't use Laserstream endpoints for local dev (connection limits)
+- Never run `--reset-instance true` with prefix of currently deployed NATS server
+
+## Related Documentation
+
+- [README.md](README.md) - Brief overview
+- [infra_spec.md](infra_spec.md) - Infrastructure deployment spec
+- [V1 Architecture Diagram](https://miro.com/app/board/uXjVGaff3Ec=/) - Miro board
+- [Linear Project](https://linear.app/bonkbot/project/geyser-geezer-7325cc254f4f/overview) - Issue tracking
+
+## Cross-System Context
+
+### Upstream Dependencies
+
+| System | What We Get | Interface |
+|--------|-------------|-----------|
+| Helius | Geyser stream | Yellowstone gRPC |
+| Triton | Geyser stream | Yellowstone gRPC |
+| Laserstream | Low-latency stream | Yellowstone gRPC |
+
+### Downstream Consumers
+
+| System | What They Get | Interface |
+|--------|---------------|-----------|
+| PUM3 | `input_pum3_deduped.*` | NATS JetStream |
+| web-terminal | `input_initializer_deduped.*` | NATS JetStream |
+
+### Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    GEYSER PROVIDERS                             │
+│  ┌──────────┐  ┌──────────┐  ┌─────────────┐                   │
+│  │  Helius  │  │  Triton  │  │ Laserstream │                   │
+│  └────┬─────┘  └────┬─────┘  └──────┬──────┘                   │
+└───────┼─────────────┼───────────────┼───────────────────────────┘
+        │             │               │
+        │ Yellowstone gRPC            │
+        ▼             ▼               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    GEEZER INSTANCES                             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                      │
+│  │ Geezer 1 │  │ Geezer 2 │  │ Geezer 3 │  (per provider)      │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘                      │
+└───────┼─────────────┼─────────────┼─────────────────────────────┘
+        │             │             │
+        │ NATS (input_pum3.*, input_initializer.*)
+        ▼             ▼             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       TRACKER                                   │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │               JetStream Deduplication                   │    │
+│  │  - 10s dedup window for accounts/transactions          │    │
+│  │  - Measures which provider wins (latency metrics)      │    │
+│  └────────────────────────────────────────────────────────┘    │
+└───────┬─────────────────────────────────────────────────────────┘
+        │
+        │ NATS (*_deduped.*)
+        ▼
+┌───────┴───────┐
+│               │
+▼               ▼
+PUM3        web-terminal
+(prices)    (initializer)
+```
+
+### Regional Deployment
+
+| Region | Geezer Instances | Tracker | Providers |
+|--------|------------------|---------|-----------|
+| US | 3+ | 1 | Helius, Triton, Laserstream |
+| EU | 3+ | 1 | Helius, Triton, Laserstream |
+| AP | 3+ | 1 | Helius, Triton |
+
+## Configuration
+
+### Key Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `CONFIG_FILE` | Path to YAML config |
+| `GEYSER_URL` | Geyser provider endpoint |
+| `NATS_URL` | NATS server URL |
+| `REJECT_SLOT_AGE` | Stale slot rejection threshold |
+
+### Config File Naming Convention
+
+Config files **must** follow these patterns:
+
+```
+# For geezer instances
+config/geezer-{environment}-{region}-{provider}.yaml
+
+# For tracker instances
+config/tracker-{environment}-{region}.yaml
+```
+
+- `environment`: `beta`, `staging`, `prod`
+- `region`: `eu`, `us`, `ap`
+- `provider` (includes endpoint location): e.g., `helius-ams`, `laserstream-sgp`, `triton-ewr`
+
+Examples: `geezer-beta-eu-laserstream-ams.yaml`, `tracker-prod-us.yaml`
+
+### Config File Structure
+
+```yaml
+geyser_url: "https://..."
+nats_url: "nats://..."
+reject_slot_age: 25
+healthcheck_server_port: 3000
+metrics_server_port: 9000
+subscriptions:
+  pum3_accounts: [boop, pumpfun, raydium_amm, ...]
+  initializer_accounts: [mpl_token_metadata, pyth, ...]
+```
+
+## NATS Server Operations
+
+NATS servers are maintained in the [web-terminal](https://github.com/BonkBotTeam/web-terminal) repo.
+
+### Standalone NATS Deployment (V1)
+
+Deploy new standalone NATS servers using `deploy-data-stack.sh` from web-terminal:
+
+```bash
+bash scripts/gcp/deploy-data-stack.sh \
+    --branch main \
+    --environment beta \
+    --make run-nats-standalone \
+    --prefix geyser-geezer-a \
+    --zone europe-west4-a \
+    --image false \
+    --log-level INFO \
+    --machine-series c2 \
+    --skip-checks false \
+    --reset-instance true \
+    --use-cloud-grafana true
+```
+
+**CRITICAL**: Use alternating `a`/`b` naming scheme. Check GCP for current deployment before running.
+
+### Replacing NATS Servers (Zero-Downtime)
+
+1. Deploy new NATS server with alternate prefix (`geyser-geezer-a` → `geyser-geezer-b`)
+2. Update geezer configs: add `secondary_nats_url` (old), update `nats_url` (new)
+3. Update tracker config with new NATS IP
+4. Deploy tracker first (sets up JetStreams), then geezer instances
+5. Update PUM3 publisher instances (`SECONDARY_OUTPUT_NATS_URL`, `OUTPUT_NATS_URL`)
+6. Update web-terminal `input_nats_url` - **MUST deploy with `--reset-input-stream-sequence true`**
+7. Once WT switched over, remove `secondary_*` configs and delete old NATS server
+
+### Local Dev Access to Beta NATS
+
+Beta NATS servers are accessible via Tailscale through `beta-ams-exit`:
+
+```bash
+# On beta-ams-exit, advertise the NATS IP
+sudo tailscale up --advertise-routes="<existing-routes>,<nats-ip>/32" --advertise-exit-node --reset
+
+# On local machine
+sudo tailscale set --accept-routes
+
+# Test connectivity
+nats --server="nats://<nats-ip>:4222" subscribe --headers-only input_pum3.block
+```
+
+Tailscale ACLs must also be updated at https://login.tailscale.com/admin/acls/file
+
+## Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `geezer_internal_latency` | Histogram | Processing latency |
+| `geezer_geyser_slot_lag` | Gauge | Slots behind tip |
+| `geezer_rejected_geyser_updates` | Counter | Stale rejections |
+| `geyser_geezer_message_latency` | Histogram | Provider race winner |

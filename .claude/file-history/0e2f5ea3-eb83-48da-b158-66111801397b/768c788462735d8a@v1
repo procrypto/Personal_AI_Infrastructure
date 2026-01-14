@@ -1,0 +1,163 @@
+---
+phase: 10-workflow-secrets
+plan: 01
+type: execute
+---
+
+<objective>
+Complete workflow configuration with missing secrets and clearer deployment documentation.
+
+Purpose: Ensure first-time deployments succeed by adding all required secrets and making placeholder replacement instructions unambiguous.
+Output: Updated workflows with TWITTER_API_KEY, enhanced DEPLOYMENT.md with explicit placeholder replacement steps and pre-deploy checklist.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+~/.claude/get-shit-done/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/phases/09-ci-hardening/09-01-SUMMARY.md
+
+**Key files:**
+@.github/workflows/deploy.yml
+@.github/workflows/deploy-prod.yml
+@DEPLOYMENT.md
+
+**Prior decisions:**
+- Phase 09: Workflows already have Buildx caching, resource limits, health verification
+- Phase 04: APP_ENV=remote for both beta and prod (unified remote mode)
+- Workflows use WIF (Workload Identity Federation) - no service account keys
+
+**Current state:**
+- Workflows have TODO placeholders for: workload_identity_provider, service_account
+- Workflows missing: TWITTER_API_KEY secret (needed for Twitter proxy endpoint)
+- DEPLOYMENT.md exists but placeholder replacement instructions could be clearer
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add TWITTER_API_KEY to workflow secrets</name>
+  <files>.github/workflows/deploy.yml, .github/workflows/deploy-prod.yml</files>
+  <action>
+Add TWITTER_API_KEY to the secrets section in both workflows, following the existing pattern for ClickHouse secrets.
+
+In deploy.yml and deploy-prod.yml, update the secrets block to include:
+```yaml
+secrets: |
+  CLICKHOUSE_KEY_ID=CLICKHOUSE_KEY_ID:latest
+  CLICKHOUSE_KEY_SECRET=CLICKHOUSE_KEY_SECRET:latest
+  CLICKHOUSE_SERVICE_ID=CLICKHOUSE_SERVICE_ID:latest
+  TWITTER_API_KEY=TWITTER_API_KEY:latest
+```
+
+Also update the TODO comment above the secrets block to mention TWITTER_API_KEY.
+  </action>
+  <verify>grep -A5 "secrets:" .github/workflows/deploy.yml | grep TWITTER_API_KEY</verify>
+  <done>Both workflows include TWITTER_API_KEY in secrets section</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Improve DEPLOYMENT.md with explicit placeholder instructions</name>
+  <files>DEPLOYMENT.md</files>
+  <action>
+Enhance DEPLOYMENT.md with:
+
+1. **Add Pre-Deploy Checklist section** at the top after Prerequisites:
+   - All GCP setup steps completed
+   - All secrets created in Secret Manager (list all 4)
+   - Workflow placeholders replaced (list exact strings to find/replace)
+   - Test deployment triggered and verified
+
+2. **Update Workflow Configuration section** with explicit find/replace table:
+   | Placeholder | Replace With | How to Get |
+   |-------------|--------------|------------|
+   | `PROJECT_NUMBER` | Your GCP project number | `gcloud projects describe PROJECT_ID --format='value(projectNumber)'` |
+   | `YOUR_ORG/YOUR_REPO` | Your GitHub org/repo | e.g., `BONKbot/local-api` |
+
+3. **Add TWITTER_API_KEY to Secret Manager section**:
+   ```bash
+   echo -n "YOUR_TWITTER_API_KEY" | gcloud secrets create "TWITTER_API_KEY" \
+     --project="PROJECT_ID" \
+     --data-file=-
+   ```
+   And grant access same as other secrets.
+
+4. **Add validation commands** to verify all placeholders are replaced:
+   ```bash
+   grep -n "PROJECT_NUMBER\|YOUR_ORG\|YOUR_REPO\|TODO" .github/workflows/*.yml
+   ```
+   Should return empty if all placeholders replaced.
+  </action>
+  <verify>grep -q "Pre-Deploy Checklist" DEPLOYMENT.md && grep -q "TWITTER_API_KEY" DEPLOYMENT.md</verify>
+  <done>DEPLOYMENT.md has pre-deploy checklist, explicit placeholder table, TWITTER_API_KEY instructions, and validation command</done>
+</task>
+
+</tasks>
+
+<verification>
+Before declaring phase complete:
+- [ ] Both workflows include TWITTER_API_KEY in secrets section
+- [ ] DEPLOYMENT.md has Pre-Deploy Checklist section
+- [ ] DEPLOYMENT.md has explicit placeholder replacement table
+- [ ] DEPLOYMENT.md has TWITTER_API_KEY secret creation instructions
+- [ ] DEPLOYMENT.md has validation command to check for unreplaced placeholders
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- All verification checks pass
+- No syntax errors in workflow YAML files
+- DEPLOYMENT.md provides clear path from clone to first deploy
+- Phase 10 complete, Milestone v1.1 complete
+</success_criteria>
+
+<output>
+After completion, create `.planning/phases/10-workflow-secrets/10-01-SUMMARY.md`:
+
+# Phase 10 Plan 1: Workflow Secrets Summary
+
+**[Substantive one-liner]**
+
+## Performance
+
+- **Duration:** X min
+- **Tasks:** 2
+- **Files modified:** 3
+
+## Accomplishments
+
+- [Key outcomes]
+
+## Task Commits
+
+1. **Task 1:** commit hash (type)
+2. **Task 2:** commit hash (type)
+
+## Files Created/Modified
+
+- `.github/workflows/deploy.yml` - Added TWITTER_API_KEY secret
+- `.github/workflows/deploy-prod.yml` - Added TWITTER_API_KEY secret
+- `DEPLOYMENT.md` - Enhanced with pre-deploy checklist and explicit instructions
+
+## Decisions Made
+
+[Any decisions, or "None"]
+
+## Deviations from Plan
+
+[Any deviations, or "None"]
+
+## Issues Encountered
+
+[Any issues, or "None"]
+
+## Next Step
+
+Phase complete, Milestone v1.1 complete. Ready for first deployment.
+</output>

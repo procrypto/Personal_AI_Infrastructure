@@ -1,0 +1,84 @@
+   175→
+   176→export type ConnectHandler = () => void;
+   177→
+   178→class AutopilotWebSocketServer {
+   179→  private wss: WebSocketServer | null = null;
+   180→  private clients: Set<WebSocket> = new Set();
+   181→  private port: number = 8765;
+   182→  private commandHandler: CommandHandler | null = null;
+   183→  private connectHandler: ConnectHandler | null = null;
+   184→
+   185→  start(port: number = 8765): void {
+   186→    if (this.wss) {
+   187→      console.log('[WS] Server already running');
+   188→      return;
+   189→    }
+   190→
+   191→    this.port = port;
+   192→    this.wss = new WebSocketServer({ port });
+   193→
+   194→    this.wss.on('connection', (ws) => {
+   195→      this.clients.add(ws);
+   196→      console.log(`[WS] Client connected (${this.clients.size} total)`);
+   197→
+   198→      // Notify handler to send initial state to new client
+   199→      if (this.connectHandler) {
+   200→        this.connectHandler();
+   201→      }
+   202→
+   203→      // Handle incoming messages (commands from frontend)
+   204→      ws.on('message', async (data) => {
+   205→        try {
+   206→          const message = JSON.parse(data.toString()) as AutopilotCommand;
+   207→          if (message.command && this.commandHandler) {
+   208→            console.log(`[WS] Command received: ${message.command}`);
+   209→            await this.commandHandler(message);
+   210→          }
+   211→        } catch (err) {
+   212→          console.error('[WS] Failed to parse command:', err);
+   213→        }
+   214→      });
+   215→
+   216→      ws.on('close', () => {
+   217→        this.clients.delete(ws);
+   218→        console.log(`[WS] Client disconnected (${this.clients.size} total)`);
+   219→      });
+   220→
+   221→      ws.on('error', (err) => {
+   222→        console.error('[WS] Client error:', err.message);
+   223→        this.clients.delete(ws);
+   224→      });
+   225→    });
+   226→
+   227→    this.wss.on('error', (err) => {
+   228→      console.error('[WS] Server error:', err.message);
+   229→    });
+   230→
+   231→    console.log(`[WS] Server started on port ${port}`);
+   232→  }
+   233→
+   234→  // Register a handler for incoming commands
+   235→  onCommand(handler: CommandHandler): void {
+   236→    this.commandHandler = handler;
+   237→  }
+   238→
+   239→  // Register a handler for new client connections (to send initial state)
+   240→  onConnect(handler: ConnectHandler): void {
+   241→    this.connectHandler = handler;
+   242→  }
+   243→
+   244→  stop(): void {
+   245→    if (!this.wss) return;
+   246→
+   247→    for (const client of this.clients) {
+   248→      client.close();
+   249→    }
+   250→    this.clients.clear();
+   251→    this.wss.close();
+   252→    this.wss = null;
+   253→    console.log('[WS] Server stopped');
+   254→  }
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

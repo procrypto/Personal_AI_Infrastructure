@@ -1,0 +1,125 @@
+/**
+ * useAutopilotTokensWithPrices
+ *
+ * Combines autopilot token lists with NATS market data to provide
+ * live price and change data. Follows the same pattern as useAutopilotPositions.
+ *
+ * Token sources:
+ * - Watchlist: From autopilot backend (user-added tokens)
+ * - Whale moves: From Discovery API (1s refresh)
+ * - Trending: From Discovery API
+ */
+
+import { useMemo } from "react";
+import { useGlobalStore, useShallow } from "@/store/memoryStore/useGlobalStore";
+import type { AutopilotWatchedToken } from "@/store/memoryStore/slices/autopilot-store/types";
+import { useAutopilotDiscoveryTokens } from "./useAutopilotDiscoveryTokens";
+
+/**
+ * Token with enriched price data from NATS.
+ * Uses undefined for missing data to match AutopilotWatchedToken optionals.
+ */
+export interface AutopilotTokenWithPrices extends AutopilotWatchedToken {
+  priceUsd: number | undefined;
+  change1h: number | undefined;
+  marketCapUsd: number | undefined;
+}
+
+/**
+ * Token lists with enriched price data.
+ */
+export interface AutopilotTokenListWithPrices {
+  watchlist: AutopilotTokenWithPrices[];
+  trending: AutopilotTokenWithPrices[];
+  whales: AutopilotTokenWithPrices[];
+}
+
+/**
+ * Hook to get autopilot token lists with live price data from NATS market data.
+ */
+export const useAutopilotTokensWithPrices =
+  (): AutopilotTokenListWithPrices => {
+    // Get token lists from Discovery API (whale/trending) + backend (watchlist)
+    const tokenList = useAutopilotDiscoveryTokens();
+
+    // Get market data map and SOL price for USD conversion
+    const marketDataMap = useGlobalStore(
+      useShallow(state => state.websocketMessages.market_data.data)
+    );
+
+    // SOL price is stored as string
+    const solPriceUsdStr = useGlobalStore(state => state.solanaPrice.usd);
+    const solPriceUsd = solPriceUsdStr ? parseFloat(solPriceUsdStr) : undefined;
+
+    // Enrich a single token with price data
+    const enrichToken = useMemo(() => {
+      return (token: AutopilotWatchedToken): AutopilotTokenWithPrices => {
+        const mintData = marketDataMap[token.mint];
+
+        if (!mintData || mintData.size === 0) {
+          return {
+            ...token,
+            priceUsd: undefined,
+            change1h: undefined,
+          };
+        }
+
+        // Get the latest market data
+        const latestMarketData = Array.from(mintData.values())[0];
+
+        if (!latestMarketData?.price_sol) {
+          return {
+            ...token,
+            priceUsd: undefined,
+            change1h: undefined,
+          };
+        }
+
+        // price_sol can be string or number from NATS, parse it
+        const rawPriceSol = latestMarketData.price_sol;
+        const priceSol =
+          typeof rawPriceSol === "string"
+            ? parseFloat(rawPriceSol)
+            : rawPriceSol;
+
+        if (isNaN(priceSol)) {
+          return {
+            ...token,
+            priceUsd: undefined,
+            change1h: undefined,
+          };
+        }
+
+        // Convert to USD
+        const priceUsd =
+          solPriceUsd && !isNaN(solPriceUsd)
+            ? priceSol * solPriceUsd
+            : undefined;
+
+        // Calculate 1h change from trading_stats_1h if available
+        let change1h: number | undefined = undefined;
+        const stats1h = latestMarketData.trading_stats_1h;
+        if (stats1h?.earliest_price_sol) {
+          const earliestPrice = parseFloat(String(stats1h.earliest_price_sol));
+          if (!isNaN(earliestPrice) && earliestPrice !== 0) {
+            change1h = ((priceSol - earliestPrice) / earliestPrice) * 100;
+          }
+        }
+
+        return {
+          ...token,
+          priceUsd,
+          change1h,
+        };
+      };
+    }, [marketDataMap, solPriceUsd]);
+
+    // Enrich all token lists
+    return useMemo(() => {
+      return {
+        watchlist: tokenList.watchlist.map(enrichToken),
+        trending: tokenList.trending.map(enrichToken),
+        whales: tokenList.whales.map(enrichToken),
+      };
+    }, [tokenList, enrichToken]);
+  };

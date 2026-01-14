@@ -1,0 +1,36 @@
+/**
+ * Slack Events API Route
+ *
+ * Minimal Vercel Function handler for Slack events.
+ * Handles URL verification and event callbacks.
+ */
+
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Only accept POST
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const body = req.body;
+
+  // Handle Slack URL verification challenge
+  if (body?.type === 'url_verification') {
+    return res.status(200).json({ challenge: body.challenge });
+  }
+
+  // Handle event callbacks
+  if (body?.type === 'event_callback') {
+    const event = body.event;
+    console.log('[slack-events] Received event:', event?.type, event?.subtype);
+
+    // TODO: Process events here in Phase 3 continuation
+    // For now, just acknowledge receipt
+    return res.status(200).json({ ok: true });
+  }
+
+  // Unknown request type
+  console.log('[slack-events] Unknown request type:', body?.type);
+  return res.status(200).json({ ok: true });
+}

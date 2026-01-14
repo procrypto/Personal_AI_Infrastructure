@@ -1,0 +1,281 @@
+/**
+ * Magic Exit Management
+ *
+ * Automatic exit strategies based on market structure:
+ * - Magic TP: Auto-sell at rotation resistance
+ * - Magic SL: Close on support break
+ * - Magic TSL: Trail to Williams fractal swings (TODO)
+ *
+ * These work with open paper trades to manage exits automatically.
+ */
+
+import type { TokenMarketData } from '../api/types.js';
+import type { PaperTrade } from './types.js';
+import { paperTracker } from './paper-tracker.js';
+import {
+  getRotationLevels,
+  estimateRotationFromMarketData,
+  type RotationLevels,
+} from '../rules/rotations.js';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface MagicExitConfig {
+  /** Enable magic take profit */
+  tpEnabled: boolean;
+  /** TP trigger: how close to resistance to trigger (percentage) */
+  tpTriggerPercent: number; // e.g., 0.5 = trigger when within 0.5% of resistance
+
+  /** Enable magic stop loss (support break) */
+  slEnabled: boolean;
+  /** SL trigger: how far below support to trigger (percentage) */
+  slTriggerPercent: number; // e.g., 0.5 = trigger when 0.5% below support
+
+  /** Enable trailing stop loss (Williams fractals) - TODO */
+  tslEnabled: boolean;
+}
+
+export interface ExitCheck {
+  shouldExit: boolean;
+  reason: 'tp_resistance' | 'sl_support_break' | 'tsl_fractal' | null;
+  exitPrice: number;
+  rotationLevels?: RotationLevels;
+  details?: string;
+}
+
+// ============================================================================
+// Default Config
+// ============================================================================
+
+export const DEFAULT_MAGIC_EXIT_CONFIG: MagicExitConfig = {
+  tpEnabled: true,
+  tpTriggerPercent: 0.5, // Within 0.5% of resistance
+
+  slEnabled: true,
+  slTriggerPercent: 0.5, // 0.5% below support
+
+  tslEnabled: false, // TODO: Implement Williams TSL
+};
+
+// ============================================================================
+// Magic Exit Checker
+// ============================================================================
+
+export class MagicExitChecker {
+  private config: MagicExitConfig;
+
+  constructor(config: Partial<MagicExitConfig> = {}) {
+    this.config = { ...DEFAULT_MAGIC_EXIT_CONFIG, ...config };
+  }
+
+  updateConfig(config: Partial<MagicExitConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
+   * Check if a trade should exit based on magic exit rules.
+   */
+  checkExit(trade: PaperTrade, marketData: TokenMarketData): ExitCheck {
+    const currentPrice = marketData.price_sol;
+
+    // Get rotation levels (from cache or estimate)
+    let levels = getRotationLevels(trade.mint);
+    if (!levels) {
+      levels = estimateRotationFromMarketData(marketData);
+    }
+
+    if (!levels) {
+      return { shouldExit: false, reason: null, exitPrice: currentPrice };
+    }
+
+    // Check Magic TP (for long positions approaching resistance)
+    if (this.config.tpEnabled && trade.action === 'buy') {
+      const tpCheck = this.checkTakeProfit(trade, currentPrice, levels);
+      if (tpCheck.shouldExit) return tpCheck;
+    }
+
+    // Check Magic SL (for long positions breaking support)
+    if (this.config.slEnabled && trade.action === 'buy') {
+      const slCheck = this.checkStopLoss(trade, currentPrice, levels);
+      if (slCheck.shouldExit) return slCheck;
+    }
+
+    // TODO: Check Magic TSL (Williams fractal trailing)
+    // if (this.config.tslEnabled) { ... }
+
+    return {
+      shouldExit: false,
+      reason: null,
+      exitPrice: currentPrice,
+      rotationLevels: levels,
+    };
+  }
+
+  /**
+   * Magic Take Profit: Exit when price approaches rotation resistance.
+   */
+  private checkTakeProfit(
+    trade: PaperTrade,
+    currentPrice: number,
+    levels: RotationLevels
+  ): ExitCheck {
+    const { rotationHigh } = levels;
+
+    // Calculate distance to resistance
+    const distanceToResistance = ((rotationHigh - currentPrice) / currentPrice) * 100;
+
+    // Check if we're within trigger distance AND in profit
+    const pnlPercent = ((currentPrice - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+
+    if (distanceToResistance <= this.config.tpTriggerPercent && pnlPercent > 0) {
+      return {
+        shouldExit: true,
+        reason: 'tp_resistance',
+        exitPrice: currentPrice,
+        rotationLevels: levels,
+        details: `Price ${currentPrice.toFixed(8)} within ${distanceToResistance.toFixed(2)}% of resistance ${rotationHigh.toFixed(8)} | P&L: +${pnlPercent.toFixed(2)}%`,
+      };
+    }
+
+    // Also trigger if price exceeded resistance (take profit on breakout)
+    if (currentPrice >= rotationHigh && pnlPercent > 0) {
+      return {
+        shouldExit: true,
+        reason: 'tp_resistance',
+        exitPrice: currentPrice,
+        rotationLevels: levels,
+        details: `Price ${currentPrice.toFixed(8)} at/above resistance ${rotationHigh.toFixed(8)} | P&L: +${pnlPercent.toFixed(2)}%`,
+      };
+    }
+
+    return { shouldExit: false, reason: null, exitPrice: currentPrice, rotationLevels: levels };
+  }
+
+  /**
+   * Magic Stop Loss: Exit when price breaks below rotation support.
+   */
+  private checkStopLoss(
+    trade: PaperTrade,
+    currentPrice: number,
+    levels: RotationLevels
+  ): ExitCheck {
+    const { rotationLow } = levels;
+
+    // Calculate how far below support we are
+    const distanceBelowSupport = ((rotationLow - currentPrice) / currentPrice) * 100;
+
+    // Trigger if price is below support by trigger amount
+    if (distanceBelowSupport >= this.config.slTriggerPercent) {
+      const pnlPercent = ((currentPrice - trade.entryPriceSol) / trade.entryPriceSol) * 100;
+
+      return {
+        shouldExit: true,
+        reason: 'sl_support_break',
+        exitPrice: currentPrice,
+        rotationLevels: levels,
+        details: `Price ${currentPrice.toFixed(8)} broke support ${rotationLow.toFixed(8)} by ${distanceBelowSupport.toFixed(2)}% | P&L: ${pnlPercent.toFixed(2)}%`,
+      };
+    }
+
+    return { shouldExit: false, reason: null, exitPrice: currentPrice, rotationLevels: levels };
+  }
+
+  /**
+   * Check all open trades and return exits to execute.
+   */
+  checkAllTrades(marketDataMap: Map<string, TokenMarketData>): Array<{
+    trade: PaperTrade;
+    exit: ExitCheck;
+  }> {
+    const exits: Array<{ trade: PaperTrade; exit: ExitCheck }> = [];
+
+    const openTrades = paperTracker.getOpenTrades();
+
+    for (const trade of openTrades) {
+      const marketData = marketDataMap.get(trade.mint);
+      if (!marketData) continue;
+
+      const exit = this.checkExit(trade, marketData);
+      if (exit.shouldExit) {
+        exits.push({ trade, exit });
+      }
+    }
+
+    return exits;
+  }
+
+  /**
+   * Execute magic exits for all triggered trades.
+   * Returns array of closed trades.
+   */
+  async executeExits(
+    marketDataMap: Map<string, TokenMarketData>,
+    quiet: boolean = false
+  ): Promise<PaperTrade[]> {
+    const closedTrades: PaperTrade[] = [];
+    const exitsToExecute = this.checkAllTrades(marketDataMap);
+
+    for (const { trade, exit } of exitsToExecute) {
+      const marketData = marketDataMap.get(trade.mint);
+      if (!marketData) continue;
+
+      const closed = paperTracker.closeTrade(
+        trade.id,
+        exit.exitPrice,
+        marketData.price_usd
+      );
+
+      if (closed) {
+        closedTrades.push(closed);
+
+        if (!quiet) {
+          const reasonLabel = this.getReasonLabel(exit.reason);
+          const pnlSign = (closed.pnlPercent ?? 0) >= 0 ? '+' : '';
+          console.log(
+            `\n[MAGIC ${reasonLabel}] ${closed.symbol} | ${pnlSign}${closed.pnlPercent?.toFixed(2)}%`
+          );
+          if (exit.details) {
+            console.log(`  ${exit.details}`);
+          }
+        }
+      }
+    }
+
+    if (closedTrades.length > 0) {
+      await paperTracker.save();
+    }
+
+    return closedTrades;
+  }
+
+  /**
+   * Get human-readable label for exit reason.
+   */
+  private getReasonLabel(reason: ExitCheck['reason']): string {
+    switch (reason) {
+      case 'tp_resistance':
+        return 'TP';
+      case 'sl_support_break':
+        return 'SL';
+      case 'tsl_fractal':
+        return 'TSL';
+      default:
+        return 'EXIT';
+    }
+  }
+
+  /**
+   * Get current config.
+   */
+  getConfig(): MagicExitConfig {
+    return { ...this.config };
+  }
+}
+
+// ============================================================================
+// Singleton Instance
+// ============================================================================
+
+export const magicExits = new MagicExitChecker();

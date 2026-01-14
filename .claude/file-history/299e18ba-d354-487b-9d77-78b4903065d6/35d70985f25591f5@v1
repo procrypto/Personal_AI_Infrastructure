@@ -1,0 +1,230 @@
+/**
+ * Rule Templates
+ *
+ * Pre-configured rule combinations for common trading strategies.
+ * Users can use these as starting points and customize thresholds.
+ */
+
+import type { RuleSet, AnyRuleConfig } from './types.js';
+
+/**
+ * Momentum Buy Template
+ *
+ * Looks for tokens with:
+ * - Rising price (5m and 1h both up)
+ * - Volume spike above average
+ * - Buy pressure exceeding sell pressure
+ */
+export const momentumBuyTemplate: RuleSet = {
+  id: 'momentum-buy',
+  name: 'Momentum Buy',
+  description: 'Triggers when price is rising with strong volume and buy pressure',
+  mode: 'all', // All conditions must be met
+  rules: [
+    {
+      id: 'momentum-price-5m',
+      name: 'Price Rising (5m)',
+      description: 'Price up in last 5 minutes',
+      enabled: true,
+      type: 'buy',
+      ruleType: 'price_change',
+      timeframe: '5m',
+      threshold: 1, // 1% minimum
+      direction: 'up',
+    },
+    {
+      id: 'momentum-price-1h',
+      name: 'Price Rising (1h)',
+      description: 'Price up in last hour',
+      enabled: true,
+      type: 'buy',
+      ruleType: 'price_change',
+      timeframe: '1h',
+      threshold: 2, // 2% minimum
+      direction: 'up',
+    },
+    {
+      id: 'momentum-volume',
+      name: 'Volume Spike',
+      description: 'Volume above average',
+      enabled: true,
+      type: 'buy',
+      ruleType: 'volume_spike',
+      timeframe: '5m',
+      multiplier: 1.5,
+    },
+    {
+      id: 'momentum-pressure',
+      name: 'Buy Pressure',
+      description: 'More buy volume than sell',
+      enabled: true,
+      type: 'buy',
+      ruleType: 'buy_sell_ratio',
+      timeframe: '5m',
+      minRatio: 1.5,
+    },
+  ],
+};
+
+/**
+ * Momentum Sell Template
+ *
+ * Looks for tokens showing weakness:
+ * - Falling price
+ * - Sell pressure exceeding buy pressure
+ */
+export const momentumSellTemplate: RuleSet = {
+  id: 'momentum-sell',
+  name: 'Momentum Sell',
+  description: 'Triggers when price is falling with sell pressure',
+  mode: 'all',
+  rules: [
+    {
+      id: 'sell-price-5m',
+      name: 'Price Falling (5m)',
+      description: 'Price down in last 5 minutes',
+      enabled: true,
+      type: 'sell',
+      ruleType: 'price_change',
+      timeframe: '5m',
+      threshold: 2,
+      direction: 'down',
+    },
+    {
+      id: 'sell-pressure',
+      name: 'Sell Pressure',
+      description: 'More sell volume than buy',
+      enabled: true,
+      type: 'sell',
+      ruleType: 'buy_sell_ratio',
+      timeframe: '5m',
+      minRatio: 1.5, // Sell side dominant
+    },
+  ],
+};
+
+/**
+ * Volume Alert Template
+ *
+ * Simple volume-based alerts without price requirement.
+ * Good for catching early moves.
+ */
+export const volumeAlertTemplate: RuleSet = {
+  id: 'volume-alert',
+  name: 'Volume Alert',
+  description: 'Alerts on significant volume spikes',
+  mode: 'any', // Any volume spike triggers
+  rules: [
+    {
+      id: 'vol-spike-5m',
+      name: 'Volume Spike (5m)',
+      description: '2x volume in 5 minutes',
+      enabled: true,
+      type: 'both',
+      ruleType: 'volume_spike',
+      timeframe: '5m',
+      multiplier: 2,
+    },
+    {
+      id: 'vol-spike-1h',
+      name: 'Volume Spike (1h)',
+      description: '3x volume in 1 hour',
+      enabled: true,
+      type: 'both',
+      ruleType: 'volume_spike',
+      timeframe: '1h',
+      multiplier: 3,
+    },
+  ],
+};
+
+/**
+ * Retail Interest Template
+ *
+ * Looks for tokens gaining retail attention:
+ * - High unique trader count
+ * - More buyers than sellers
+ */
+export const retailInterestTemplate: RuleSet = {
+  id: 'retail-interest',
+  name: 'Retail Interest',
+  description: 'Triggers on high retail participation',
+  mode: 'all',
+  rules: [
+    {
+      id: 'retail-traders',
+      name: 'Active Traders',
+      description: 'Many unique traders',
+      enabled: true,
+      type: 'both',
+      ruleType: 'trader_count',
+      timeframe: '5m',
+      minTraders: 50,
+      minBuyers: 30,
+    },
+    {
+      id: 'retail-pressure',
+      name: 'Buyer Majority',
+      description: 'More buyers than sellers',
+      enabled: true,
+      type: 'buy',
+      ruleType: 'buy_sell_ratio',
+      timeframe: '5m',
+      minRatio: 1.2,
+    },
+  ],
+};
+
+/**
+ * All available templates
+ */
+export const templates: Record<string, RuleSet> = {
+  'momentum-buy': momentumBuyTemplate,
+  'momentum-sell': momentumSellTemplate,
+  'volume-alert': volumeAlertTemplate,
+  'retail-interest': retailInterestTemplate,
+};
+
+/**
+ * Get a template by ID
+ */
+export function getTemplate(id: string): RuleSet | undefined {
+  return templates[id];
+}
+
+/**
+ * List all template IDs
+ */
+export function listTemplates(): string[] {
+  return Object.keys(templates);
+}
+
+/**
+ * Clone a template with custom overrides
+ */
+export function cloneTemplate(
+  templateId: string,
+  overrides: Partial<Omit<RuleSet, 'rules'>> & {
+    ruleOverrides?: Record<string, Partial<AnyRuleConfig>>;
+  }
+): RuleSet | null {
+  const template = templates[templateId];
+  if (!template) return null;
+
+  const cloned: RuleSet = {
+    ...template,
+    id: overrides.id ?? `${template.id}-custom`,
+    name: overrides.name ?? template.name,
+    description: overrides.description ?? template.description,
+    mode: overrides.mode ?? template.mode,
+    rules: template.rules.map(rule => {
+      const ruleOverride = overrides.ruleOverrides?.[rule.id];
+      if (ruleOverride) {
+        return { ...rule, ...ruleOverride } as AnyRuleConfig;
+      }
+      return { ...rule };
+    }),
+  };
+
+  return cloned;
+}

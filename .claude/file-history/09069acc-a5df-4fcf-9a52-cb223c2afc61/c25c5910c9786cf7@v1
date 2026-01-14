@@ -1,0 +1,46 @@
+/**
+ * Linear Message Store
+ *
+ * Maps Linear's native Slack messages to ticket IDs for thread reply targeting.
+ * When Linear posts to Slack, we capture the mapping so we can reply in-thread.
+ */
+
+import { kv } from './kv-client.js';
+import { KV_KEYS } from './kv-client.js';
+import type { LinearMessage } from '../types.js';
+
+/**
+ * Store a Linear message mapping.
+ * Called when we capture a Linear-posted Slack message.
+ */
+export async function storeLinearMessage(data: LinearMessage): Promise<LinearMessage> {
+  await kv.hset(
+    KV_KEYS.linearMessage(data.slackMessageTs),
+    data as unknown as Record<string, unknown>
+  );
+  return data;
+}
+
+/**
+ * Get a Linear message mapping by Slack timestamp.
+ * Used to find the ticket ID when we see a thread reply.
+ */
+export async function getLinearMessage(slackTs: string): Promise<LinearMessage | null> {
+  const data = await kv.hgetall(KV_KEYS.linearMessage(slackTs));
+  if (!data || Object.keys(data).length === 0) return null;
+  return data as unknown as LinearMessage;
+}
+
+/**
+ * Find a Linear message mapping by Linear issue ID.
+ * Uses scan - slower than by Slack timestamp. Use when you have issue ID but not message TS.
+ */
+export async function findLinearMessageByIssueId(issueId: string): Promise<LinearMessage | null> {
+  for await (const key of kv.scanIterator({ match: 'linear-messages:*' })) {
+    const data = await kv.hgetall(key);
+    if (data && (data as Record<string, unknown>).linearIssueId === issueId) {
+      return data as unknown as LinearMessage;
+    }
+  }
+  return null;
+}

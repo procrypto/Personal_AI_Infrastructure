@@ -1,0 +1,122 @@
+# External Integrations
+
+**Analysis Date:** 2026-01-13
+
+## APIs & External Services
+
+**ClickHouse Cloud (Primary Data Source):**
+- Purpose: Production cryptocurrency trading data
+- SDK/Client: Native `fetch()` via `src/clickhouse/client.ts`
+- Endpoint: `https://queries.clickhouse.cloud/service/{serviceId}/run?format=JSONEachRow`
+- Auth: HTTP Basic Auth (base64-encoded key_id:key_secret)
+- Format: JSONEachRow (one JSON object per line)
+
+**Tables Accessed:**
+- `materializer_trades` - Full trade history
+- `materializer_trades_recent_1d` - 1-day TTL trades (faster)
+- `materializer_token_market_data_latest` - Token metadata (100+ columns)
+- `materializer_holder_mint_latest` - Holder statistics
+- `discovery_trending_token_stats_ts` - Trending score data
+- `discovery_dim_token_market_cap_1m_v` - ATH market cap dimension
+- `discovery_dim_excluded_token` - Excluded token list
+
+## Data Storage
+
+**Databases:**
+- ClickHouse Cloud - Production data (read-only access)
+- Connection: Via HTTP API, not direct driver
+- Client: Custom in `src/clickhouse/client.ts`
+- No local database
+
+**File Storage:**
+- None
+
+**Caching:**
+- None - all queries hit ClickHouse directly
+
+## Authentication & Identity
+
+**Auth Provider:**
+- None - no user authentication
+- Local development tool only
+
+**Service Auth:**
+- ClickHouse credentials via environment variables
+- `TBKM_CLICKHOUSE_KEY_ID`, `TBKM_CLICKHOUSE_KEY_SECRET`, `TBKM_CLICKHOUSE_SERVICE_ID`
+
+## Monitoring & Observability
+
+**Error Tracking:**
+- None
+
+**Analytics:**
+- None
+
+**Logs:**
+- `console.log()` only
+- No log aggregation
+
+## CI/CD & Deployment
+
+**Hosting:**
+- Local development only (localhost:8787)
+- Network access via Tailscale Serve (optional)
+
+**CI Pipeline:**
+- None configured
+- No GitHub Actions
+
+## Environment Configuration
+
+**Development:**
+- Required env vars: `TBKM_CLICKHOUSE_KEY_ID`, `TBKM_CLICKHOUSE_KEY_SECRET`, `TBKM_CLICKHOUSE_SERVICE_ID`
+- Secrets location: `.env` (gitignored), template in `env.example`
+- Mock services: None - always hits production ClickHouse
+
+**Staging:**
+- Not applicable (local-only tool)
+
+**Production:**
+- Not applicable - NOT FOR PRODUCTION DEPLOYMENT
+- Development mirror of production data
+
+## Webhooks & Callbacks
+
+**Incoming:**
+- None
+
+**Outgoing:**
+- None
+
+## Downstream Consumers
+
+**web-terminal-frontend:**
+- Integration: Vite proxy configuration
+- Endpoints: All `/local-api/*` routes
+- Pattern: `localStorage` overrides for endpoint switching
+
+**smoke.html:**
+- Integration: Static file serving
+- Purpose: Browser-based endpoint testing
+
+## Security Notes
+
+**SQL Injection Protection:**
+- `escapeString()` - Escapes single quotes in `src/clickhouse/client.ts`
+- `buildInList()` - Safe IN clause construction
+- All user inputs sanitized before SQL interpolation
+
+**Credential Protection:**
+- Environment variables only (never hardcoded)
+- `.env` in `.gitignore`
+- `env.example` has placeholder values only
+
+**Query Limits:**
+- `clamp()` function enforces min/max on all numeric params
+- Per-endpoint MAX_LIMIT constants (100-1000 rows)
+- Prevents expensive ClickHouse queries
+
+---
+
+*Integration audit: 2026-01-13*
+*Update when adding/removing external services*

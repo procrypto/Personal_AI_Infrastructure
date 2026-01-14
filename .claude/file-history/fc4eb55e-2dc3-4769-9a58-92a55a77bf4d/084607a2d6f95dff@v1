@@ -1,0 +1,364 @@
+# Phase 2: Linear Integration - Research
+
+**Researched:** 2026-01-08
+**Domain:** Linear API webhooks and SDK for issue/user management
+**Confidence:** HIGH
+
+<research_summary>
+## Summary
+
+Researched Linear's webhook system and TypeScript SDK for integrating with Linear's issue tracking. The critical finding is that **Linear webhooks do NOT have a "view-add" event type** - they fire on Issue create/update/remove. However, Linear's native Slack integration (added Aug 2024) can post to Slack channels when issues are added to custom views like "QA:Mods".
+
+The correct architecture is:
+1. Linear's Slack app posts to #qa-mods when issues enter the "QA:Mods" view (native feature)
+2. Our Slack listener captures these messages and maps them to ticket IDs (Phase 3)
+3. Linear webhooks track subsequent issue updates (this phase - for status changes, assignments)
+4. Linear SDK syncs tester profiles from Linear users
+
+**Primary recommendation:** Use `@linear/sdk` for both webhook signature verification (via `LinearWebhooks` class) and user sync. Configure webhook for `Issue` resource type to track updates after initial view-add notification from Linear's native Slack integration.
+</research_summary>
+
+<standard_stack>
+## Standard Stack
+
+### Core
+| Library | Version | Purpose | Why Standard |
+|---------|---------|---------|--------------|
+| @linear/sdk | 65.2.0 | Linear API client + webhook verification | Official SDK, TypeScript types, LinearWebhooks class |
+
+### Supporting
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| crypto (Node.js) | built-in | HMAC signature verification fallback | If not using LinearWebhooks class |
+
+### Alternatives Considered
+| Instead of | Could Use | Tradeoff |
+|------------|-----------|----------|
+| @linear/sdk | Raw GraphQL fetch | SDK provides types + webhook helpers, no reason to go raw |
+| LinearWebhooks class | Manual crypto | SDK handles timestamp replay protection, use it |
+
+**Installation:**
+```bash
+bun add @linear/sdk
+```
+</standard_stack>
+
+<architecture_patterns>
+## Architecture Patterns
+
+### Recommended Project Structure
+```
+src/
+├── coordination/
+│   ├── linear/              # NEW: Linear integration
+│   │   ├── client.ts        # LinearClient singleton
+│   │   ├── webhook-handler.ts  # Webhook verification + dispatch
+│   │   ├── user-sync.ts     # Tester profile sync
+│   │   └── index.ts         # Barrel export
+│   ├── types.ts             # Existing types
+│   ├── store/               # Existing store
+│   └── events/              # Existing event bus
+```
+
+### Pattern 1: Singleton LinearClient
+**What:** Single LinearClient instance authenticated with API key
+**When to use:** All Linear API interactions
+**Example:**
+```typescript
+// Source: Linear SDK docs
+import { LinearClient } from "@linear/sdk";
+
+let linearClient: LinearClient | null = null;
+
+export function getLinearClient(): LinearClient {
+  if (!linearClient) {
+    const apiKey = process.env.LINEAR_API_KEY;
+    if (!apiKey) throw new Error("LINEAR_API_KEY not configured");
+    linearClient = new LinearClient({ apiKey });
+  }
+  return linearClient;
+}
+```
+
+### Pattern 2: Webhook Verification with LinearWebhooks
+**What:** Use SDK's LinearWebhooks class for signature verification
+**When to use:** All webhook endpoints
+**Example:**
+```typescript
+// Source: Linear SDK docs
+import { LinearWebhooks } from "@linear/sdk";
+
+const webhook = new LinearWebhooks(process.env.LINEAR_WEBHOOK_SECRET!);
+
+export function verifyWebhook(
+  rawBody: string,
+  signature: string,
+  timestamp: number
+): boolean {
+  // Includes timestamp replay protection
+  return webhook.verify(rawBody, signature, timestamp);
+}
+```
+
+### Pattern 3: User Sync with Pagination
+**What:** Fetch all workspace users and upsert to tester profiles
+**When to use:** Initial sync and periodic refresh
+**Example:**
+```typescript
+// Source: Linear SDK docs
+const client = getLinearClient();
+const users = await client.users();
+
+for (const user of users.nodes) {
+  if (user.active) {
+    await upsertTester({
+      id: user.id,
+      linearUserId: user.id,
+      slackUserId: "", // To be mapped separately
+      displayName: user.name,
+      email: user.email,
+      expertise: [], // Manual configuration
+      availability: "available",
+    });
+  }
+}
+```
+
+### Anti-Patterns to Avoid
+- **Parsing JSON before signature verification:** Use raw body string for HMAC
+- **Not checking timestamp:** Replay attacks possible, use LinearWebhooks class
+- **Creating LinearClient per request:** Singleton pattern for connection reuse
+- **Stringifying JSON for verification:** Signature computed on raw body, not re-serialized
+</architecture_patterns>
+
+<dont_hand_roll>
+## Don't Hand-Roll
+
+| Problem | Don't Build | Use Instead | Why |
+|---------|-------------|-------------|-----|
+| Webhook signature verification | Custom HMAC code | LinearWebhooks.verify() | Handles timestamp replay protection, constant-time comparison |
+| GraphQL queries | Manual fetch + types | LinearClient methods | SDK provides typed responses, handles pagination |
+| User pagination | Manual cursor handling | SDK's nodes array + pageInfo | Built-in pagination support |
+| Linear API types | Manual interfaces | @linear/sdk types | Auto-generated from GraphQL schema |
+
+**Key insight:** The `@linear/sdk` package provides everything needed. It has TypeScript types for all entities, webhook verification with replay protection, and typed API methods. Going raw adds no value and risks mistakes.
+</dont_hand_roll>
+
+<common_pitfalls>
+## Common Pitfalls
+
+### Pitfall 1: Assuming "View-Add" Webhook Event Exists
+**What goes wrong:** Trying to configure webhook for "issue added to view" event
+**Why it happens:** Natural assumption based on project requirements
+**How to avoid:** Linear webhooks fire on Issue create/update/remove only. View membership is computed by filters, not stored. Use Linear's native Slack notifications for view-add (Phase 3 captures those), webhooks for subsequent updates.
+**Warning signs:** Can't find "view" in webhook resourceTypes
+
+### Pitfall 2: Using Parsed JSON for Signature Verification
+**What goes wrong:** Signature mismatch, all webhooks rejected
+**Why it happens:** Express/Vercel body parsers convert body, re-serializing differs from original
+**How to avoid:** Get raw body BEFORE JSON parsing. In Vercel, use `await request.text()` not `await request.json()`
+**Warning signs:** Verification fails with "Invalid signature" despite correct secret
+
+### Pitfall 3: Not Handling Webhook Timestamp Replay
+**What goes wrong:** Replay attacks possible
+**Why it happens:** Only checking signature, not timestamp
+**How to avoid:** LinearWebhooks.verify() takes timestamp as third argument, checks it's within 1 minute
+**Warning signs:** Verification works but no timestamp validation
+
+### Pitfall 4: Webhook Payload Missing Full Objects
+**What goes wrong:** Expecting `team` object, getting `teamId` string
+**Why it happens:** Webhook payloads use ID references, not full nested objects
+**How to avoid:** Accept that webhook payloads have IDs only. If you need related data, query via SDK.
+**Warning signs:** Type errors accessing nested properties that are actually IDs
+</common_pitfalls>
+
+<code_examples>
+## Code Examples
+
+### Webhook Handler (Vercel API Route)
+```typescript
+// Source: Linear SDK docs + Vercel patterns
+import { LinearWebhooks } from "@linear/sdk";
+import type { NextRequest } from "next/server";
+
+const webhook = new LinearWebhooks(process.env.LINEAR_WEBHOOK_SECRET!);
+
+export async function POST(request: NextRequest) {
+  const rawBody = await request.text();
+  const signature = request.headers.get("linear-signature");
+
+  if (!signature) {
+    return new Response("Missing signature", { status: 401 });
+  }
+
+  const body = JSON.parse(rawBody);
+
+  if (!webhook.verify(rawBody, signature, body.webhookTimestamp)) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  // Process webhook
+  const { action, type, data } = body;
+
+  if (type === "Issue") {
+    switch (action) {
+      case "create":
+        // Handle new issue
+        break;
+      case "update":
+        // Handle issue update
+        break;
+      case "remove":
+        // Handle issue deletion
+        break;
+    }
+  }
+
+  return new Response("OK", { status: 200 });
+}
+```
+
+### User Sync Function
+```typescript
+// Source: Linear SDK docs
+import { LinearClient } from "@linear/sdk";
+import { upsertTester, type TesterProfile } from "../store/tester-store.js";
+
+export async function syncLinearUsers(): Promise<number> {
+  const client = new LinearClient({ apiKey: process.env.LINEAR_API_KEY! });
+  const users = await client.users();
+
+  let synced = 0;
+  for (const user of users.nodes) {
+    if (!user.active) continue;
+
+    await upsertTester({
+      id: user.id,
+      linearUserId: user.id,
+      slackUserId: "", // Requires manual mapping or lookup
+      displayName: user.name,
+      email: user.email,
+      expertise: [],
+      availability: "available",
+    });
+    synced++;
+  }
+
+  return synced;
+}
+```
+
+### Webhook Payload TypeScript Types
+```typescript
+// Source: Linear webhook documentation
+export interface LinearWebhookPayload {
+  action: "create" | "update" | "remove";
+  type: "Issue" | "Comment" | "Project" | "Cycle" | "IssueLabel" | "Reaction";
+  webhookId: string;
+  webhookTimestamp: number;
+  createdAt: string;
+  organizationId: string;
+  url?: string;
+  actor?: {
+    id: string;
+    type: "user" | "application";
+    name: string;
+    email?: string;
+  };
+  data: Record<string, unknown>;
+  updatedFrom?: Record<string, unknown>;
+}
+
+export interface IssueWebhookData {
+  id: string;
+  number: number;
+  title: string;
+  priority: number;
+  stateId: string;
+  assigneeId?: string;
+  teamId: string;
+  labelIds: string[];
+  description?: string;
+}
+```
+</code_examples>
+
+<sota_updates>
+## State of the Art (2024-2025)
+
+| Old Approach | Current Approach | When Changed | Impact |
+|--------------|------------------|--------------|--------|
+| Manual webhook HMAC | LinearWebhooks class | SDK v4+ | Built-in timestamp replay protection |
+| Webhook for view-add | Linear's native Slack notifications | Aug 2024 | Configure views to post to Slack, capture those |
+| Manual GraphQL | @linear/sdk methods | Current | Typed, paginated, easier |
+
+**New features to leverage:**
+- **Custom View Slack Notifications (Aug 2024):** Linear can now post to Slack when issues enter any custom view. This IS the "view-add" event - just delivered via Slack, not webhook.
+- **LinearWebhooks class:** Part of SDK, handles signature + timestamp verification
+
+**Architectural clarification:**
+- Phase 2 (this): Linear webhooks for issue updates AFTER initial notification
+- Phase 3: Capture Linear's Slack posts for the "added to view" trigger
+- The view-add event comes from Slack, not Linear webhooks
+</sota_updates>
+
+<open_questions>
+## Open Questions
+
+1. **Slack User ID Mapping**
+   - What we know: Linear has `user.email`, tester store needs `slackUserId`
+   - What's unclear: How to get Slack user ID from Linear user data
+   - Recommendation: Either manual mapping, or Phase 3 can look up Slack user by email via Slack API
+
+2. **Which Labels/Filters Define "QA:Mods" View**
+   - What we know: Linear views are filter-based, not explicit membership
+   - What's unclear: Exact filter criteria for "QA:Mods" view at BONKbot
+   - Recommendation: Check Linear workspace for view definition, may need label-based filtering in webhook handler
+
+3. **Webhook vs Slack Notification Timing**
+   - What we know: Both fire on issue changes
+   - What's unclear: Exact timing/ordering between webhook and Slack notification
+   - Recommendation: Design to handle either arriving first, use ticket store as source of truth
+</open_questions>
+
+<sources>
+## Sources
+
+### Primary (HIGH confidence)
+- [Linear Developers - Webhooks](https://linear.app/developers/webhooks) - Webhook setup, headers, payload structure
+- [Linear Developers - SDK](https://linear.app/developers/sdk) - SDK installation, usage patterns
+- [@linear/sdk npm](https://www.npmjs.com/package/@linear/sdk) - Version 65.2.0, LinearWebhooks class
+- [Linear Changelog - Slack View Notifications](https://linear.app/changelog/2024-08-23-slack-channel-notifications-for-custom-views) - Aug 2024 feature
+
+### Secondary (MEDIUM confidence)
+- [Inventive HQ - Linear Webhooks Guide](https://inventivehq.com/blog/linear-webhooks-guide) - Detailed payload examples, verified against official docs
+- [Linear GitHub - linear-node-sdk](https://github.com/linear/linear-node-sdk) - SDK source, additional usage patterns
+
+### Tertiary (LOW confidence - needs validation)
+- None - all critical findings verified against official sources
+</sources>
+
+<metadata>
+## Metadata
+
+**Research scope:**
+- Core technology: Linear API (GraphQL-based)
+- Ecosystem: @linear/sdk (official TypeScript SDK)
+- Patterns: Webhook verification, user sync, client singleton
+- Pitfalls: Signature verification, view-add misconception, payload structure
+
+**Confidence breakdown:**
+- Standard stack: HIGH - Official SDK, well-documented
+- Architecture: HIGH - Patterns from official docs
+- Pitfalls: HIGH - Critical view-add finding verified via changelog
+- Code examples: HIGH - Based on SDK documentation
+
+**Research date:** 2026-01-08
+**Valid until:** 2026-02-08 (30 days - Linear SDK stable, API mature)
+</metadata>
+
+---
+
+*Phase: 02-linear-integration*
+*Research completed: 2026-01-08*
+*Ready for planning: yes*

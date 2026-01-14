@@ -1,0 +1,179 @@
+---
+phase: 27-feed-forwarding
+plan: 02
+type: execute
+---
+
+<objective>
+Add whale_feed adapter and wire whale data forwarding to autopilot backend.
+
+Purpose: Complete the remaining feed gap - whale moves data.
+Output: Whale feed flowing from frontend Discovery API to backend.
+</objective>
+
+<execution_context>
+~/.claude/get-shit-done/workflows/execute-phase.md
+./27-02-SUMMARY.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/phases/27-feed-forwarding/27-01-SUMMARY.md
+
+**Cross-repo context (from token-analysis-autopilot):**
+Backend expects this feed format:
+
+```typescript
+// whale_feed
+{ type: 'whale_feed'; tokens: WhaleMoveFeedItem[] }
+interface WhaleMoveFeedItem {
+  mint: string;
+  symbol: string;
+  whale_count: number;
+  volume_usd: number;
+}
+```
+
+**Data source:**
+Whale moves come from Discovery API via useWhaleMoves hook (NOT WebSocket store).
+The hook polls every 15s and returns WhaleMoves[]:
+
+```typescript
+type WhaleMoves = {
+  mint: string;
+  token_symbol: string;
+  token_name: string;
+  whales_15m: number; // Use this for whale_count
+  volume_usd_15m: string; // Use this for volume_usd
+  // ... other fields
+};
+```
+
+**Source files:**
+@apps/web-terminal/src/websocket/autopilot/feedAdapters.ts
+@apps/web-terminal/src/hooks/useAutopilot/useAutopilotDataForwarder.ts
+@apps/web-terminal/src/api/discovery/useWhaleMoves.ts
+</context>
+
+<tasks>
+
+<task type="auto">
+  <name>Task 1: Add whale_feed adapter to feedAdapters.ts</name>
+  <files>apps/web-terminal/src/websocket/autopilot/feedAdapters.ts</files>
+  <action>
+Add toWhaleFeed adapter function:
+
+```typescript
+import type { WhaleMoves } from "@/api/discovery/useWhaleMoves";
+
+export function toWhaleFeed(whales: WhaleMoves[]): WhaleFeed {
+  return {
+    type: "whale_feed",
+    tokens: whales.map(whale => ({
+      mint: whale.mint,
+      symbol: whale.token_symbol,
+      whale_count: whale.whales_15m,
+      volume_usd: parseFloat(whale.volume_usd_15m || "0"),
+    })),
+  };
+}
+```
+
+Add WhaleFeed type to types if not present.
+</action>
+<verify>TypeScript compiles: `cd apps/web-terminal && npx tsc --noEmit`</verify>
+<done>toWhaleFeed function converts WhaleMoves[] to { type: 'whale_feed', tokens: WhaleMoveFeedItem[] }</done>
+</task>
+
+<task type="auto">
+  <name>Task 2: Create useAutopilotWhaleForwarder hook</name>
+  <files>apps/web-terminal/src/hooks/useAutopilot/useAutopilotWhaleForwarder.ts</files>
+  <action>
+Create new hook that forwards whale data to backend:
+
+```typescript
+/**
+ * useAutopilotWhaleForwarder
+ *
+ * Forwards whale moves from Discovery API to autopilot backend.
+ * Separate from useAutopilotDataForwarder because whales come from
+ * API polling (useWhaleMoves) not WebSocket store.
+ */
+import { useEffect, useRef } from "react";
+import { useWhaleMoves } from "@/api/discovery/useWhaleMoves";
+import { autopilotWebsocket } from "@/websocket/autopilot/autopilotWebsocketInstance";
+import { toWhaleFeed } from "@/websocket/autopilot/feedAdapters";
+
+export function useAutopilotWhaleForwarder() {
+  const { data: whaleMoves } = useWhaleMoves();
+  const lastSentRef = useRef<number>(0);
+  const THROTTLE_MS = 15000; // Match API polling interval
+
+  useEffect(() => {
+    if (!whaleMoves?.length) return;
+    if (!autopilotWebsocket.isConnected) return;
+
+    const now = Date.now();
+    if (now - lastSentRef.current < THROTTLE_MS) return;
+
+    const feed = toWhaleFeed(whaleMoves);
+    autopilotWebsocket.sendFeed(feed);
+    lastSentRef.current = now;
+  }, [whaleMoves]);
+}
+```
+
+Then add this hook to useAutopilotConnection.ts or wherever data forwarders are initialized.
+</action>
+<verify>
+
+1. TypeScript compiles: `cd apps/web-terminal && npx tsc --noEmit`
+2. Hook is called from autopilot widget initialization
+   </verify>
+   <done>
+
+- useAutopilotWhaleForwarder hook exists
+- Forwards whale_feed when useWhaleMoves data updates
+- Throttled to 15s to match API polling
+  </done>
+  </task>
+
+</tasks>
+
+<verification>
+Before declaring plan complete:
+- [ ] `cd apps/web-terminal && npx tsc --noEmit` passes
+- [ ] toWhaleFeed adapter exists in feedAdapters.ts
+- [ ] useAutopilotWhaleForwarder hook created and wired
+- [ ] No console errors in dev server
+</verification>
+
+<success_criteria>
+
+- All tasks completed
+- TypeScript compiles without errors
+- whale_feed messages visible in WebSocket traffic
+- Phase 27 complete - all frontend feeds wired
+  </success_criteria>
+
+<output>
+After completion, create `.planning/phases/27-feed-forwarding/27-02-SUMMARY.md` with:
+
+# Phase 27 Plan 2: Whale Feed Forwarding Summary
+
+**Completed whale_feed forwarding from Discovery API to autopilot backend**
+
+## Accomplishments
+
+- Added toWhaleFeed adapter
+- Created useAutopilotWhaleForwarder hook
+- Wired to autopilot widget initialization
+
+## Cross-Repo Status
+
+Frontend feed forwarding complete. Backend (token-analysis-autopilot) Phase 6 can now proceed with feed consumption.
+
+## Next Step
+
+Return to token-analysis-autopilot repo for Phase 6: Backend Feed Consumption
+</output>

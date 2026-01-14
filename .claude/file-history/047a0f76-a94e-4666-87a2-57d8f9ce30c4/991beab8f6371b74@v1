@@ -1,0 +1,291 @@
+/**
+ * Multi-Wallet Families Endpoint
+ *
+ * Detects wallet families/bundles for a given token mint by analyzing
+ * transfer relationships and common funding sources.
+ *
+ * ⚠️  This fetches PRODUCTION data. This is a complex query.
+ */
+
+import type { Elysia } from "elysia";
+import { clickhouseQuery, escapeString, isSolanaPubkey } from "../../clickhouse/client";
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const MAX_FAMILIES = 100;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type WalletFamilyRow = {
+    family_root: string;
+    member_count: number;
+    total_tokens: string;
+    members: unknown[];
+};
+
+type MultiWalletFamiliesError = { ok: false; error: string; limit?: number; holders?: number };
+type MultiWalletFamiliesResponse = WalletFamilyRow[] | MultiWalletFamiliesError;
+
+// =============================================================================
+// Endpoint Registration
+// =============================================================================
+
+const HOLDER_LIMIT = 4000; // guard to avoid runaway queries
+const QUERY_TIMEOUT_MS = 60000; // align with frontend timeout
+
+export const registerMultiWalletFamiliesRoutes = (app: Elysia) => {
+    app.get("/multi-wallet-families/:mint", async ({ params, set }) => {
+        const mint = params.mint;
+
+        const validation = validateMultiWalletFamiliesRequest(mint);
+        if (!validation.ok) {
+            set.status = 400;
+            return validation;
+        }
+
+        const holdersCount = await fetchHolderCount(validation.mint);
+        if (holdersCount >= HOLDER_LIMIT) {
+            set.status = 400;
+            return {
+                ok: false,
+                error: "Token has too many holders (>4000) for family detection",
+                limit: HOLDER_LIMIT,
+                holders: holdersCount,
+            };
+        }
+        if (holdersCount === 0) {
+            set.status = 404;
+            return {
+                ok: false,
+                error: "No holders found for this mint",
+            };
+        }
+
+        const sql = buildMultiWalletFamiliesSql(validation.mint);
+
+        console.log(`[multi-wallet-families] Querying wallet families for mint=${mint}`);
+
+        const result = await clickhouseQuery<WalletFamilyRow>(sql, { timeoutMs: QUERY_TIMEOUT_MS });
+
+        if (!result.success) {
+            set.status = 502;
+            return {
+                ok: false,
+                error: result.error,
+            };
+        }
+
+        console.log(`[multi-wallet-families] Found ${result.data.length} wallet families`);
+
+        // Return array directly to match prod/frontend expectations
+        return result.data;
+    });
+};
+
+// =============================================================================
+// Helpers (exported for extensions)
+// =============================================================================
+
+export const validateMultiWalletFamiliesRequest = (
+    mint: string
+): { ok: true; mint: string } | { ok: false; error: string } => {
+    if (!isSolanaPubkey(mint)) {
+        return {
+            ok: false,
+            error: "Invalid mint address",
+        };
+    }
+    return { ok: true, mint };
+};
+
+export const buildMultiWalletFamiliesSql = (mint: string): string => {
+    return `
+WITH 
+mint_holders AS (
+    SELECT
+        address,
+        mint,
+        token_accounts,
+        portfolio_value_sol,
+        portfolio_value_usd,
+        remaining_tokens,
+        invested_total_usd,
+        invested_total_sol,
+        invested_tokens,
+        last_buy,
+        buy_transactions,
+        sold_total_usd,
+        sold_total_sol,
+        sold_tokens,
+        last_sell,
+        sell_transactions,
+        pnl_total_sol,
+        pnl_total_usd,
+        average_entry_price_sol,
+        average_entry_price_usd,
+        average_entry_mc_sol,
+        average_entry_mc_usd,
+        average_exit_price_sol,
+        average_exit_price_usd,
+        average_exit_mc_sol,
+        average_exit_mc_usd,
+        is_lp_provider,
+        is_dev,
+        is_insider,
+        is_sniper,
+        is_bot,
+        is_bundler,
+        bundle_id,
+        is_hard_bundler,
+        is_top_10_holder,
+        holder_status,
+        holder_since,
+        last_trade,
+        signature,
+        timestamp,
+        slot
+    FROM default.materializer_holder_mint_latest FINAL
+    WHERE mint = '${escapeString(mint)}'
+    AND remaining_tokens > 0
+    AND is_lp_provider != 1
+    AND isValidUTF8(address)
+    AND address NOT IN (SELECT address FROM default.discovery_dim_excluded_wallets)
+),
+holder_set AS (
+    SELECT address FROM mint_holders
+),
+transfer_relationships AS (
+    SELECT DISTINCT source, destination
+    FROM default_aggregates.agg_sol_transfers
+    WHERE source IN (SELECT address FROM holder_set)
+        AND destination IN (SELECT address FROM holder_set)
+        AND source != destination
+        AND isValidUTF8(source)
+        AND isValidUTF8(destination)
+),
+all_transfer_edges AS (
+    SELECT source AS wallet_a, destination AS wallet_b FROM transfer_relationships
+    UNION ALL
+    SELECT destination AS wallet_a, source AS wallet_b FROM transfer_relationships
+    UNION ALL
+    SELECT DISTINCT t1.source, t2.destination
+    FROM transfer_relationships t1
+    JOIN transfer_relationships t2 ON t1.destination = t2.source
+    WHERE t1.source != t2.destination
+),
+funding_relationships AS (
+    SELECT
+        source,
+        destination
+    FROM default_aggregates.agg_sol_transfers
+    WHERE destination IN (SELECT address FROM holder_set)
+        AND total_sol_received >= 1e7
+        AND source != destination
+        AND isValidUTF8(source)
+        AND isValidUTF8(destination)
+        AND source NOT IN (SELECT address FROM default.discovery_dim_excluded_wallets)
+),
+funding_edges AS (
+    SELECT DISTINCT
+        f1.destination as wallet_a,
+        f2.destination as wallet_b
+    FROM funding_relationships f1
+    JOIN funding_relationships f2 ON f1.source = f2.source
+    WHERE f1.destination < f2.destination
+),
+all_edges AS (
+    SELECT wallet_a, wallet_b FROM all_transfer_edges
+    UNION ALL
+    SELECT wallet_a, wallet_b FROM funding_edges
+    UNION ALL
+    SELECT wallet_b, wallet_a FROM funding_edges
+),
+wallet_adjacency AS (
+    SELECT 
+        wallet_a as wallet,
+        groupArray(wallet_b) as forward_connections,
+        [] as backward_connections
+    FROM all_edges
+    GROUP BY wallet_a
+    
+    UNION ALL
+    
+    SELECT 
+        wallet_b as wallet,
+        [] as forward_connections,
+        groupArray(wallet_a) as backward_connections
+    FROM all_edges
+    GROUP BY wallet_b
+),
+wallet_connections AS (
+    SELECT 
+        wallet,
+        arrayDistinct(
+            arrayConcat(
+                arrayFlatten(groupArray(forward_connections)),
+                arrayFlatten(groupArray(backward_connections)),
+                [wallet]
+            )
+        ) as connected_wallets
+    FROM wallet_adjacency
+    GROUP BY wallet
+),
+family_assignment AS (
+    SELECT 
+        wallet,
+        arrayMin(arrayPushBack(connected_wallets, wallet)) as family_root 
+    FROM wallet_connections
+),
+family_members AS (
+    SELECT wallet, family_root
+    FROM family_assignment
+    
+    UNION ALL
+    
+    SELECT address, address
+    FROM mint_holders
+    WHERE address NOT IN (SELECT wallet FROM family_assignment)
+),
+filtered_mapping AS (
+    SELECT wallet, family_root 
+    FROM family_members
+    WHERE family_root NOT IN (SELECT address FROM default.discovery_dim_excluded_wallets)
+)
+SELECT
+    fm.family_root,
+    COUNT(DISTINCT fm.wallet) AS member_count,
+    SUM(mh.remaining_tokens) AS total_tokens,
+    groupArrayDistinct(fm.wallet) AS members
+FROM filtered_mapping fm
+JOIN mint_holders mh ON fm.wallet = mh.address
+WHERE isValidUTF8(fm.family_root) AND isValidUTF8(fm.wallet)
+GROUP BY fm.family_root
+HAVING member_count > 1
+ORDER BY member_count DESC
+LIMIT ${MAX_FAMILIES}
+    `;
+};
+
+const fetchHolderCount = async (mint: string): Promise<number> => {
+    const sql = `
+        SELECT count() AS holders
+        FROM default.materializer_holder_mint_latest FINAL
+        WHERE mint = '${escapeString(mint)}'
+          AND remaining_tokens > 0
+          AND is_lp_provider != 1
+          AND isValidUTF8(address)
+          AND address NOT IN (SELECT address FROM default.discovery_dim_excluded_wallets)
+    `;
+    const res = await clickhouseQuery<{ holders: string | number }>(sql);
+    if (!res.success) {
+        return 0;
+    }
+    const raw = res.data[0]?.holders ?? 0;
+    return typeof raw === "string" ? Number(raw) : raw ?? 0;
+};
+
+

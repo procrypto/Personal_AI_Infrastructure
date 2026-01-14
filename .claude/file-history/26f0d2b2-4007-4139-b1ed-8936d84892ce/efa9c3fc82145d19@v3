@@ -1,0 +1,32 @@
+/**
+ * Slack Events API Route
+ *
+ * Vercel Function handler for Slack events.
+ * Uses ExpressReceiver for serverless compatibility with Bolt.
+ */
+
+import { App, ExpressReceiver } from '@slack/bolt';
+import { initializeSlackIntegration } from '../../src/coordination/slack/init.js';
+
+// ============================================================================
+// Create Receiver and App
+// ============================================================================
+
+const receiver = new ExpressReceiver({
+  signingSecret: process.env.SLACK_SIGNING_SECRET!,
+  processBeforeResponse: true,
+});
+
+const app = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  receiver,
+});
+
+// Initialize listeners and subscribers
+initializeSlackIntegration(app);
+
+// ============================================================================
+// Export Handler
+// ============================================================================
+
+export default receiver.app;

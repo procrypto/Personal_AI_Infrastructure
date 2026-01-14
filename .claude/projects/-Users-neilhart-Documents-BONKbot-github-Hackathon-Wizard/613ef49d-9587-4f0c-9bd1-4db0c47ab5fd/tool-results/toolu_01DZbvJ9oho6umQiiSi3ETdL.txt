@@ -1,0 +1,110 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/cli.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+   641→        if (tradeResults.length > 0) {
+   642→          line += `  |  Open: ${tradeResults.join(' ')}`;
+   643→        }
+   644→
+   645→        // No activity indicator
+   646→        if (scanResults.length === 0 && tradeResults.length === 0 && magicResults.length === 0 && magicEntryResults.length === 0 && dumpExitResults.length === 0) {
+   647→          if (marketFilterResult.state === 'NORMAL') {
+   648→            line += `  |  (${tokens.length} tokens)  |  No signals`;
+   649→          }
+   650→        }
+   651→
+   652→        console.log(line);
+   653→
+   654→        // === WebSocket Broadcasts ===
+   655→
+   656→        // Broadcast scan tick
+   657→        wsServer.broadcastScanTick({
+   658→          timestamp: Date.now(),
+   659→          scanNumber: scanCount,
+   660→          tokenCount: tokens.length,
+   661→          openPositions: openTrades.length,
+   662→        });
+   663→
+   664→        // Broadcast market status
+   665→        wsServer.broadcastMarketStatus({
+   666→          state: marketFilterResult.state as 'NORMAL' | 'CAUTION' | 'DUMP',
+   667→          solPriceChangePercent: marketFilterResult.priceChangePercent,
+   668→          blockEntries: marketFilterResult.blockEntries,
+   669→          exitAll: marketFilterResult.exitAll,
+   670→        });
+   671→
+   672→        // Broadcast positions with live P&L
+   673→        const positionData: PositionData[] = [];
+   674→        for (const trade of openTrades) {
+   675→          const marketData = marketDataCache.get(trade.mint);
+   676→          if (marketData) {
+   677→            const pnl = paperTracker.calcUnrealizedPnl(trade, marketData.price_sol, marketData.price_usd);
+   678→            positionData.push({
+   679→              mint: trade.mint,
+   680→              symbol: trade.symbol,
+   681→              action: trade.action,
+   682→              entryPriceSol: trade.entryPriceSol,
+   683→              currentPriceSol: marketData.price_sol,
+   684→              positionSizeSol: trade.positionSizeSol,
+   685→              pnlPercent: pnl.pnlPercent,
+   686→              pnlSol: pnl.pnlSol,
+   687→              entryTime: trade.timestamp,
+   688→            });
+   689→          }
+   690→        }
+   691→        wsServer.broadcastPositions(positionData);
+   692→
+   693→        // Broadcast signals for magic exits
+   694→        for (const closed of magicExitResults) {
+   695→          wsServer.broadcastSignal({
+   696→            timestamp: Date.now(),
+   697→            mint: closed.mint,
+   698→            symbol: closed.symbol,
+   699→            signalType: 'magic_exit',
+   700→            action: 'close',
+   701→            reason: closed.exitReason || 'Magic exit triggered',
+   702→            pnlPercent: closed.pnlPercent,
+   703→          });
+   704→        }
+   705→
+   706→        // Broadcast signals for dump exits
+   707→        for (const closed of marketDumpExits) {
+   708→          wsServer.broadcastSignal({
+   709→            timestamp: Date.now(),
+   710→            mint: closed.mint,
+   711→            symbol: closed.symbol,
+   712→            signalType: 'dump_exit',
+   713→            action: 'close',
+   714→            reason: 'Market dump protection',
+   715→            pnlPercent: closed.pnlPercent,
+   716→          });
+   717→        }
+   718→
+   719→        // Broadcast signals for magic buy entries
+   720→        for (const { trade, entry } of magicBuyResults.entries) {
+   721→          wsServer.broadcastSignal({
+   722→            timestamp: Date.now(),
+   723→            mint: trade.mint,
+   724→            symbol: trade.symbol,
+   725→            signalType: 'magic_buy',
+   726→            action: 'buy',
+   727→            reason: entry.reason,
+   728→            entryType: entry.entryType,
+   729→          });
+   730→        }
+   731→
+   732→        // Broadcast updated stats
+   733→        const stats = paperTracker.getStats();
+   734→        wsServer.broadcastStats({
+   735→          totalTrades: stats.totalTrades,
+   736→          openTrades: stats.openTrades,
+   737→          closedTrades: stats.closedTrades,
+   738→          wins: stats.wins,
+   739→          losses: stats.losses,
+   740→          winRate: stats.winRate,
+   741→          totalPnlSol: stats.totalPnlSol,
+   742→          totalPnlUsd: stats.totalPnlUsd,
+   743→          avgPnlPercent: stats.avgPnlPercent,
+   744→        });
+   745→      };
+   746→
+   747→      // Run immediately, then on interval
+   748→      await runLoop();
+   749→      setInterval(runLoop, config.pollIntervalMs);

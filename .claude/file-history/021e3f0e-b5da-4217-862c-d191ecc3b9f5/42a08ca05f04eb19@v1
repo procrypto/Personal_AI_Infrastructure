@@ -1,0 +1,107 @@
+---
+phase: 03-slack-listener-threads
+plan: 02
+subsystem: slack
+tags: [slack, block-kit, threads, event-bus]
+
+# Dependency graph
+requires:
+  - phase: 03-01
+    provides: Slack client singleton, Linear message listener
+  - phase: 01-03
+    provides: Event bus for surface notifications
+provides:
+  - Block Kit builder for QA assignment messages
+  - Thread reply function for posting in Slack threads
+  - Event bus subscriber wiring (ticket:created → thread reply)
+affects: [05-commands-actions, 06-escalation]
+
+# Tech tracking
+tech-stack:
+  added: [@slack/types]
+  patterns: [Block Kit builders, thread reply flow]
+
+key-files:
+  created:
+    - src/coordination/slack/block-kit.ts
+    - src/coordination/slack/thread-reply.ts
+    - src/coordination/slack/subscriber.ts
+  modified:
+    - src/coordination/slack/index.ts
+
+key-decisions:
+  - "Used @slack/types for type-safe Block Kit (no 'any' types)"
+  - "Fallback text required for chat.postMessage/update"
+  - "Non-blocking error handling in subscriber - log but don't throw"
+
+patterns-established:
+  - "Block Kit builders return KnownBlock[] for composability"
+  - "Thread reply validates slackThreadTs/slackChannelId before posting"
+  - "Event subscriber pattern: lookup → update → post"
+
+issues-created: []
+
+# Metrics
+duration: 3min
+completed: 2026-01-08
+---
+
+# Phase 3 Plan 2: Block Kit Builder & Thread Reply Summary
+
+**Block Kit message builder with Claim/Pass/Blocked buttons and event bus wiring for automatic thread replies on ticket creation**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-08T17:08:11Z
+- **Completed:** 2026-01-08T17:10:42Z
+- **Tasks:** 3
+- **Files modified:** 4
+
+## Accomplishments
+
+- Block Kit builder creates interactive QA assignment messages with action buttons
+- Thread reply function posts messages in Slack threads with proper error handling
+- Event bus subscriber automatically posts thread replies when tickets are created
+- Full flow wired: ticket:created → LinearMessage lookup → ticket update → thread reply
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Create Block Kit builder** - `56a8383` (feat)
+2. **Task 2: Create thread reply function** - `e209ede` (feat)
+3. **Task 3: Wire event bus and exports** - `abccf29` (feat)
+
+**Plan metadata:** (pending)
+
+## Files Created/Modified
+
+- `src/coordination/slack/block-kit.ts` - Block Kit builders for QA messages
+- `src/coordination/slack/thread-reply.ts` - Thread reply and message update functions
+- `src/coordination/slack/subscriber.ts` - Event bus subscriber for ticket:created
+- `src/coordination/slack/index.ts` - Updated barrel exports
+
+## Decisions Made
+
+- Used `@slack/types` for type-safe KnownBlock definitions (no 'any')
+- Fallback text always provided for chat.postMessage/update (required by Slack)
+- Non-blocking error handling in subscriber - one failure doesn't break others
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Next Phase Readiness
+
+- Block Kit UI ready for QA assignment messages
+- Thread reply flow fully wired
+- Ready for 03-03-PLAN.md (additional thread features if needed) or Phase 4 (Assignment Engine)
+
+---
+*Phase: 03-slack-listener-threads*
+*Completed: 2026-01-08*

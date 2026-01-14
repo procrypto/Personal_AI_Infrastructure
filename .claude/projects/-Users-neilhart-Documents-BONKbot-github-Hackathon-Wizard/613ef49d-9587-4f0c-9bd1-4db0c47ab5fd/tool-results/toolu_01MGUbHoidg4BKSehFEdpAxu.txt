@@ -1,0 +1,68 @@
+The file /Users/neilhart/Documents/BONKbot/github/token-analysis-autopilot/src/rules/engine.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+    82→  getRules(): Rule[] {
+    83→    return [...this.rules];
+    84→  }
+    85→
+    86→  /**
+    87→   * Analyze a single token (fetches data from API)
+    88→   */
+    89→  async analyzeToken(mint: string): Promise<Signal[]> {
+    90→    try {
+    91→      // Fetch all required data in parallel
+    92→      const [token, ohlcv, trades] = await Promise.all([
+    93→        this.api.getMarketData(mint),
+    94→        this.api.getOHLCV(mint, this.ohlcvResolution, { countback: this.ohlcvCountback }),
+    95→        this.api.getTrades(mint, this.tradesLimit),
+    96→      ]);
+    97→
+    98→      const context: AnalysisContext = { token, ohlcv, trades };
+    99→      return this.runRules(context);
+   100→    } catch (error) {
+   101→      console.error(`Error analyzing ${mint}:`, error);
+   102→      return [];
+   103→    }
+   104→  }
+   105→
+   106→  /**
+   107→   * Analyze with pre-fetched market data (fast path - no API calls)
+   108→   * Use this when you've already batch-fetched market data
+   109→   */
+   110→  analyzeWithMarketData(token: AnalysisContext['token']): Signal[] {
+   111→    // Most rules only need market data, not OHLCV/trades
+   112→    const context: AnalysisContext = { token, ohlcv: [], trades: [] };
+   113→    return this.runRules(context);
+   114→  }
+   115→
+   116→  /**
+   117→   * Run all rules against a context
+   118→   */
+   119→  private runRules(context: AnalysisContext): Signal[] {
+   120→    const signals: Signal[] = [];
+   121→    for (const rule of this.rules) {
+   122→      try {
+   123→        const signal = rule.analyze(context);
+   124→        if (signal) signals.push(signal);
+   125→      } catch (error) {
+   126→        console.error(`Rule ${rule.config.id} error:`, error);
+   127→      }
+   128→    }
+   129→    return signals;
+   130→  }
+   131→
+   132→  /**
+   133→   * Analyze a single token (legacy - keeping for compatibility)
+   134→   * @deprecated Use analyzeWithMarketData for better performance
+   135→   */
+   136→  async analyzeTokenLegacy(mint: string): Promise<Signal[]> {
+   137→    try {
+   138→      const [token, ohlcv, trades] = await Promise.all([
+   139→        this.api.getMarketData(mint),
+   140→        this.api.getOHLCV(mint, this.ohlcvResolution, { countback: this.ohlcvCountback }),
+   141→        this.api.getTrades(mint, this.tradesLimit),
+   142→      ]);
+   143→
+   144→      const context: AnalysisContext = { token, ohlcv, trades };
+   145→
+   146→      // Run all rules
+   147→      const signals: Signal[] = [];
+   148→      for (const rule of this.rules) {

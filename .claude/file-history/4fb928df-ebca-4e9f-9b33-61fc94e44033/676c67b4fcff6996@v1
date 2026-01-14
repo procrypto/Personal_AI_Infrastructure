@@ -1,0 +1,102 @@
+---
+phase: 02-linear-integration
+plan: 02
+subsystem: linear
+tags: [linear-sdk, user-sync, barrel-exports]
+
+# Dependency graph
+requires:
+  - phase: 02-01
+    provides: LinearClient singleton for API access
+provides:
+  - syncLinearUsers() function for tester profile population
+  - Complete linear module with all exports
+  - Full coordination barrel including linear
+affects: [03, 04]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [Pagination handling for Linear SDK, Per-item error handling in sync operations]
+
+key-files:
+  created:
+    - src/coordination/linear/user-sync.ts
+  modified:
+    - src/coordination/linear/index.ts
+    - src/coordination/index.ts
+
+key-decisions:
+  - "Empty slackUserId during sync - requires manual mapping or Phase 3 Slack lookup"
+  - "Per-user error handling - one failure doesn't abort entire sync"
+  - "Pagination loop for large workspaces using fetchNext()"
+
+patterns-established:
+  - "SyncResult pattern for sync operations with counts and error array"
+
+issues-created: []
+
+# Metrics
+duration: 2min
+completed: 2026-01-08
+---
+
+# Phase 2 Plan 02: Tester Profile Sync Summary
+
+**Linear user sync function with pagination and barrel exports completing the linear module**
+
+## Performance
+
+- **Duration:** 2 min
+- **Started:** 2026-01-08T16:41:16Z
+- **Completed:** 2026-01-08T16:42:51Z
+- **Tasks:** 2
+- **Files modified:** 3
+
+## Accomplishments
+
+- Created syncLinearUsers() function that fetches all workspace users via Linear SDK
+- Handles pagination automatically using fetchNext() for large workspaces
+- Per-user error handling so one failure doesn't abort sync
+- Completed barrel exports: linear module fully exported via coordination barrel
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Create user sync function from Linear API** - `0e2b7b7` (feat)
+2. **Task 2: Create barrel exports for linear module** - `5918cda` (feat)
+
+**Plan metadata:** (this commit)
+
+## Files Created/Modified
+
+- `src/coordination/linear/user-sync.ts` - syncLinearUsers() with pagination and error handling
+- `src/coordination/linear/index.ts` - Added syncLinearUsers and SyncResult exports
+- `src/coordination/index.ts` - Re-exports linear module
+
+## Decisions Made
+
+1. **Empty slackUserId:** Users synced with empty slackUserId - requires manual mapping or Phase 3 Slack user lookup to populate.
+2. **Per-user error handling:** Errors are captured per-user in the errors array, allowing sync to continue even if individual upserts fail.
+3. **Pagination pattern:** Uses while(true) loop with hasNextPage check and fetchNext() for clean pagination handling.
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None
+
+## Next Phase Readiness
+
+- Phase 2 complete: Linear integration fully operational
+- LinearClient available for API calls
+- Webhook handler ready for incoming events
+- User sync ready to populate tester store
+- Ready for Phase 3: Slack Listener & Threads
+
+---
+*Phase: 02-linear-integration*
+*Completed: 2026-01-08*

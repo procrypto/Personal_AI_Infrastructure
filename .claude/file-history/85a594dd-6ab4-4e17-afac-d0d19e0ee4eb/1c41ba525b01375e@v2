@@ -1,0 +1,97 @@
+---
+phase: 18-data-fixes
+plan: 01
+subsystem: ui
+tags: [nats, market-data, token-enrichment, formatting]
+
+# Dependency graph
+requires:
+  - phase: 17-screener-signal-indicators
+    provides: Signal indicators on token rows
+provides:
+  - Symbol enrichment from NATS market data for watchlist tokens
+  - Market cap display instead of tiny prices
+affects: [19-screener-alignment, ui]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns: [formatMarketCap helper, NATS symbol/marketCap enrichment]
+
+key-files:
+  created: []
+  modified:
+    - apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts
+    - apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx
+
+key-decisions:
+  - "Use NATS market data symbol when original token symbol is empty"
+  - "Display market cap instead of price (more readable than $0.00000000782)"
+  - "Format market cap with K/M suffixes ($234K, $1.2M)"
+
+patterns-established:
+  - "NATS market data field extraction pattern in enrichToken()"
+  - "formatMarketCap helper for large number display"
+
+issues-created: []
+
+# Metrics
+duration: 3min
+completed: 2026-01-09
+---
+
+# Phase 18 Plan 01: Data Fixes Summary
+
+**Fixed watchlist token blank symbols by enriching from NATS market data; replaced unreadable tiny prices with formatted market cap display.**
+
+## Performance
+
+- **Duration:** 3 min
+- **Started:** 2026-01-09T03:41:07Z
+- **Completed:** 2026-01-09T03:44:12Z
+- **Tasks:** 2
+- **Files modified:** 2
+
+## Accomplishments
+
+- Watchlist tokens now show symbol from NATS market data (no more blank "$" entries)
+- Token rows display formatted market cap (e.g., "$234K", "$1.2M") instead of tiny prices
+- Added `marketCapUsd` field to `AutopilotTokenWithPrices` interface
+
+## Task Commits
+
+1. **Task 1: Enrich tokens with symbol and market cap from NATS** - `2ac301e96` (feat)
+2. **Task 2: Update TokenRow to display market cap** - `6356ce7cb` (feat)
+
+**Plan metadata:** TBD (docs: complete plan)
+
+## Files Created/Modified
+
+- `apps/web-terminal/src/hooks/useAutopilot/useAutopilotTokensWithPrices.ts` - Added marketCapUsd field, symbol enrichment from NATS
+- `apps/web-terminal/src/ui/dashboard/widgets/autopilot-widget.tsx` - Display market cap instead of price, updated type annotations
+
+## Decisions Made
+
+- Use NATS market data symbol when original token symbol is empty (watchlist tokens created with blank symbol)
+- Display market cap instead of tiny prices for better readability
+- Format market cap with K/M suffixes using new `formatMarketCap` helper
+
+## Deviations from Plan
+
+None - plan executed exactly as written.
+
+## Issues Encountered
+
+None.
+
+## Next Phase Readiness
+
+- Data fixes complete, ready for Phase 19 (Screener Alignment)
+- Watchlist tokens now have proper symbols
+- Market cap values display correctly
+- All prerequisites for layout alignment met
+
+---
+
+_Phase: 18-data-fixes_
+_Completed: 2026-01-09_

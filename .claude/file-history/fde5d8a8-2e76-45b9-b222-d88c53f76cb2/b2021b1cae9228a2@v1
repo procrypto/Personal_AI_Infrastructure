@@ -1,0 +1,120 @@
+# Token Analysis Autopilot
+
+## What This Is
+
+Backend evaluation engine for the token-analysis-autopilot dashboard widget. Receives market data from the main web-terminal app via WebSocket, runs trading rules through a dual-path signal processor, generates signals, and tracks paper P&L. Architecture is LOIS-ready for future Rust rewrite.
+
+## Core Value
+
+**Fast evaluation with clean LOIS-ready architecture.** Signal generation is sub-0.1ms (100x better than 100ms target). Interfaces are clean enough to reimplement in Rust.
+
+## Current State (v1.0 + v2.0 Phase 4)
+
+**Shipped:**
+- v1.0: Signal processor architecture with dual-path processing, LOIS-ready interfaces, sub-0.1ms latency
+- Phase 4: Backend handlers for trending_feed and whale_feed data feeds
+
+**Next:** Full frontend-backend integration to eliminate API polling redundancy.
+
+**Tech stack:** TypeScript, 11,066 LOC across 43 files, 65 tests
+
+## Requirements
+
+### Validated
+
+- ✓ Rule engine with pluggable rules — existing
+- ✓ Paper trading with P&L tracking — existing
+- ✓ WebSocket server for frontend communication — existing
+- ✓ Williams fractal trailing stop logic — existing
+- ✓ Rotations/market structure analysis — existing
+- ✓ Magic buy/exit automation — existing
+- ✓ SOL dump protection (market filter) — existing
+- ✓ Receive data from main app instead of fetching — v1.0
+- ✓ Pre-computed metrics path for simple rules — v1.0
+- ✓ Raw OHLCV path for complex analysis — v1.0
+- ✓ Sub-100ms signal evaluation latency — v1.0 (achieved sub-0.1ms)
+- ✓ Clean interfaces suitable for Rust reimplementation — v1.0
+- ✓ Parallel development: new architecture alongside existing — v1.0
+- ✓ Backend handlers for trending_feed — Phase 4
+- ✓ Backend handlers for whale_feed — Phase 4
+- ✓ AutoSourceManager feed integration — Phase 4
+
+### Active
+
+**Frontend (web-terminal-frontend, feat-token-analysis-autopilot branch):**
+- [ ] Wire OHLCV feed forwarding (adapter exists, not sent)
+- [ ] Create and wire trending_feed adapter
+- [ ] Create and wire whale_feed adapter
+- [ ] Forward Discovery data to autopilot
+
+**Backend (token-analysis-autopilot):**
+- [ ] Wire OHLCV feed into polling loop's candleDataMap
+- [ ] Add watchlist_feed handler (replace native watchlist)
+- [ ] Detect feed activity, skip redundant API polling
+- [ ] Remove API polling code when feeds validated
+
+**Integration:**
+- [ ] Zero API calls when frontend connected
+- [ ] Real-time signal generation (sub-100ms from feed to signal)
+- [ ] End-to-end validation with real market data
+
+### Out of Scope
+
+- LOIS Intent creation — save for v3.0
+- Live trading execution — architecture only, no actual trades
+- New rule types — focus on plumbing, not new analysis methods
+- Main branch merge — frontend work stays on feat-token-analysis-autopilot
+
+## Context
+
+**Cross-repo integration:**
+- `web-terminal-frontend` (feat-token-analysis-autopilot branch): React app that subscribes to NATS, forwards to autopilot
+- `token-analysis-autopilot`: TypeScript backend that processes feeds, generates signals
+- `web-terminal` (Rust): NATS-to-frontend bridge, NOT connected to autopilot
+- `pum3`: LOIS trading system, future integration target
+
+**Current data flow gaps (from analysis):**
+
+| Feed Type | Frontend Adapter | Currently Sent | Backend Handler | Gap |
+|-----------|-----------------|----------------|-----------------|-----|
+| market_data_feed | ✅ toMarketDataFeed() | ✅ Yes | ✅ Yes | None |
+| cvd_update | ✅ toCvdFeed() | ✅ Yes | ✅ Stored | None |
+| ohlcv_update | ✅ toOhlcvFeed() | ❌ NO | ✅ Yes | Frontend not sending |
+| trade_feed | ✅ toTradeFeed() | ❌ NO | ✅ Stored | Frontend not sending |
+| trending_feed | ❌ NO | ❌ NO | ✅ Yes | Need adapter + forwarding |
+| whale_feed | ❌ NO | ❌ NO | ✅ Yes | Need adapter + forwarding |
+| watchlist_feed | ❌ NO | N/A | ❌ NO | Need full implementation |
+
+**Backend redundancy:**
+- API polling for trending/whales every 15m (redundant if feeds active)
+- API polling for market data every 30s (redundant if feeds active)
+- API polling for OHLCV per position (redundant if feeds active)
+- Native watchlist file (redundant with frontend watchlist)
+
+## Constraints
+
+- **Frontend branch:** Work on feat-token-analysis-autopilot branch only
+- **Gradual validation:** Keep API polling as fallback until feeds proven reliable
+- **No LOIS yet:** Intent creation deferred to v3.0
+
+## Key Decisions
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Main app owns data ingestion | Avoid duplicate WebSocket connections, reduce latency | ✓ Implemented v1.0 |
+| Hybrid data flow (pre-computed + raw) | Simple rules don't need OHLCV, complex ones do | ✓ Implemented v1.0 |
+| LOIS-ready interfaces over speed hacks | Enables Rust rewrite without major redesign | ✓ Implemented v1.0 |
+| Reuse existing WebSocket connections | Main app already has WS connections to frontend, reuse for data flow | ✓ Implemented v1.0 |
+| Gradual replacement cutover | Replace each piece as ready, no big-bang switch | ✓ Implemented v1.0 |
+| Track cross-repo work in one project | Backend is central hub, easier to coordinate | — Pending |
+| Frontend stays on feature branch | Don't disrupt main until integration validated | — Pending |
+
+## Success Criteria (v2.0 Extension)
+
+1. **Zero API calls:** When frontend connected, backend makes no HTTP requests to web-terminal APIs
+2. **Real-time signals:** Signal latency matches feed latency (sub-100ms from NATS to signal)
+3. **Feed coverage:** All data types flowing (market, OHLCV, trending, whale, watchlist)
+4. **Redundancy removed:** Native watchlist eliminated, API polling code removed
+
+---
+*Last updated: 2026-01-09 after v2.0 Phase 4 completion and extension planning*
