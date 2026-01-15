@@ -15,7 +15,7 @@ None (internal GSD workflow modification)
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Config Schema** - Add auto_advance configuration to config.json template
-- [ ] **Phase 2: Phase Summary** - Create workflow to generate PHASE-SUMMARY.md from plan summaries
+- [ ] **Phase 2: Phase Summary** - Create workflow to generate PHASE-SUMMARY.md from plan summaries (In progress)
 - [ ] **Phase 3: Advance Logic** - Core auto-advance orchestration workflow
 - [ ] **Phase 4: Command Interface** - /gsd:advance manual command
 - [ ] **Phase 5: Integration** - Hook auto-advance into execute-phase.md offer_next step
@@ -38,7 +38,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: Define PHASE-SUMMARY.md format and aggregation logic
+- [x] 02-01: Define PHASE-SUMMARY.md format and aggregation logic
 - [ ] 02-02: Create create-phase-summary.md workflow
 
 ### Phase 3: Advance Logic
@@ -78,7 +78,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Config Schema | 1/1 | Complete | 2026-01-15 |
-| 2. Phase Summary | 0/2 | Not started | - |
+| 2. Phase Summary | 1/2 | In progress | - |
 | 3. Advance Logic | 0/2 | Not started | - |
 | 4. Command Interface | 0/1 | Not started | - |
 | 5. Integration | 0/2 | Not started | - |
