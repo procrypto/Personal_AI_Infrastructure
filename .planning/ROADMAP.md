@@ -17,8 +17,8 @@ None (internal GSD workflow modification)
 - [x] **Phase 1: Config Schema** - Add auto_advance configuration to config.json template
 - [x] **Phase 2: Phase Summary** - Create workflow to generate PHASE-SUMMARY.md from plan summaries
 - [x] **Phase 3: Advance Logic** - Core auto-advance orchestration workflow
-- [ ] **Phase 4: Command Interface** - /gsd:advance manual command (Next)
-- [ ] **Phase 5: Integration** - Hook auto-advance into execute-phase.md offer_next step
+- [x] **Phase 4: Command Interface** - /gsd:advance manual command
+- [ ] **Phase 5: Integration** - Hook auto-advance into execute-phase.md offer_next step (Next)
 
 ## Phase Details
 
@@ -58,7 +58,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 04-01: Create advance.md command in Commands/gsd/
+- [x] 04-01: Create advance.md command in Commands/gsd/
 
 ### Phase 5: Integration
 **Goal**: Hook auto-advance into execute-phase.md and ensure backward compatibility
@@ -80,5 +80,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Config Schema | 1/1 | Complete | 2026-01-15 |
 | 2. Phase Summary | 2/2 | Complete | 2026-01-15 |
 | 3. Advance Logic | 2/2 | Complete | 2026-01-15 |
-| 4. Command Interface | 0/1 | Not started | - |
+| 4. Command Interface | 1/1 | Complete | 2026-01-15 |
 | 5. Integration | 0/2 | Not started | - |
