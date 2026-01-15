@@ -1566,150 +1566,35 @@ Use AskUserQuestion:
 </step>
 
 <step name="offer_next">
-**First, determine if more plans exist in this phase:**
+**Invoke advancement workflow:**
 
-```bash
-# Get current phase directory from the plan we just executed
-PHASE_DIR=$(dirname "$PLAN_PATH")
+The advance-work.md workflow handles scenario detection and routing:
+- Detects: same_phase | phase_complete | milestone_complete
+- Respects: config.json auto_advance settings and mode
+- Handles: Auto-execute, prompts, transitions, milestone completion
 
-# Count PLAN files vs SUMMARY files
-PLAN_COUNT=$(ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null | wc -l | tr -d ' ')
-SUMMARY_COUNT=$(ls "$PHASE_DIR"/*-SUMMARY.md 2>/dev/null | wc -l | tr -d ' ')
+**Invocation:**
 
-echo "Plans: $PLAN_COUNT, Summaries: $SUMMARY_COUNT"
-
-if [[ $SUMMARY_COUNT -lt $PLAN_COUNT ]]; then
-  echo "MORE_PLANS_EXIST"
-else
-  echo "PHASE_COMPLETE"
-fi
-```
-
-**If MORE_PLANS_EXIST (more plans in this phase):**
-
-<if mode="yolo">
-```
-Plan {phase}-{plan} complete.
-Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
-
-[X] of [Y] plans complete for Phase Z.
-
-⚡ Auto-continuing: Execute next plan ({phase}-{next-plan})
-```
-
-Loop back to identify_plan step automatically.
-</if>
-
-<if mode="interactive" OR="custom with gates.execute_next_plan true">
-```
-Plan {phase}-{plan} complete.
-Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
-
-[X] of [Y] plans complete for Phase Z.
-
----
-
-## ▶ Next Up
-
-**{phase}-{next-plan}: [Plan Name]** — [objective from next PLAN.md]
-
-`/gsd:execute-plan .planning/phases/XX-name/{phase}-{next-plan}-PLAN.md`
-
-<sub>`/clear` first → fresh context window</sub>
-
----
-
-**Also available:**
-- Review what was built before continuing
-
----
-```
-
-Wait for user to clear and run next command.
-</if>
-
-**If phase complete (last plan done):**
-
-First, check if this is also the last phase in the milestone (milestone complete):
-
-```bash
-# Count total phases in ROADMAP.md
-TOTAL_PHASES=$(grep -c "^### Phase [0-9]" .planning/ROADMAP.md)
-
-# Get current phase number from the just-completed plan
-CURRENT_PHASE=$(echo "{phase}" | grep -oE '^[0-9]+')
-
-# Check if current phase == total phases
-if [[ "$CURRENT_PHASE" -eq "$TOTAL_PHASES" ]]; then
-  # Milestone complete
-  MILESTONE_COMPLETE=true
-fi
-```
-
-**If milestone complete (final phase of roadmap done):**
+Pass the just-completed plan path to advance-work.md:
 
 ```
-🎉 MILESTONE COMPLETE!
-
-Plan {phase}-{plan} complete.
-Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
-
-Phase [Z]: [Name] COMPLETE - all [Y] plans finished.
-
-════════════════════════════════════════
-All [N] phases complete!
-This milestone is 100% done.
-════════════════════════════════════════
-
----
-
-## ▶ Next Up
-
-**Complete Milestone** — archive and prepare for next
-
-`/gsd:complete-milestone`
-
-<sub>`/clear` first → fresh context window</sub>
-
----
-
-**Also available:**
-- `/gsd:add-phase <description>` — add another phase
-- Review accomplishments before archiving
-
----
+current_plan_path="$PLAN_PATH"
+→ ~/.claude/get-shit-done/workflows/advance-work.md
 ```
 
-**If phase complete but more phases remain:**
+**What advance-work.md handles:**
 
-```
-Plan {phase}-{plan} complete.
-Summary: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
+1. Load context (STATE.md, config.json, ROADMAP.md)
+2. Detect scenario from plan/summary counts
+3. Route to appropriate handler:
+   - **same_phase:** Auto-execute (yolo) or prompt (interactive)
+   - **phase_complete:** Generate phase summary, then transition or prompt
+   - **milestone_complete:** Always prompt (safety rail)
+4. Return action for caller to execute
 
-## ✓ Phase [Z] Complete
+**Integration note:** All scenario-specific messaging, mode behavior, and config checks are centralized in advance-work.md. This step simply invokes that workflow.
 
-All [Y] plans finished.
-
----
-
-## ▶ Next Up
-
-**Phase [X+1]: [Name]** — [Goal from ROADMAP.md]
-
-`/gsd:plan-phase [X+1]`
-
-<sub>`/clear` first → fresh context window</sub>
-
----
-
-**Also available:**
-- `/gsd:discuss-phase [X+1]` — gather context first
-- `/gsd:research-phase [X+1]` — investigate unknowns
-- Review phase accomplishments before continuing
-
----
-```
-
+See `~/.claude/get-shit-done/workflows/advance-work.md` for complete scenario handling logic.
 </step>
 
 </process>
