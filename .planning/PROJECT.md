@@ -1,8 +1,11 @@
 # GSD Auto-Advance
 
-## What This Is
+## Current State (v1.0 Shipped)
 
-An enhancement to the GSD (Get Shit Done) planning system that automatically advances to the next plan after completing one, eliminating manual prompts within a phase while preserving decision points at phase transitions.
+An enhancement to the GSD planning system that automatically advances to the next plan after completing one, eliminating manual prompts within a phase while preserving decision points at phase transitions.
+
+**Shipped:** 2026-01-15
+**Stats:** 5 phases, 8 plans, ~3,843 LOC
 
 ## Core Value
 
@@ -12,16 +15,16 @@ An enhancement to the GSD (Get Shit Done) planning system that automatically adv
 
 ### Validated
 
-(None yet — ship to validate)
+- Auto-advance to next plan when current plan completes (same phase) — v1.0
+- Generate and commit PHASE-SUMMARY.md when phase completes — v1.0
+- Prompt user at phase transitions (configurable via config.json) — v1.0
+- `/gsd:advance` command for manual triggering — v1.0
+- Config schema extension for auto_advance settings — v1.0
+- Backward compatibility with existing `mode: "yolo"` behavior — v1.0
 
 ### Active
 
-- [ ] Auto-advance to next plan when current plan completes (same phase)
-- [ ] Generate and commit PHASE-SUMMARY.md when phase completes
-- [ ] Prompt user at phase transitions (configurable via config.json)
-- [ ] `/gsd:advance` command for manual triggering
-- [ ] Config schema extension for auto_advance settings
-- [ ] Backward compatibility with existing `mode: "yolo"` behavior
+(None — v1.0 complete, collecting feedback)
 
 ### Out of Scope
 
@@ -31,32 +34,29 @@ An enhancement to the GSD (Get Shit Done) planning system that automatically adv
 
 ## Context
 
-**Existing GSD architecture:**
-- `execute-phase.md` workflow handles plan execution with `offer_next` step (lines 1568-1713)
-- `transition.md` handles phase transitions
-- `config.json` controls gates and modes
-- Current `yolo` mode already auto-advances but with less granular control
+**Tech stack:**
+- GSD workflow files in ~/.claude/get-shit-done/
+- Commands in ~/.claude/commands/gsd/
+- Config-driven behavior via config.json
 
-**Key integration points identified:**
-- `offer_next` step in execute-phase.md — where auto-advance logic will hook in
-- `config.json` template — add `auto_advance` section
-- New `advance-work.md` workflow — centralized advancement logic
-
-**Prior exploration:**
-- Analyzed 155 session files showing frequent GSD navigation overhead
-- Identified this as highest-impact automation opportunity
+**Key integration points:**
+- execute-phase.md offer_next step delegates to advance-work.md
+- create-phase-summary.md generates PHASE-SUMMARY.md at phase boundaries
+- advance.md command for manual triggering
 
 ## Constraints
 
-- **Backward compat**: Must not break existing `mode: "yolo"` or interactive workflows — existing users expect same behavior
+- **Backward compat**: Existing `mode: "yolo"` and interactive workflows work unchanged
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Smart defaults (auto within phase, prompt between) | Balances speed with intentional checkpoints | — Pending |
-| Centralized advance-work.md workflow | Single source of truth for both manual and automatic triggers | — Pending |
-| Phase summary as aggregation of plan summaries | Natural documentation checkpoint at phase boundary | — Pending |
+| Smart defaults (auto within phase, prompt between) | Balances speed with intentional checkpoints | Good |
+| Centralized advance-work.md workflow | Single source of truth for both manual and automatic triggers | Good |
+| Phase summary as aggregation of plan summaries | Natural documentation checkpoint at phase boundary | Good |
+| Milestone safety rail (always prompt) | Prevents accidental milestone completion | Good |
+| Workflow delegation in execute-phase.md | Reduced complexity from ~145 to ~30 lines | Good |
 
 ---
-*Last updated: 2026-01-14 after initialization*
+*Last updated: 2026-01-15 after v1.0 milestone*
