@@ -18,7 +18,7 @@ None (internal GSD workflow modification)
 - [x] **Phase 2: Phase Summary** - Create workflow to generate PHASE-SUMMARY.md from plan summaries
 - [x] **Phase 3: Advance Logic** - Core auto-advance orchestration workflow
 - [x] **Phase 4: Command Interface** - /gsd:advance manual command
-- [ ] **Phase 5: Integration** - Hook auto-advance into execute-phase.md offer_next step (Next)
+- [ ] **Phase 5: Integration** - Hook auto-advance into execute-phase.md offer_next step (In Progress)
 
 ## Phase Details
 
@@ -67,7 +67,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: Modify execute-phase.md offer_next step to invoke advance-work.md
+- [x] 05-01: Modify execute-phase.md offer_next step to invoke advance-work.md
 - [ ] 05-02: Test backward compatibility with yolo mode and interactive mode
 
 ## Progress
@@ -81,4 +81,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. Phase Summary | 2/2 | Complete | 2026-01-15 |
 | 3. Advance Logic | 2/2 | Complete | 2026-01-15 |
 | 4. Command Interface | 1/1 | Complete | 2026-01-15 |
-| 5. Integration | 0/2 | Not started | - |
+| 5. Integration | 1/2 | In progress | - |
